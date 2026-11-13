@@ -12,18 +12,18 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-1b4c5e"></a>
-  <a href="docs/getting-started/install.md#other-pdks"><img alt="PDKs: SKY130, GF180MCU, IHP SG13G2" src="https://img.shields.io/badge/PDK-SKY130%20%C2%B7%20GF180MCU%20%C2%B7%20SG13G2-72bfc6"></a>
-  <a href="docs/getting-started/connect-ai.md"><img alt="MCP" src="https://img.shields.io/badge/MCP-Claude%20Code%20%C2%B7%20Claude%20Desktop-b7a9ee"></a>
-  <a href="docs/roadmap.md"><img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-e6c88f"></a>
+  <a href="https://kadomoto-lab.github.io/undine-eda/getting-started/install/#other-pdks"><img alt="PDKs: SKY130, GF180MCU, IHP SG13G2" src="https://img.shields.io/badge/PDK-SKY130%20%C2%B7%20GF180MCU%20%C2%B7%20SG13G2-72bfc6"></a>
+  <a href="https://kadomoto-lab.github.io/undine-eda/getting-started/connect-ai/"><img alt="MCP" src="https://img.shields.io/badge/MCP-Claude%20Code%20%C2%B7%20Claude%20Desktop-b7a9ee"></a>
+  <a href="https://kadomoto-lab.github.io/undine-eda/roadmap/"><img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-e6c88f"></a>
 </p>
 
 <p align="center">
-  <a href="docs/index.md">Documentation</a> ·
-  <a href="docs/index.ja.md">日本語</a> ·
+  <a href="https://kadomoto-lab.github.io/undine-eda/">Documentation</a> ·
+  <a href="https://kadomoto-lab.github.io/undine-eda/ja/">日本語</a> ·
   <a href="#getting-started">Getting started</a> ·
-  <a href="docs/tutorials/inverter.md">Tutorial</a> ·
-  <a href="docs/getting-started/connect-ai.md">Connect an AI agent</a> ·
-  <a href="docs/roadmap.md">Roadmap</a> ·
+  <a href="https://kadomoto-lab.github.io/undine-eda/tutorials/inverter/">Tutorial</a> ·
+  <a href="https://kadomoto-lab.github.io/undine-eda/getting-started/connect-ai/">Connect an AI agent</a> ·
+  <a href="https://kadomoto-lab.github.io/undine-eda/roadmap/">Roadmap</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -34,7 +34,7 @@
 <p align="center">
   <sub>An 11-bit SAR ADC designed in Undine with an AI agent: 0.067 mm² on SKY130, DRC and LVS clean. On each block's
   extracted layout at the tt corner it simulates at SNDR 67.09 dB, SFDR 81.62 dB and 245 µW
-  (<a href="docs/tutorials/sar-adc.md">case study</a>, with its limits).</sub>
+  (<a href="https://kadomoto-lab.github.io/undine-eda/tutorials/sar-adc/">case study</a>, with its limits).</sub>
 </p>
 
 Undine (pronounced *uhn-deen*) is built for analog and mixed-signal design. The design database, the PDK, DRC / LVS and simulation run on a
@@ -81,7 +81,7 @@ arrive as a proposal that you review, check and adopt or discard.
 - Linux x86-64, or Windows with WSL2
 - [pixi](https://pixi.sh/); `./setup.sh` uses it to install Python, Node, ngspice, Xschem, Magic, Netgen and Verilator
 - The [KLayout application](https://www.klayout.de/build.html) 0.30 or later
-  ([per distribution](docs/getting-started/install.md#per-distribution))
+  ([per distribution](https://kadomoto-lab.github.io/undine-eda/getting-started/install/#per-distribution))
 
 ### Install and run
 
@@ -96,7 +96,7 @@ pixi run serve                                      # then open http://127.0.0.1
 > [!TIP]
 > `./setup.sh check` (or `pixi run doctor`) says what is missing and the command that fixes it.
 
-Then follow [Your first cell: an inverter](docs/tutorials/inverter.md): draw a schematic, simulate it and lay it out.
+Then follow [Your first cell: an inverter](https://kadomoto-lab.github.io/undine-eda/tutorials/inverter/): draw a schematic, simulate it and lay it out.
 
 ### Connect an AI agent
 
@@ -107,27 +107,27 @@ claude mcp add --scope user undine -- "$PWD/.pixi/envs/default/bin/python" -m un
 ```
 
 Then ask Claude for a change to a design, for example to size a cell for a delay spec, and review its proposal in
-Undine. [Connect an AI agent](docs/getting-started/connect-ai.md) covers Claude Desktop, other MCP clients and the
-in-app agent; [Design with an AI agent](docs/tutorials/agent.md) walks through a whole session.
+Undine. [Connect an AI agent](https://kadomoto-lab.github.io/undine-eda/getting-started/connect-ai/) covers Claude Desktop, other MCP clients and the
+in-app agent; [Design with an AI agent](https://kadomoto-lab.github.io/undine-eda/tutorials/agent/) walks through a whole session.
 
 ## Documentation
 
-The documentation is in [`docs/`](docs/index.md), in English and Japanese, and builds into a site with
-`pixi run -e docs docs-serve`.
+The documentation is at [kadomoto-lab.github.io/undine-eda](https://kadomoto-lab.github.io/undine-eda/), in English
+and Japanese. Its source is in [`docs/`](docs/); `pixi run -e docs docs-serve` serves it locally.
 
-- **Start:** [Install](docs/getting-started/install.md) · [First project](docs/getting-started/first-project.md) ·
-  [Overview](docs/overview.md)
-- **Tutorials:** [An inverter](docs/tutorials/inverter.md) · [With an AI agent](docs/tutorials/agent.md) ·
-  [Tiny Tapeout](docs/tutorials/tiny-tapeout.md) · [Case study: an 11-bit SAR ADC](docs/tutorials/sar-adc.md)
-- **Guides:** [Cells and intent](docs/guide/cells.md) · [Schematic](docs/guide/schematic.md) ·
-  [Layout](docs/guide/layout.md) · [Simulation and RTL](docs/guide/rtl.md) · [Verification](docs/guide/verification.md) ·
-  [Changesets](docs/guide/changesets.md) · [PDKs](docs/guide/pdks.md) · [Libraries](docs/guide/libraries.md) ·
-  [Tapeout](docs/guide/tapeout.md)
-- **Reference:** [Command line](docs/reference/cli.md) · [Data on disk](docs/reference/data.md) ·
-  [HTTP API](docs/reference/api.md)
-- **Help:** [Troubleshooting and FAQ](docs/troubleshooting.md) · [Issues](https://github.com/kadomoto-lab/undine-eda/issues)
+- **Start:** [Install](https://kadomoto-lab.github.io/undine-eda/getting-started/install/) · [First project](https://kadomoto-lab.github.io/undine-eda/getting-started/first-project/) ·
+  [Overview](https://kadomoto-lab.github.io/undine-eda/overview/)
+- **Tutorials:** [An inverter](https://kadomoto-lab.github.io/undine-eda/tutorials/inverter/) · [With an AI agent](https://kadomoto-lab.github.io/undine-eda/tutorials/agent/) ·
+  [Tiny Tapeout](https://kadomoto-lab.github.io/undine-eda/tutorials/tiny-tapeout/) · [Case study: an 11-bit SAR ADC](https://kadomoto-lab.github.io/undine-eda/tutorials/sar-adc/)
+- **Guides:** [Cells and intent](https://kadomoto-lab.github.io/undine-eda/guide/cells/) · [Schematic](https://kadomoto-lab.github.io/undine-eda/guide/schematic/) ·
+  [Layout](https://kadomoto-lab.github.io/undine-eda/guide/layout/) · [Simulation and RTL](https://kadomoto-lab.github.io/undine-eda/guide/rtl/) · [Verification](https://kadomoto-lab.github.io/undine-eda/guide/verification/) ·
+  [Changesets](https://kadomoto-lab.github.io/undine-eda/guide/changesets/) · [PDKs](https://kadomoto-lab.github.io/undine-eda/guide/pdks/) · [Libraries](https://kadomoto-lab.github.io/undine-eda/guide/libraries/) ·
+  [Tapeout](https://kadomoto-lab.github.io/undine-eda/guide/tapeout/)
+- **Reference:** [Command line](https://kadomoto-lab.github.io/undine-eda/reference/cli/) · [Data on disk](https://kadomoto-lab.github.io/undine-eda/reference/data/) ·
+  [HTTP API](https://kadomoto-lab.github.io/undine-eda/reference/api/)
+- **Help:** [Troubleshooting and FAQ](https://kadomoto-lab.github.io/undine-eda/troubleshooting/) · [Issues](https://github.com/kadomoto-lab/undine-eda/issues)
 
-日本語のドキュメントは [ホーム](docs/index.ja.md) から。すべてのページに日本語版があります。
+日本語のドキュメントは [ホーム](https://kadomoto-lab.github.io/undine-eda/ja/) から。すべてのページに日本語版があります。
 
 ## Built on
 
@@ -136,4 +136,4 @@ The documentation is in [`docs/`](docs/index.md), in English and Japanese, and b
 [Verilator](https://www.veripool.org/verilator/), [LibreLane](https://github.com/librelane/librelane),
 [OpenVAF](https://openvaf.semimod.de/), [open_pdks](https://github.com/RTimothyEdwards/open_pdks),
 [ciel](https://github.com/fossi-foundation/ciel) and the open PDKs from SkyWater, GlobalFoundries and IHP. Their
-licenses are listed in [Licenses](docs/licenses.md).
+licenses are listed in [Licenses](https://kadomoto-lab.github.io/undine-eda/licenses/).

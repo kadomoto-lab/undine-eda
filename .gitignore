@@ -1,0 +1,12 @@
+__pycache__/
+*.egg-info/
+.venv/
+.pcellenv/
+.pixi/
+site/
+dist/
+server/dist/
+.vite/
+
+# scratch files the GF180 PCell code writes in its working directory
+*_temp.gds

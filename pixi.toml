@@ -1,0 +1,84 @@
+# One file for everything Undine needs except the KLayout application (see README):
+#   pixi install --all      the server, the UI toolchain, the EDA tools and the PCell environment
+#   pixi run ngspice        build ngspice (with OSDI) into the environment
+#   pixi run web            build the UI
+#   pixi run pdk            download and enable the sky130 PDK with ciel
+#   pixi run serve          start Undine on http://127.0.0.1:8700
+[workspace]
+name = "undine-eda"
+channels = ["conda-forge", "litex-hub"]
+platforms = ["linux-64"]
+
+# default environment: the server, Node for the UI, and the EDA tools
+[dependencies]
+python = "3.12.*"
+nodejs = ">=18"
+# ngspice itself is built from source by `pixi run ngspice` (scripts/ngspice.sh, part of ./setup.sh): conda-forge's
+# ngspice is built without OSDI, which IHP SG13G2's transistor models need. These are what that build uses.
+c-compiler = "*"
+make = "*"
+readline = "*"
+magic = { version = "*", channel = "conda-forge" }
+netgen = { version = "*", channel = "litex-hub" }   # conda-forge's "netgen" is the NGSolve mesher, not LVS
+xschem = { version = "*", channel = "litex-hub" }
+verilator = { version = ">=5.0", channel = "conda-forge" }   # RTL view: lint and simulation of Verilog / SystemVerilog testbenches
+rust = ">=1.80"                                      # builds the server's Rust core (server/src) at install time
+
+[pypi-dependencies]
+undine-eda = { path = "server", editable = true, extras = ["pdk", "dev"] }   # with its Rust core (maturin); the klayout module, ciel
+vlsirtools = "*"                                                              # the vlsirtools netlister (SPICE / Xyce / Spectre)
+
+[activation.env]
+SPICE_LIB_DIR = "$CONDA_PREFIX/share/ngspice"   # what ngspice's post-link script would set (finds spinit)
+UNDINE_TOOLS = "$CONDA_PREFIX"                   # Undine looks for ngspice, xschem, netgen, magic here first
+
+[tasks]
+web = { cmd = "npm ci --no-audit --no-fund && npm run build", cwd = "web" }
+pdk = "ciel enable --pdk-family sky130 8afc8346a57fe1ab7934ba5a6056ea8b43078e71"   # = pcell.SUPPORTED
+serve = "python -m undine serve"
+ngspice = "bash scripts/ngspice.sh"     # ngspice with OSDI into this environment (skipped when it is there)
+osdi = "bash scripts/osdi.sh"           # compile IHP's Verilog-A models with OpenVAF (skipped when they are there)
+dev = "./scripts/dev.sh"
+doctor = "python -m undine doctor"
+mcpb = "python -m undine mcpb"           # the Claude Desktop extension -> dist/undine-<version>.mcpb
+test = "python -m pytest -q server/tests"
+
+# PCell environment (server/undine/pdks/pcell.py): the sky130 PCell code of open_pdks 2025+ (libs.tech/klayout/python/cells)
+# is written for gdsfactory 8 on kfactory 0.2x (kfactory.kcell._get_default_kcl, gone from kfactory 1.1 on, so
+# gdsfactory 9 does not run it)
+[feature.pcell.dependencies]
+python = "3.12.*"
+
+[feature.pcell.pypi-dependencies]
+klayout = "*"
+gdsfactory = "==8.32.2"            # pins kfactory 0.23.2
+
+# GF180MCU's PCell code (libs.tech/klayout/tech/pymacros/cells) is written for gdsfactory 7.9 on gdstk
+# (globalfoundries-pdk-libs-gf180mcu_fd_pr requirements.txt: gdsfactory~=7.9.4), which cannot share an environment with
+# sky130's gdsfactory 8
+[feature.pcell-gf180.dependencies]
+python = "3.12.*"
+
+[feature.pcell-gf180.pypi-dependencies]
+klayout = "*"
+gdsfactory = "~=7.9.4"
+
+# the documentation site (mkdocs.yml) and its screenshots (scripts/capture_screenshots.py)
+[feature.docs.dependencies]
+python = "3.12.*"
+
+[feature.docs.pypi-dependencies]
+playwright = "*"
+pillow = "*"
+mkdocs-material = ">=9.5,<10"
+mkdocs-static-i18n = ">=1.3,<2"          # English and Japanese pages side by side (page.md / page.ja.md)
+
+[feature.docs.tasks]
+screenshots = "python -m playwright install chromium && python scripts/capture_screenshots.py"
+docs-serve = "mkdocs serve"                 # the documentation site on http://127.0.0.1:8000
+docs-build = "mkdocs build --strict"        # into site/ (what the GitHub Pages workflow publishes)
+
+[environments]
+pcell = { features = ["pcell"], no-default-feature = true }
+pcell-gf180 = { features = ["pcell-gf180"], no-default-feature = true }
+docs = { features = ["docs"], no-default-feature = true }

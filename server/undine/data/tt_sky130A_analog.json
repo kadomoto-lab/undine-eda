@@ -1,0 +1,1144 @@
+{
+ "source": "https://github.com/TinyTapeout/tt-support-tools/tree/01d5d2814fa9dd61e9d211e0b235a4a592a9316a/tech/sky130A/def/analog",
+ "license": "Apache-2.0 (Tiny Tapeout LTD); pin tables derived from tt_analog_<tiles>.def, units: nanometres",
+ "tiles": {
+  "1x2": {
+   "pins": {
+    "clk": {
+     "layer": "met4",
+     "rect": [
+      143830,
+      224760,
+      144130,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ena": {
+     "layer": "met4",
+     "rect": [
+      146590,
+      224760,
+      146890,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "rst_n": {
+     "layer": "met4",
+     "rect": [
+      141070,
+      224760,
+      141370,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ua[0]": {
+     "layer": "met4",
+     "rect": [
+      151810,
+      0,
+      152710,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[1]": {
+     "layer": "met4",
+     "rect": [
+      132490,
+      0,
+      133390,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[2]": {
+     "layer": "met4",
+     "rect": [
+      113170,
+      0,
+      114070,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[3]": {
+     "layer": "met4",
+     "rect": [
+      93850,
+      0,
+      94750,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[4]": {
+     "layer": "met4",
+     "rect": [
+      74530,
+      0,
+      75430,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[5]": {
+     "layer": "met4",
+     "rect": [
+      55210,
+      0,
+      56110,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[6]": {
+     "layer": "met4",
+     "rect": [
+      35890,
+      0,
+      36790,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[7]": {
+     "layer": "met4",
+     "rect": [
+      16570,
+      0,
+      17470,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[0]": {
+     "layer": "met4",
+     "rect": [
+      138310,
+      224760,
+      138610,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[1]": {
+     "layer": "met4",
+     "rect": [
+      135550,
+      224760,
+      135850,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[2]": {
+     "layer": "met4",
+     "rect": [
+      132790,
+      224760,
+      133090,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[3]": {
+     "layer": "met4",
+     "rect": [
+      130030,
+      224760,
+      130330,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[4]": {
+     "layer": "met4",
+     "rect": [
+      127270,
+      224760,
+      127570,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[5]": {
+     "layer": "met4",
+     "rect": [
+      124510,
+      224760,
+      124810,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[6]": {
+     "layer": "met4",
+     "rect": [
+      121750,
+      224760,
+      122050,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[7]": {
+     "layer": "met4",
+     "rect": [
+      118990,
+      224760,
+      119290,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[0]": {
+     "layer": "met4",
+     "rect": [
+      116230,
+      224760,
+      116530,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[1]": {
+     "layer": "met4",
+     "rect": [
+      113470,
+      224760,
+      113770,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[2]": {
+     "layer": "met4",
+     "rect": [
+      110710,
+      224760,
+      111010,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[3]": {
+     "layer": "met4",
+     "rect": [
+      107950,
+      224760,
+      108250,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[4]": {
+     "layer": "met4",
+     "rect": [
+      105190,
+      224760,
+      105490,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[5]": {
+     "layer": "met4",
+     "rect": [
+      102430,
+      224760,
+      102730,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[6]": {
+     "layer": "met4",
+     "rect": [
+      99670,
+      224760,
+      99970,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[7]": {
+     "layer": "met4",
+     "rect": [
+      96910,
+      224760,
+      97210,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[0]": {
+     "layer": "met4",
+     "rect": [
+      49990,
+      224760,
+      50290,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[1]": {
+     "layer": "met4",
+     "rect": [
+      47230,
+      224760,
+      47530,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[2]": {
+     "layer": "met4",
+     "rect": [
+      44470,
+      224760,
+      44770,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[3]": {
+     "layer": "met4",
+     "rect": [
+      41710,
+      224760,
+      42010,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[4]": {
+     "layer": "met4",
+     "rect": [
+      38950,
+      224760,
+      39250,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[5]": {
+     "layer": "met4",
+     "rect": [
+      36190,
+      224760,
+      36490,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[6]": {
+     "layer": "met4",
+     "rect": [
+      33430,
+      224760,
+      33730,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[7]": {
+     "layer": "met4",
+     "rect": [
+      30670,
+      224760,
+      30970,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[0]": {
+     "layer": "met4",
+     "rect": [
+      72070,
+      224760,
+      72370,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[1]": {
+     "layer": "met4",
+     "rect": [
+      69310,
+      224760,
+      69610,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[2]": {
+     "layer": "met4",
+     "rect": [
+      66550,
+      224760,
+      66850,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[3]": {
+     "layer": "met4",
+     "rect": [
+      63790,
+      224760,
+      64090,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[4]": {
+     "layer": "met4",
+     "rect": [
+      61030,
+      224760,
+      61330,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[5]": {
+     "layer": "met4",
+     "rect": [
+      58270,
+      224760,
+      58570,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[6]": {
+     "layer": "met4",
+     "rect": [
+      55510,
+      224760,
+      55810,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[7]": {
+     "layer": "met4",
+     "rect": [
+      52750,
+      224760,
+      53050,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[0]": {
+     "layer": "met4",
+     "rect": [
+      94150,
+      224760,
+      94450,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[1]": {
+     "layer": "met4",
+     "rect": [
+      91390,
+      224760,
+      91690,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[2]": {
+     "layer": "met4",
+     "rect": [
+      88630,
+      224760,
+      88930,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[3]": {
+     "layer": "met4",
+     "rect": [
+      85870,
+      224760,
+      86170,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[4]": {
+     "layer": "met4",
+     "rect": [
+      83110,
+      224760,
+      83410,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[5]": {
+     "layer": "met4",
+     "rect": [
+      80350,
+      224760,
+      80650,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[6]": {
+     "layer": "met4",
+     "rect": [
+      77590,
+      224760,
+      77890,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[7]": {
+     "layer": "met4",
+     "rect": [
+      74830,
+      224760,
+      75130,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    }
+   },
+   "die": [
+    161000,
+    225760
+   ]
+  },
+  "2x2": {
+   "pins": {
+    "clk": {
+     "layer": "met4",
+     "rect": [
+      143830,
+      224760,
+      144130,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ena": {
+     "layer": "met4",
+     "rect": [
+      146590,
+      224760,
+      146890,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "rst_n": {
+     "layer": "met4",
+     "rect": [
+      141070,
+      224760,
+      141370,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ua[0]": {
+     "layer": "met4",
+     "rect": [
+      151810,
+      0,
+      152710,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[1]": {
+     "layer": "met4",
+     "rect": [
+      132490,
+      0,
+      133390,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[2]": {
+     "layer": "met4",
+     "rect": [
+      113170,
+      0,
+      114070,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[3]": {
+     "layer": "met4",
+     "rect": [
+      93850,
+      0,
+      94750,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[4]": {
+     "layer": "met4",
+     "rect": [
+      74530,
+      0,
+      75430,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[5]": {
+     "layer": "met4",
+     "rect": [
+      55210,
+      0,
+      56110,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[6]": {
+     "layer": "met4",
+     "rect": [
+      35890,
+      0,
+      36790,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ua[7]": {
+     "layer": "met4",
+     "rect": [
+      16570,
+      0,
+      17470,
+      1000
+     ],
+     "direction": "INOUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[0]": {
+     "layer": "met4",
+     "rect": [
+      138310,
+      224760,
+      138610,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[1]": {
+     "layer": "met4",
+     "rect": [
+      135550,
+      224760,
+      135850,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[2]": {
+     "layer": "met4",
+     "rect": [
+      132790,
+      224760,
+      133090,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[3]": {
+     "layer": "met4",
+     "rect": [
+      130030,
+      224760,
+      130330,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[4]": {
+     "layer": "met4",
+     "rect": [
+      127270,
+      224760,
+      127570,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[5]": {
+     "layer": "met4",
+     "rect": [
+      124510,
+      224760,
+      124810,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[6]": {
+     "layer": "met4",
+     "rect": [
+      121750,
+      224760,
+      122050,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "ui_in[7]": {
+     "layer": "met4",
+     "rect": [
+      118990,
+      224760,
+      119290,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[0]": {
+     "layer": "met4",
+     "rect": [
+      116230,
+      224760,
+      116530,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[1]": {
+     "layer": "met4",
+     "rect": [
+      113470,
+      224760,
+      113770,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[2]": {
+     "layer": "met4",
+     "rect": [
+      110710,
+      224760,
+      111010,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[3]": {
+     "layer": "met4",
+     "rect": [
+      107950,
+      224760,
+      108250,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[4]": {
+     "layer": "met4",
+     "rect": [
+      105190,
+      224760,
+      105490,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[5]": {
+     "layer": "met4",
+     "rect": [
+      102430,
+      224760,
+      102730,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[6]": {
+     "layer": "met4",
+     "rect": [
+      99670,
+      224760,
+      99970,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_in[7]": {
+     "layer": "met4",
+     "rect": [
+      96910,
+      224760,
+      97210,
+      225760
+     ],
+     "direction": "INPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[0]": {
+     "layer": "met4",
+     "rect": [
+      49990,
+      224760,
+      50290,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[1]": {
+     "layer": "met4",
+     "rect": [
+      47230,
+      224760,
+      47530,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[2]": {
+     "layer": "met4",
+     "rect": [
+      44470,
+      224760,
+      44770,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[3]": {
+     "layer": "met4",
+     "rect": [
+      41710,
+      224760,
+      42010,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[4]": {
+     "layer": "met4",
+     "rect": [
+      38950,
+      224760,
+      39250,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[5]": {
+     "layer": "met4",
+     "rect": [
+      36190,
+      224760,
+      36490,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[6]": {
+     "layer": "met4",
+     "rect": [
+      33430,
+      224760,
+      33730,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_oe[7]": {
+     "layer": "met4",
+     "rect": [
+      30670,
+      224760,
+      30970,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[0]": {
+     "layer": "met4",
+     "rect": [
+      72070,
+      224760,
+      72370,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[1]": {
+     "layer": "met4",
+     "rect": [
+      69310,
+      224760,
+      69610,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[2]": {
+     "layer": "met4",
+     "rect": [
+      66550,
+      224760,
+      66850,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[3]": {
+     "layer": "met4",
+     "rect": [
+      63790,
+      224760,
+      64090,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[4]": {
+     "layer": "met4",
+     "rect": [
+      61030,
+      224760,
+      61330,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[5]": {
+     "layer": "met4",
+     "rect": [
+      58270,
+      224760,
+      58570,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[6]": {
+     "layer": "met4",
+     "rect": [
+      55510,
+      224760,
+      55810,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uio_out[7]": {
+     "layer": "met4",
+     "rect": [
+      52750,
+      224760,
+      53050,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[0]": {
+     "layer": "met4",
+     "rect": [
+      94150,
+      224760,
+      94450,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[1]": {
+     "layer": "met4",
+     "rect": [
+      91390,
+      224760,
+      91690,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[2]": {
+     "layer": "met4",
+     "rect": [
+      88630,
+      224760,
+      88930,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[3]": {
+     "layer": "met4",
+     "rect": [
+      85870,
+      224760,
+      86170,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[4]": {
+     "layer": "met4",
+     "rect": [
+      83110,
+      224760,
+      83410,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[5]": {
+     "layer": "met4",
+     "rect": [
+      80350,
+      224760,
+      80650,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[6]": {
+     "layer": "met4",
+     "rect": [
+      77590,
+      224760,
+      77890,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    },
+    "uo_out[7]": {
+     "layer": "met4",
+     "rect": [
+      74830,
+      224760,
+      75130,
+      225760
+     ],
+     "direction": "OUTPUT",
+     "use": "SIGNAL"
+    }
+   },
+   "die": [
+    334880,
+    225760
+   ]
+  }
+ }
+}

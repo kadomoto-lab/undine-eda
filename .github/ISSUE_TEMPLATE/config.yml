@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/kadomoto-lab/undine-eda/blob/main/docs/index.md
+    about: Install, tutorials, guides and reference, in English and Japanese.
+  - name: Troubleshooting and FAQ
+    url: https://github.com/kadomoto-lab/undine-eda/blob/main/docs/troubleshooting.md
+    about: Known problems and how to fix them.
+  - name: Report a security problem
+    url: https://github.com/kadomoto-lab/undine-eda/security/advisories/new
+    about: Privately, not as a public issue.

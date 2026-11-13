@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Undine palette</title>
+<style>
+:root{--bg:#071217;--bg1:#0c1b22;--bg2:#11252d;--bg3:#183039;--line:#1a3540;--text:#e6f2f4;--dim:#93adb5;--faint:#5d7780}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,system-ui,sans-serif;padding:40px 48px 60px}
+h1{font-weight:500;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:44px 0 16px}
+.hero{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{border-radius:14px;padding:34px 40px;display:flex;align-items:center;justify-content:center}
+.card img{width:100%;max-width:460px}.light{background:#f4fafb}.dark{background:var(--bg1);border:1px solid var(--line)}
+.sw{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:12px}
+.s{border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--bg1)}.s i{display:block;height:64px}.s div{padding:8px 10px}.s b{font-weight:500;display:block}.s span{color:var(--dim);font:12px ui-monospace,monospace}
+.row{display:flex;gap:14px;align-items:center;flex-wrap:wrap}.marks img{height:64px}
+.lead{max-width:640px;color:var(--dim);margin:0 0 6px}
+</style></head><body>
+<div class="hero"><div class="card light"><img src="undine-logo.svg" alt="Undine"></div><div class="card dark"><img src="undine-logo-dark.svg" alt="Undine"></div></div>
+<h1>Idea</h1><p class="lead">Deep water at dusk, one calm aqua, light from the surface. Blue-green neutrals instead of grey; warm light for selection; coral instead of red.</p>
+<h1>Water — surfaces</h1><div class="sw" id="a"></div>
+<h1>Text</h1><div class="sw" id="b"></div>
+<h1>Brand and meaning</h1><div class="sw" id="c"></div>
+<h1>Marks</h1><div class="row marks"><img src="undine-mark.svg" style="background:#f4fafb;padding:12px;border-radius:12px"><img src="undine-mark-dark.svg" style="background:var(--bg1);padding:12px;border-radius:12px"><img src="../favicon.svg" style="height:64px"><img src="undine-mono.svg" style="height:40px;color:#72bfc6;background:var(--bg1);padding:12px;border-radius:12px"></div>
+<script>
+const g=(id,l)=>document.getElementById(id).innerHTML=l.map(([n,h,u])=>`<div class="s"><i style="background:${h}"></i><div><b>${n}</b><span>${h} · ${u}</span></div></div>`).join('');
+g('a',[['abyss','#071217','bg'],['well','#050e12','bg0'],['panel','#0c1b22','bg1'],['tide','#11252d','bg2'],['current','#183039','bg3'],['line','#2a4856','line2']]);
+g('b',[['pearl','#e6f2f4','text'],['soft','#b6cbd1','text-soft'],['mist','#93adb5','dim'],['fog','#5d7780','faint']]);
+g('c',[['deep teal','#1b4c5e','logo body'],['aqua','#72bfc6','accent · logo wave'],['aqua high','#9ad8dd','hover'],['seafoam','#8fd6b5','ok'],['sand','#e6c88f','warn'],['coral','#e9929a','error'],['sunlight','#f2d58a','selection'],['ice','#9bdcf2','cross-probe'],['lavender','#b7a9ee','AI / agent'],['apricot','#f0b28a','data']]);
+</script></body></html>

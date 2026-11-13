@@ -1,0 +1,17 @@
+[package]
+name = "undine"
+version = "0.1.0"
+edition = "2021"
+description = "Native core of the Undine server (undine._core): the Xschem format and other hot paths"
+license = "Apache-2.0"
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["abi3-py310"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

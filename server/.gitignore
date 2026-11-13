@@ -1,0 +1,3 @@
+target/
+# the Rust core, built in place by the editable install (maturin)
+undine/_core*.so

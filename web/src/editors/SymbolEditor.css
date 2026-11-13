@@ -1,0 +1,9 @@
+.symbol-pin-list { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.symbol-pin-row { display: flex; align-items: center; border: 1px solid transparent; border-radius: var(--radius); }
+.symbol-pin-row.selected { background: var(--bg3); border-color: var(--accent); }
+.symbol-pin-select { flex: 1; min-width: 0; display: flex; gap: 7px; align-items: center; padding: 5px; border: 0; background: transparent; text-align: left; }
+.symbol-pin-select > .mono { flex: 1; overflow-wrap: anywhere; }
+.symbol-pin-select > .dim { font-size: 11px; }
+.symbol-pin-row > .icon { padding: 3px; }
+.symbol-text-field { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; color: var(--dim); }
+.symbol-text-field > textarea { resize: vertical; min-height: 62px; }

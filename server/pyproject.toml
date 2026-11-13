@@ -1,0 +1,30 @@
+[project]
+name = "undine-eda"
+version = "0.1.0"
+description = "Undine: an AI-native, web-based EDA environment for custom IC design (server)"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["klayout>=0.30", "fastapi>=0.110", "uvicorn>=0.27", "numpy", "anthropic>=1.0", "orjson>=3.9",
+                "tomli>=1.1; python_version < '3.11'"]
+
+[project.optional-dependencies]
+pdk = ["ciel>=3"]
+dev = ["pytest"]
+
+[project.scripts]
+undine = "undine.__main__:cli"
+
+# One package: the Python sources in undine/ and the Rust core in src/ (Cargo.toml), built into undine/_core by maturin
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+python-source = "."
+module-name = "undine._core"
+features = ["pyo3/extension-module"]
+exclude = ["tests/**", "**/__pycache__/**"]
+
+[tool.uv]
+# rebuild when the Rust sources change (pixi / uv otherwise reuse the first build)
+cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "src/**/*.rs" }]

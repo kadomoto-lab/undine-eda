@@ -1,0 +1,41 @@
+name: Bug report
+description: Something does not work as the documentation says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting. Search the [open and closed issues](https://github.com/kadomoto-lab/undine-eda/issues?q=is%3Aissue) first, and see [Troubleshooting and FAQ](https://github.com/kadomoto-lab/undine-eda/blob/main/docs/troubleshooting.md). A security problem goes to a [private report](https://github.com/kadomoto-lab/undine-eda/security/advisories/new) instead.
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The commands you ran, the UI actions (which editor, which button) or the agent tool calls. The shortest sequence that shows the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: The error message, the wrong result, a screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `pixi run doctor`
+      description: The versions of Python, KLayout, ngspice and the other tools, and the PDKs Undine found.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: pdk
+    attributes:
+      label: PDK and project
+      placeholder: "sky130A@8afc8346a57f, a new project / the demo designs / my own design"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The server's output, or `$UNDINE_LOG` (default /tmp/undine.log), around the problem.
+      render: text

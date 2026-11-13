@@ -1,0 +1,25 @@
+name: Feature request
+description: Something Undine should do, or do differently.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/kadomoto-lab/undine-eda/blob/main/docs/roadmap.md) first: it may be planned already.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The design task, and where Undine gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: How it could work, in the UI, the `undine` command or an agent tool. Other tools that do it well are useful references.
+  - type: input
+    id: pdk
+    attributes:
+      label: PDK and flow
+      placeholder: "SKY130 analog, GF180MCU digital with LibreLane, ..."

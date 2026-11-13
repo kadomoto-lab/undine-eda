@@ -1,0 +1,194 @@
+site_name: Undine
+site_description: An AI-native, web-based EDA environment for custom IC design
+site_url: https://kadomoto-lab.github.io/undine-eda/
+repo_url: https://github.com/kadomoto-lab/undine-eda
+repo_name: kadomoto-lab/undine-eda
+edit_uri: edit/main/docs/
+copyright: Undine is licensed under the Apache License 2.0
+
+theme:
+  name: material
+  logo: assets/undine-mark.svg
+  favicon: assets/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil-outline
+  # the Undine palette (docs/brand.md): the shipped dark theme, and the logo's colours on a light ground
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to the dark theme
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to the light theme
+  font:
+    text: Atkinson Hyperlegible Next
+    code: JetBrains Mono
+  features:
+    - navigation.sections
+    - navigation.tracking
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - content.tooltips
+    - toc.follow
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/kadomoto-lab/undine-eda
+      name: Undine on GitHub
+    - icon: material/bug-outline
+      link: https://github.com/kadomoto-lab/undine-eda/issues
+      name: Report a problem
+
+extra_css:
+  - https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap
+  - assets/extra.css
+
+
+# English and Japanese: page.md and page.ja.md side by side; the Japanese site is under /ja/ with a language switch.
+# A page without a Japanese version falls back to English.
+plugins:
+  - search:
+      lang: [en, ja]
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: ja
+          name: 日本語
+          build: true
+          site_description: カスタム IC 設計のための AI ネイティブな Web ベースの EDA 環境
+          nav_translations:
+            "Home": "ホーム"
+            "Overview": "概要"
+            "Getting started": "はじめに"
+            "Design": "設計"
+            "Verify and tape out": "検証とテープアウト"
+            "Work with agents and git": "エージェントと git"
+            "Projects and PDKs": "プロジェクトと PDK"
+            "Help": "ヘルプ"
+            "Roadmap": "ロードマップ"
+            "Install": "インストール"
+            "First project": "最初のプロジェクト"
+            "Connect an AI agent": "AI エージェントをつなぐ"
+            "Tutorials": "チュートリアル"
+            "Your first cell: an inverter": "最初のセル: インバータ"
+            "Design with an AI agent": "AI エージェントと設計する"
+            "Tape out on Tiny Tapeout": "Tiny Tapeout でテープアウト"
+            "Case study: an 11-bit SAR ADC": "事例: 11 ビット SAR ADC"
+            "PDKs": "PDK"
+            "Troubleshooting and FAQ": "トラブルシューティングと FAQ"
+            "User guide": "ユーザーガイド"
+            "Interface language": "表示言語"
+            "Cells, intent and views": "セル、意図、ビュー"
+            "Layout editor": "レイアウトエディタ"
+            "Schematic editor": "回路図エディタ"
+            "RTL and simulation": "RTL とシミュレーション"
+            "Verification": "検証"
+            "Changesets": "変更セット (changeset)"
+            "Git history": "git の履歴"
+            "Libraries and dependencies": "ライブラリと依存関係"
+            "Agent and MCP": "設計エージェントと MCP"
+            "Tapeout": "テープアウト"
+            "Reference": "リファレンス"
+            "Command line and configuration": "コマンドラインと設定"
+            "Data layout and operation log": "データ配置と操作ログ"
+            "HTTP API": "HTTP API"
+            "Development": "開発"
+            "Architecture and development": "アーキテクチャと開発"
+            "Design: live changesets": "設計: ライブ changeset"
+            "Design: changesets on git branches": "設計: git ブランチ上の changeset"
+            "Design: design intent": "設計: 設計の意図"
+            "Design: the netlist view": "設計: netlist ビュー"
+            "Design: semantic diff and merge": "設計: 意味的な差分とマージ"
+            "Design: packages and PDKs": "設計: パッケージと PDK"
+            "Brand and palette": "ブランドとカラーパレット"
+            "Licenses": "ライセンス"
+
+markdown_extensions:
+  - tables
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: true
+
+validation:
+  anchors: warn
+
+exclude_docs: |
+  __pycache__/
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Overview: overview.md
+      - Install: getting-started/install.md
+      - First project: getting-started/first-project.md
+      - Connect an AI agent: getting-started/connect-ai.md
+  - Tutorials:
+      - "Your first cell: an inverter": tutorials/inverter.md
+      - Design with an AI agent: tutorials/agent.md
+      - Tape out on Tiny Tapeout: tutorials/tiny-tapeout.md
+      - "Case study: an 11-bit SAR ADC": tutorials/sar-adc.md
+  - Design:
+      - Cells, intent and views: guide/cells.md
+      - Schematic editor: guide/schematic.md
+      - Layout editor: guide/layout.md
+      - RTL and simulation: guide/rtl.md
+  - Verify and tape out:
+      - Verification: guide/verification.md
+      - Tapeout: guide/tapeout.md
+  - Work with agents and git:
+      - Agent and MCP: guide/assistant.md
+      - Changesets: guide/changesets.md
+      - Git history: guide/history.md
+  - Projects and PDKs:
+      - PDKs: guide/pdks.md
+      - Libraries and dependencies: guide/libraries.md
+      - Interface language: guide/language.md
+  - Reference:
+      - Command line and configuration: reference/cli.md
+      - Data layout and operation log: reference/data.md
+      - HTTP API: reference/api.md
+  - Help:
+      - Troubleshooting and FAQ: troubleshooting.md
+      - Roadmap: roadmap.md
+      - Licenses: licenses.md
+  - Development:
+      - Architecture and development: development.md
+      - "Design: live changesets": design/live-changesets.md
+      - "Design: changesets on git branches": design/changeset-branches.md
+      - "Design: design intent": design/intent.md
+      - "Design: the netlist view": design/netlist.md
+      - "Design: semantic diff and merge": design/merge.md
+      - "Design: packages and PDKs": design/packages.md
+      - Brand and palette: brand.md

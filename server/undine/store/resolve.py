@@ -4,8 +4,9 @@ Pure: no git, no network, no writes. The deps layer (store/deps.py) gives the pr
 turns one requirement into a Node (its manifest read from git, the store or the install); this module walks the
 graph, checks it and returns a Resolution, or raises ResolveError with every problem found.
 
-A resolved version of a package is (package name, tree). There is no index yet, so every requirement is a git URL and
-has exactly one candidate: the walk never chooses, it only checks that the requirements agree.
+A resolved version of a package is (package name, tree). Every requirement the walk reads is a git one with exactly one
+candidate: the walk never chooses, it only checks that the requirements agree. An index requirement reaches it already
+chosen (store/index.py's solve, in the deps layer) as a git requirement pinned at the commit its index line names.
 
 - One version per package name (Decisions 3). A node's identity is its manifest's [package] name, or `git:<local>`
   for a tree with no manifest (only project.json may name one). Two nodes of one name agree when their trees are
@@ -49,6 +50,7 @@ class Requirement:
     version: Req | None = None
     requirer: str | None = None
     commit: str | None = None
+    index: str | None = None              # an index requirement's index URL; git/commit are what the index lists
 
 
 @dataclass(eq=False)
@@ -72,14 +74,21 @@ class Node:
     fixed: bool = False
     chain_hint: str | None = None
     held: bool = False
+    index: str | None = None              # the index URL a package came from (None: a git requirement)
 
+
+IndexPin = Callable[["Node", mf.IndexDep], "Requirement | None"]
+"""The deps layer's choice for an index requirement of a node's manifest: a requirement pinned at the git commit the
+chosen index line names, or None when no version is chosen for it yet (the deps layer adds it and resolves again). It
+raises ManifestError for a requirement it cannot read (collected as a problem)."""
 
 Reader = Callable[[Requirement, Node | None], Node]
 """Reads the tree a requirement names; the second argument is the requirer's node (None for project.json). It raises
 ManifestError for a bad manifest (collected as a problem) and anything else (git failing) to stop the walk."""
 
 CODES = ("conflict", "local_name", "reserved_name", "package_mismatch", "no_manifest", "index_dependency",
-         "local_url", "pdk", "cell_clash", "version", "manifest")
+         "local_url", "pdk", "cell_clash", "version", "manifest", "index_tree", "index", "no_package",
+         "no_version", "held", "yanked", "two_indexes", "too_complex")
 
 
 @dataclass
@@ -206,18 +215,21 @@ def same_package(a: Node, b: Node) -> bool:
 
 
 def resolve(root: str, direct: dict[str, Requirement], read: Reader, *, fixed: dict[str, Node] | None = None,
-            reserved: dict[str, str] | None = None, pdk_check=None, cells=None) -> Resolution:
+            reserved: dict[str, str] | None = None, pdk_check=None, cells=None,
+            index_pin: IndexPin | None = None) -> Resolution:
     """Resolves `direct` (project.json's git dependencies, by local name) and everything their manifests name,
     breadth first. `fixed`: locked nodes not re-resolved, by id; a requirement naming one's git, rev and subdir takes
     it without reading. `reserved`: {casefolded name: what it is} that no local name may be. pdk_check(node): why a
     node with a [pdk] does not fit the project's PDK, or None. cells(resolution): the cell-name problems, run last.
-    Raises ResolveError once, with every problem, after every reachable manifest has been read."""
-    return _Walk(root, read, fixed or {}, reserved or {}).run(direct, pdk_check, cells)
+    index_pin: how a manifest's index requirement becomes a git one (None: refused, as before the index). Raises
+    ResolveError once, with every problem, after every reachable manifest has been read."""
+    return _Walk(root, read, fixed or {}, reserved or {}, index_pin).run(direct, pdk_check, cells)
 
 
 class _Walk:
-    def __init__(self, root: str, read: Reader, fixed: dict[str, Node], reserved: dict[str, str]):
-        self.root, self.read, self.fixed, self.reserved = root, read, fixed, reserved
+    def __init__(self, root: str, read: Reader, fixed: dict[str, Node], reserved: dict[str, str],
+                 index_pin: IndexPin | None = None):
+        self.root, self.read, self.fixed, self.reserved, self.index_pin = root, read, fixed, reserved, index_pin
         self.res = Resolution()
         self.problems: list[Problem] = []
         self.queue: deque[Requirement] = deque()
@@ -387,7 +399,18 @@ class _Walk:
         self.name(m.name, node, None, own=True)
         for local, dep in m.dependencies.items():
             if isinstance(dep, mf.IndexDep):
-                self.index_dependency(node, dep)
+                if self.index_pin is None:
+                    self.index_dependency(node, dep)
+                    continue
+                try:
+                    pinned = self.index_pin(node, dep)
+                except mf.ManifestError as e:
+                    text = chain_text(self.chain(node.id))
+                    self.problem("manifest", f"{e} (required by {text})", [text])
+                    continue
+                if pinned is not None:
+                    pinned.local, pinned.requirer = local, node.id
+                    self.queue.append(pinned)
                 continue
             sibling = dep.git is None
             self.queue.append(Requirement(

@@ -303,8 +303,9 @@ class Project:
         (self.path / "project.json").write_text(json.dumps(self.meta, indent=2) + "\n")
 
     def library_specs(self) -> dict[str, dict]:
-        """The libraries of project.json: {"path": dir} (the project's own; a bare string means the same) or
-        {"git": url, "rev": ..., "subdir": ...} (a dependency, deps.py)."""
+        """The libraries of project.json: {"path": dir} (the project's own; a bare string means the same),
+        {"git": url, "rev": ..., "subdir": ...} (a git dependency, deps.py) or {"package": ..., "version": ...,
+        "index": ...} (a package from an index, each key optional)."""
         return {n: ({"path": s} if isinstance(s, str) else dict(s)) for n, s in self.meta.get("libraries", {}).items()}
 
     def lib_path(self, rel: str) -> Path:
@@ -348,12 +349,13 @@ class Project:
     def libraries(self) -> dict[str, Library]:
         libs: dict[str, Library] = {}
         for name, spec in self.library_specs().items():
-            if "git" in spec:
+            if deps.is_dep(spec):
                 d = deps.dep_dir(self.path, name)
                 have, exports = _installed(d, name)
                 have = have or {}
                 commit = have.get("commit") if isinstance(have.get("commit"), str) else ""
-                at = f"{spec.get('rev') or 'HEAD'} @ {commit[:7]}"
+                asked = spec.get("rev") or "HEAD" if "git" in spec else spec.get("version") or "*"
+                at = f"{asked} @ {commit[:7]}"
                 label = _label(have)
                 ver = (f"{label} ({at})" if label else at) if commit else "not installed"
                 package = have.get("package") if isinstance(have.get("package"), str) else None

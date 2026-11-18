@@ -213,8 +213,10 @@ What a project's [dependencies](../guide/libraries.md) are, how they are locked 
 ### project.json
 
 `libraries` names each dependency the project places itself: `{"git": URL, "rev": REV, "subdir": DIR}`, and
-`"package": NAME` when it was added with `--package` (the [package] name its manifest must give). The packages those
-depend on are not named here; the lock has them.
+`"package": NAME` when it was added with `--package` (the [package] name its manifest must give); or a package from an
+[index](../guide/libraries.md#packages-from-an-index), `{"version": REQ}` with `"package": NAME` when the local name is
+another and `"index": NICKNAME or URL` when it is not the default index. The packages those depend on are not named
+here; the lock has them. `indexes` (optional) gives the project's own index nicknames, `{"acme": URL}`.
 
 `trusted` lists the dependency versions a person [trusted](../guide/libraries.md#trusting-a-dependencys-code) in this
 project, one key each: `<package>@<version>` (`analog_ip@1.2.0`), or `<local name>@<commit12>` (`ip@229914698b1f`) for
@@ -297,6 +299,9 @@ user, on every projects root:
         trees/archive/<sha>.json            the same, named by a format 1 lock's `sha` (the files `git archive` gave)
         git/<sha256 of the URL>.git         a bare repository per dependency URL, kept: the next version fetches only
                                             what changed, and a commit fetched before needs no network
+        index/<sha256 of the URL>.git       a package index as last fetched (ref refs/undine/index), read with git;
+                                            fetched again by `pkg index update`, `pkg update` or a resolution that
+                                            finds no version it needs
         pdk/<commit>-<variant>-<root>.json  a PDK's part hashes and the stamps of its files (`pdk verify`): <root> is the
                                             first 12 hex of the SHA-256 of the PDK's real path (nocommit-<root>-<name>
                                             for a PDK with no version)

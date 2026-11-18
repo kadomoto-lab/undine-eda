@@ -1,12 +1,12 @@
-"""Versions and version requirements of packages: strict SemVer 2.0.0 and the requirement forms phase 2 needs.
+"""Versions and version requirements of packages: strict SemVer 2.0.0 and cargo's requirement forms.
 
-A git requirement has exactly one candidate (the tree at its rev), so there is nothing for a range to choose among:
-a requirement only checks the label a manifest's [package] version gives. Accepted forms, cargo's meanings:
+A git requirement has exactly one candidate (the tree at its rev): there a requirement only checks the label a
+manifest's [package] version gives. An index requirement chooses among the versions an index lists (store/index.py).
+Accepted forms, cargo's meanings:
 
     1.2.3, 1.2     caret (bare)        ^1.2.3   >=1.2.3, <2.0.0      ^0.3   >=0.3.0, <0.4.0
     ~1.2           >=1.2.0, <1.3.0     =1.2.3   exactly 1.2.3        *      any release
-
-Comparators (>=, <) and comma lists come with the package index (phase 3), where there are versions to choose from.
+    >=1.2, <1.5    comparators (>=, >, <, <=), a comma list meaning all of them
 """
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ _VERSION = re.compile(rf"^({_NUM})\.({_NUM})\.({_NUM})"
                       rf"(?:-({_PRE_ID}(?:\.{_PRE_ID})*))?"
                       r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
 _PARTIAL = re.compile(rf"^({_NUM})(?:\.({_NUM}))?(?:\.({_NUM}))?$")
-_RANGE_HINT = "version ranges come with the package index (phase 3): use ^, ~ or ="
 
 
 class SemverError(ValueError):
@@ -79,43 +78,62 @@ class Version:
 
 @dataclass(frozen=True)
 class Req:
-    """A version requirement: versions v with lo <= v < hi (hi None: no upper bound; `any`: every release).
-    `text` is the requirement as written."""
+    """A version requirement: the versions every clause accepts. A clause is (op, version), op one of >=, >, <, <=
+    and =; ^ and ~ give two (>= and <); '*' gives none (every release). `text` is the requirement as written."""
     text: str
-    lo: Version | None = None
-    hi: Version | None = None
+    clauses: tuple[tuple[str, Version], ...] = ()
 
     @classmethod
     def parse(cls, s) -> Req:
         if not isinstance(s, str):
             raise SemverError(f"{s!r} is not a version requirement: a string such as \"^1.2\"")
         t = s.strip()
-        if "," in t or t[:1] in (">", "<", "!"):
-            raise SemverError(f"{s!r}: {_RANGE_HINT}")
         if t == "*":
             return cls(t)
-        op, rest = (t[0], t[1:].strip()) if t[:1] in ("^", "~", "=") else ("", t)
-        if op == "=":
-            v = Version.parse(rest)
-            return cls(t, v, v)
-        lo, given = _lower(rest, s)
-        if op == "~" and given < 2:
-            raise SemverError(f"{s!r}: ~ needs MAJOR.MINOR, e.g. ~1.2 (for any 1.x write ^1)")
-        if op == "" and given < 2:
-            raise SemverError(f"{s!r}: a bare version needs MAJOR.MINOR, e.g. 1.2 (for any {rest}.x write ^{rest})")
-        return cls(t, lo, _tilde_hi(lo, given) if op == "~" else _caret_hi(lo, given))
+        parts = [p.strip() for p in t.split(",")]
+        if any(not p for p in parts):
+            raise SemverError(f"{s!r}: an empty part in a comma list (write e.g. \">=1.2, <1.5\")")
+        if any(p == "*" for p in parts):
+            raise SemverError(f"{s!r}: * stands alone (it means any release)")
+        return cls(t, tuple(c for p in parts for c in _clauses(p, s)))
+
+    @property
+    def lo(self) -> Version | None:
+        """The lowest version a >= or = clause names (None: no lower bound)."""
+        vs = [v for op, v in self.clauses if op in (">=", "=")]
+        return max(vs) if vs else None
 
     def matches(self, v: Version) -> bool:
-        if self.lo is None:                       # '*': any release
-            return not v.pre
-        if v.pre and not (self.lo.pre and self.lo.release == v.release):
+        if v.pre and not any(c.pre and c.release == v.release for _, c in self.clauses):
             return False                          # a pre-release only for a requirement that names one of its release
-        if self.lo == self.hi:                    # '='
-            return v == self.lo
-        return self.lo <= v and (self.hi is None or v < self.hi)
+        return all(_OPS[op](v, c) for op, c in self.clauses)
 
     def __str__(self) -> str:
         return self.text
+
+
+_OPS = {">=": lambda v, c: v >= c, ">": lambda v, c: v > c, "<": lambda v, c: v < c, "<=": lambda v, c: v <= c,
+        "=": lambda v, c: v == c}
+
+
+def _clauses(t: str, s: str) -> list[tuple[str, Version]]:
+    """The clauses of one part of a requirement (between commas)."""
+    op = next((o for o in (">=", "<=", ">", "<", "=", "^", "~") if t.startswith(o)), "")
+    rest = t[len(op):].strip()
+    if op == "=":
+        return [("=", Version.parse(rest))]
+    lo, given = _lower(rest, s)
+    if op in (">=", ">", "<", "<="):
+        if op == ">" and given < 3:                 # >1.2 means above every 1.2.x
+            return [(">=", _tilde_hi(lo, given) if given == 2 else Version(lo.major + 1, 0, 0))]
+        if op == "<=" and given < 3:                # <=1.2 means up to every 1.2.x
+            return [("<", _tilde_hi(lo, given) if given == 2 else Version(lo.major + 1, 0, 0))]
+        return [(op, lo)]
+    if op == "~" and given < 2:
+        raise SemverError(f"{s!r}: ~ needs MAJOR.MINOR, e.g. ~1.2 (for any 1.x write ^1)")
+    if op == "" and given < 2:
+        raise SemverError(f"{s!r}: a bare version needs MAJOR.MINOR, e.g. 1.2 (for any {rest}.x write ^{rest})")
+    return [(">=", lo), ("<", _tilde_hi(lo, given) if op == "~" else _caret_hi(lo, given))]
 
 
 def _lower(rest: str, s: str) -> tuple[Version, int]:
@@ -126,7 +144,8 @@ def _lower(rest: str, s: str) -> tuple[Version, int]:
         return Version(int(m[1]), int(m[2] or 0), int(m[3] or 0)), given
     if _VERSION.match(rest):
         return Version.parse(rest), 3
-    raise SemverError(f"{s!r} is not a version requirement: ^, ~ or = and a version, e.g. ^1.2 or =1.2.0")
+    raise SemverError(f"{s!r} is not a version requirement: ^, ~, =, >=, >, < or <= and a version, e.g. ^1.2, =1.2.0 "
+                      "or >=1.2, <1.5")
 
 
 def _caret_hi(lo: Version, given: int) -> Version:

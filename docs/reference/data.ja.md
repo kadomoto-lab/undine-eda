@@ -210,8 +210,10 @@ changeset の記録(`<project>/changesets/`)は無視しません。コミット
 ### project.json
 
 `libraries` は、プロジェクトが自分で配置する依存関係を示します: `{"git": URL, "rev": REV, "subdir": DIR}`。`--package` を付けて
-追加したものは `"package": NAME`(マニフェストが名乗るべき [package] の名前)も持ちます。それらが依存するパッケージはここには
-書かず、lock が持ちます。
+追加したものは `"package": NAME`(マニフェストが名乗るべき [package] の名前)も持ちます。[インデックス](../guide/libraries.ja.md#packages-from-an-index)
+のパッケージは `{"version": REQ}` で、ローカル名が別のときは `"package": NAME`、既定のインデックスでないときは `"index": 略称か
+URL` も持ちます。それらが依存するパッケージはここには書かず、lock が持ちます。`indexes`(省略可能)は、プロジェクト自身の
+インデックスの略称を `{"acme": URL}` で示します。
 
 `trusted` は、人がこのプロジェクトで[信頼した](../guide/libraries.ja.md#trusting-a-dependencys-code)依存関係のバージョンを、
 キーで 1 つずつ並べます: `<package>@<version>`(`analog_ip@1.2.0`)、マニフェストのない依存関係では
@@ -295,6 +297,9 @@ PDK のハッシュとコンパイルした Verilog-A モデルもそこに置�
         trees/archive/<sha>.json            the same, named by a format 1 lock's `sha` (the files `git archive` gave)
         git/<sha256 of the URL>.git         a bare repository per dependency URL, kept: the next version fetches only
                                             what changed, and a commit fetched before needs no network
+        index/<sha256 of the URL>.git       a package index as last fetched (ref refs/undine/index), read with git;
+                                            fetched again by `pkg index update`, `pkg update` or a resolution that
+                                            finds no version it needs
         pdk/<commit>-<variant>-<root>.json  a PDK's part hashes and the stamps of its files (`pdk verify`): <root> is the
                                             first 12 hex of the SHA-256 of the PDK's real path (nocommit-<root>-<name>
                                             for a PDK with no version)

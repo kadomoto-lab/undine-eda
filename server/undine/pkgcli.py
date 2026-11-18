@@ -1,0 +1,273 @@
+"""`python -m undine pkg ...`: packages from an index (docs/design/packages.md, phase 3; guide/libraries.md).
+
+    pkg search QUERY            packages whose name or description holds QUERY
+    pkg info PACKAGE            every version of a package, and what the newest says
+    pkg add PROJECT PACKAGE     add it (PACKAGE@REQ for a requirement; --as for another local name)
+    pkg update PROJECT [NAME]   move it (default: every package from an index) to the newest version it accepts
+    pkg outdated PROJECT        locked versions against the newest accepted and the newest listed
+    pkg tree PROJECT            the dependency tree as locked
+    pkg why PROJECT PACKAGE     the chains from the project to a package
+    pkg lock PROJECT            as `lib lock`: resolve what the lock does not pin
+    pkg index list | update     the indexes known here, and fetching them again
+
+search, info and outdated read the local copy of each index (fetched once on first use); `pkg index update`, `pkg
+update` and a resolution that finds no version it needs fetch it again."""
+from __future__ import annotations
+
+import argparse
+
+
+def add_parser(sub) -> None:
+    pk = sub.add_parser("pkg", help="packages from an index: search, add, update, tree").add_subparsers(
+        dest="pkg_cmd", required=True)
+    s = pk.add_parser("search", help="packages whose name or description holds QUERY")
+    s.add_argument("query", nargs="?", default="")
+    i = pk.add_parser("info", help="every version of a package")
+    i.add_argument("package")
+    for x in (s, i):
+        x.add_argument("--index", help="an index nickname or URL (default: the default index)")
+        x.add_argument("--project", help="a project, for the indexes its project.json names")
+    a = pk.add_parser("add", help="add a package from an index to a project")
+    a.add_argument("project")
+    a.add_argument("package", help="PACKAGE or PACKAGE@REQ (e.g. analog_ip@^1.2; default: ^ the newest that fits)")
+    a.add_argument("--as", dest="local", help="the local name its symbols are placed by (default: the package)")
+    a.add_argument("--index", help="an index nickname or URL (default: the default index)")
+    u = pk.add_parser("update", help="move packages to the newest version their requirement accepts")
+    u.add_argument("project")
+    u.add_argument("names", nargs="*", help="project.json names (default: every package from an index)")
+    u.add_argument("--version", help="a new requirement for the one NAME given, written to project.json")
+    for name, text in (("outdated", "locked versions against the newest"), ("tree", "the dependency tree as locked"),
+                       ("lock", "resolve what the lock does not pin (as lib lock)")):
+        x = pk.add_parser(name, help=text)
+        x.add_argument("project")
+        if name == "outdated":
+            x.add_argument("--offline", action="store_true", help="read the local copies; fetch no index")
+    w = pk.add_parser("why", help="the chains from the project to a package")
+    w.add_argument("project")
+    w.add_argument("package")
+    ixp = pk.add_parser("index", help="the indexes known here").add_subparsers(dest="index_cmd", required=True)
+    for name in ("list", "update"):
+        x = ixp.add_parser(name)
+        if name == "update":
+            x.add_argument("indexes", nargs="*", help="nicknames or URLs (default: every index known)")
+        x.add_argument("--project", help="a project, for the indexes its project.json names")
+
+
+def run(args: argparse.Namespace, store) -> int:
+    from undine.store import deps
+    from undine.store import index as ix
+
+    try:
+        if args.pkg_cmd == "index":
+            return _index(args, store)
+        if args.pkg_cmd in ("search", "info"):
+            meta = store.get(args.project).meta if args.project else {}
+            url = ix.url_of(args.index, meta)
+            idx = ix.Index(url)
+            return _search(idx, args.query, meta) if args.pkg_cmd == "search" else _info(idx, args.package, meta)
+        prj = store.get(args.project)
+        if args.pkg_cmd == "add":
+            _add(prj, args)
+        elif args.pkg_cmd == "update":
+            _update(prj, args)
+        elif args.pkg_cmd == "lock":
+            from undine.__main__ import lib_command
+            args.lib_cmd, args.format = "lock", None
+            return lib_command(prj, args)
+        elif args.pkg_cmd == "outdated":
+            return _outdated(prj, args)
+        elif args.pkg_cmd == "tree":
+            return _tree(prj)
+        elif args.pkg_cmd == "why":
+            return _why(prj, args.package)
+        st = deps.status(prj)
+        for i in st["issues"]:
+            print(f"! {i}")
+        for w in st["warnings"]:
+            print(f"~ {w}")
+        return 0
+    except (deps.DepError, ix.IndexReadError) as e:
+        print(f"error: {e}")
+        return 1
+
+
+# ------------------------------------------------------------------ reading an index
+
+
+def _search(idx, query: str, meta: dict) -> int:
+    from undine.store import index as ix
+    found = idx.search(query)
+    if not found:
+        print(f"no package in {ix.nickname(idx.url, meta)} holds {query!r}" if query else
+              f"{ix.nickname(idx.url, meta)} lists no package")
+        return 1
+    width = max(len(x.label) for x in found)
+    for x in found:
+        desc = x.description or ""
+        lic = f" ({x.license})" if x.license else ""
+        print(f"{x.label:<{width}}  {desc}{lic}".rstrip())
+    return 0
+
+
+def _info(idx, package: str, meta: dict) -> int:
+    from undine.store import index as ix
+    vs = idx.versions(package)
+    if not vs:
+        print(f"error: {ix.nickname(idx.url, meta)} lists no package {package}: `pkg search` looks for a name, "
+              "`pkg index update` fetches the index again")
+        return 1
+    live = [v for v in vs if not v.yanked] or vs
+    top = live[0]
+    print(f"{top.label} from {ix.nickname(idx.url, meta)}" + (f": {top.description}" if top.description else ""))
+    print(f"  git      {top.git}" + (f" subdir {top.subdir}" if top.subdir else "") + f" @ {top.commit[:12]}")
+    print(f"  tree     {top.tree}")
+    if top.license:
+        print(f"  license  {top.license}")
+    if top.pdk:
+        p = top.pdk
+        print(f"  pdk      {p.get('family')} {', '.join(p.get('variants') or [])}"
+              + (f", compat {', '.join(p['compat'])}" if p.get("compat") else ""))
+    for d in top.deps:
+        print(f"  needs    {d.text()}" + (f" from {ix.nickname(d.index, meta)}" if d.index else ""))
+    if top.exports is not None:
+        print(f"  exports  {', '.join(top.exports) or '(none)'}")
+    print("  versions " + ", ".join(str(v.vers) + (" (yanked)" if v.yanked else "") for v in vs))
+    return 0
+
+
+def _index(args, store) -> int:
+    from undine.store import index as ix
+    meta = store.get(args.project).meta if args.project else {}
+    known = ix.known(meta)
+    if args.index_cmd == "list":
+        for nick, url in known.items():
+            i = ix.Index(url)
+            c = i.commit()
+            print(f"{nick:<12} {url}  " + (f"fetched at {c[:12]}" if c else "not fetched"))
+        return 0
+    urls = [ix.url_of(n, meta) for n in args.indexes] or list(dict.fromkeys(known.values()))
+    bad = 0
+    for url in urls:
+        try:
+            c = ix.Index(url).update()
+            print(f"{ix.nickname(url, meta)}: {c[:12]}")
+        except ix.IndexReadError as e:
+            print(f"error: {e}")
+            bad = 1
+    return bad
+
+
+# ------------------------------------------------------------------ changing a project
+
+
+def _add(prj, args) -> None:
+    from undine.__main__ import _package_line, _say_untrusted
+    from undine.store import deps
+    package, _, req = args.package.partition("@")
+    local = args.local or package
+    r = deps.add(prj, local, None, package=package, version=req or None, index=args.index)
+    alias = f" as {local}" if local != package else ""
+    print(f"{package} {r['version']}{alias} at {r['commit'][:12]} ({len(r['cells'])} cells), "
+          f"requirement {prj.meta['libraries'][local].get('version')}, locked in {deps.LOCK}")
+    brought = [x for x in r.get("resolved", []) if x["name"] != local and x.get("package")]
+    for x in brought:
+        print(_package_line(x))
+    _say_untrusted(prj, [local, *(x["name"] for x in brought)])
+
+
+def _update(prj, args) -> None:
+    from undine.__main__ import _versions
+    from undine.store import deps
+    specs = prj.library_specs()
+    names = args.names or [n for n, s in specs.items() if deps.is_index_spec(s)]
+    if args.version and len(names) != 1:
+        raise deps.DepError("--version is for one NAME")
+    if not names:
+        print("no package from an index in project.json")
+        return
+    for name in names:
+        before = _versions(deps.read_lock(prj.path))
+        r = deps.update(prj, name, version=args.version)
+        after = _versions(deps.read_lock(prj.path))
+        moved = {p for p in after if before.get(p) != after.get(p)} | {p for p in before if p not in after}
+        if not moved:
+            print(f"{name}: as locked")
+        for p in sorted(moved):
+            print(f"{p}: {before.get(p, '-')} -> {after.get(p, '-')}")
+        for u in r["used_by"]:
+            print(f"  used by  {u}")
+
+
+def _outdated(prj, args) -> int:
+    from undine.store import deps, resolve
+    from undine.store import index as ix
+    from undine.store.semver import Req, Version
+    lock = deps.read_lock(prj.path) or {}
+    g = resolve.lock_graph(lock)
+    specs = prj.library_specs()
+    rows, fetched = [], set()
+    for id, e in sorted(g.entries.items()):
+        url = e.get("index")
+        if not isinstance(url, str):
+            continue
+        idx = ix.Index(url)
+        if not args.offline and url not in fetched:
+            idx.update()
+            fetched.add(url)
+        vs = [v for v in idx.versions(e["package"]) if not v.yanked]
+        table, key = g.keys[id]
+        req = Req.parse(specs[key].get("version", "*")) if table == "libraries" and key in specs else None
+        have = Version.parse(e["version"])
+        ok = next((v.vers for v in vs if req is None or req.matches(v.vers)), None)
+        newest = vs[0].vers if vs else None
+        if (ok is not None and ok > have) or (newest is not None and newest > have):
+            rows.append((e["package"], str(have), str(ok or "-") if req else "-", str(newest or "-"),
+                         "direct" if table == "libraries" else "via " + ", ".join(
+                             g.entries[r].get("package") or g.keys[r][1] for r in g.requirers(id))))
+    if not rows:
+        print("every package from an index is at its newest version")
+        return 0
+    print(f"{'package':<20} {'locked':<10} {'accepted':<10} {'newest':<10}")
+    for p, have, ok, newest, how in rows:
+        print(f"{p:<20} {have:<10} {ok:<10} {newest:<10} {how}")
+    print(f"`python -m undine pkg update {prj.name}` moves each to the newest its requirement accepts")
+    return 0
+
+
+def _label(e: dict, key: str) -> str:
+    if e.get("package"):
+        src = "" if isinstance(e.get("index"), str) else f" (git {str(e.get('commit') or '-')[:12]})"
+        return f"{e['package']} {e.get('version') or '-'}{src}"
+    return f"{key} (git {str(e.get('commit') or '-')[:12]})"
+
+
+def _tree(prj) -> int:
+    from undine.store import deps, resolve
+    g = resolve.lock_graph(deps.read_lock(prj.path))
+    print(prj.name)
+
+    def walk(id: str, local: str, depth: int, seen: frozenset) -> None:
+        e = g.entries[id]
+        alias = f"{local} = " if e.get("package") and local != e.get("package") else ""
+        again = " (*)" if id in seen else ""
+        print(f"{'    ' * depth}{'└── '}{alias}{_label(e, g.keys[id][1])}{again}")
+        if id in seen:
+            return
+        for n, t in sorted(g.deps.get(id, {}).items()):
+            walk(t, n, depth + 1, seen | {id})
+    for key, id in g.direct.items():
+        walk(id, key, 0, frozenset())
+    return 0
+
+
+def _why(prj, package: str) -> int:
+    from undine.store import deps, resolve
+    g = resolve.lock_graph(deps.read_lock(prj.path))
+    ids = [i for i, e in g.entries.items() if e.get("package") == package or g.keys[i][1] == package]
+    if not ids:
+        print(f"error: {deps.LOCK} locks no package {package}")
+        return 1
+    for id in ids:
+        for chain in g.chains(id):
+            print(g.chain_text(prj.name, chain))
+    return 0

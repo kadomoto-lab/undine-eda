@@ -49,7 +49,7 @@ lock is written and the project registered in the store (so `store gc`, which ta
 between its fetch and the lock naming it), then gitsrc's lock of one kept repository.
 
 Packages (phase 2, docs/design/packages.md, Resolution and Lockfile). A dependency whose files have an
-undine-package.toml is a package: its manifest names its own dependencies (git requirements until the index exists),
+undine-package.toml is a package: its manifest names its own dependencies (git requirements, or index ones: store/index.py),
 and add, update and lib lock resolve the whole graph (store/resolve.py) before anything is written. Every manifest is
 read first, from git for what is resolved and from the store or the install for what stays locked (store/locked.py);
 then the conflicts, local names, cell names and PDK compatibility are checked and every problem is refused at once
@@ -80,7 +80,9 @@ from pathlib import Path
 
 from undine import tools
 from undine.store import cas, gitsrc, locked, resolve
+from undine.store import index as ix
 from undine.store import manifest as mf
+from undine.store.semver import Req, SemverError, Version
 
 LOCK = "undine.lock"
 DEPS = Path(".undine") / "deps"
@@ -384,6 +386,40 @@ def _check_commit(name: str, commit) -> None:
     if not (isinstance(commit, str) and _COMMIT.match(commit)):
         raise DepError(f"{name}: {LOCK} locks it at {commit!r}, which is not a full commit id: fix that entry, or "
                        f"restore {LOCK} from git (git checkout {LOCK}); nothing was changed")
+
+
+def is_index_spec(spec) -> bool:
+    """A project.json dependency in the index's form: {"package": ..., "version": "^1.2", "index": ...} (each key
+    optional), neither a path nor a git URL."""
+    return isinstance(spec, dict) and "git" not in spec and "path" not in spec
+
+
+def is_dep(spec) -> bool:
+    """A dependency of project.json (git or index), not one of the project's own libraries."""
+    return isinstance(spec, dict) and ("git" in spec or is_index_spec(spec))
+
+
+_INDEX_SPEC_KEYS = ("package", "version", "index")
+
+
+def index_spec(name: str, spec: dict, meta: dict | None) -> tuple[str, Req, str]:
+    """(package, requirement, index URL) of an index dependency `name` of project.json, checked."""
+    extra = sorted(set(spec) - set(_INDEX_SPEC_KEYS))
+    if extra:
+        raise DepError(f"{name}: project.json gives {extra[0]!r}, which an index dependency does not take (package, "
+                       "version and index; or git, rev and subdir for a git one)")
+    package = spec.get("package", name)
+    if not (isinstance(package, str) and mf.NAME.match(package)):
+        raise DepError(f"{name}: package {package!r} is not a package name ({mf._NAME_FIX})")
+    try:
+        req = Req.parse(spec.get("version", "*"))
+    except SemverError as e:
+        raise DepError(f"{name}: version: {e}") from None
+    try:
+        url = ix.url_of(spec.get("index"), meta)
+    except ix.IndexReadError as e:
+        raise DepError(f"{name}: {e}") from None
+    return package, req, url
 
 
 def _local_path(url: str) -> Path | None:
@@ -690,7 +726,7 @@ def _lock_of(prj, env: dict | None = None) -> dict:
 
 
 def _declared(prj) -> list[str]:
-    return [n for n, s in prj.library_specs().items() if "git" in s]
+    return [n for n, s in prj.library_specs().items() if is_dep(s)]
 
 
 def leftovers(prj, lock: dict | None) -> dict[str, dict]:
@@ -817,7 +853,7 @@ def _shadowed(prj, lock: dict | None) -> dict[str, str]:
     specs = prj.library_specs()
     out: dict[str, str] = {}
     for n, s in specs.items():
-        if "git" not in s:
+        if not is_dep(s):
             out.setdefault(n.casefold(), f"the project library {n}")
     pdk_libs = [n for n, lib in prj.libraries().items() if lib.origin == "pdk"]
     if not pdk_libs:
@@ -843,7 +879,7 @@ def _project_cells(prj) -> dict[str, set[str]]:
     cells are not the project's cells: counting them would refuse every project that placed a package's cell."""
     out = {}
     for n, s in prj.library_specs().items():
-        if "git" in s:
+        if is_dep(s):
             continue
         d = prj.lib_path(s["path"])
         names = [f.name for f in d.iterdir() if f.is_file()] if d.is_dir() else []
@@ -968,6 +1004,13 @@ class _Graph:
         self.origin: dict = {}                            # fixed node -> its lock entry
         pin = lock_pdk(lock) if lock else ({"id": prj.pdk.id} if prj.pdk else None)
         self.target = compat.project_target(pin, prj.pdk)
+        self.indexes: dict[str, ix.Index] = {}
+        self.refreshed: set[str] = set()
+        self.refresh_on_miss = True                      # a choice that fails fetches the indexes once and tries again
+        self.prefer = True                               # locked versions first (update: the newest instead)
+        self.choice: dict[tuple[str, str], ix.Line] = {}
+        self.chosen: dict[tuple, ix.Line] = {}           # (git, commit, subdir) -> the index line pinned there
+        self.unpinned: dict[tuple, ix.Want] = {}
 
     # -- reading
 
@@ -978,6 +1021,104 @@ class _Graph:
         if url not in self.sources:
             self.sources[url] = _source(spec, self.local_roots, self.command)
         return self.sources[url]
+
+    # -- indexes
+
+    def index(self, url: str) -> ix.Index:
+        """The local copy of index `url`: over HTTP a local one only below --dep-root (as a local git URL)."""
+        if url not in self.indexes:
+            try:
+                src = _source({"git": url}, self.local_roots, self.command) if self.local_roots is not None else None
+            except DepError as e:
+                raise DepError(f"index {url}: {e}") from None
+            self.indexes[url] = ix.Index(url, src)
+        return self.indexes[url]
+
+    def lines(self, url: str, name: str) -> list[ix.Line]:
+        try:
+            return self.index(url).versions(name)
+        except ix.IndexReadError as e:
+            raise DepError(str(e)) from None
+
+    def refresh(self, urls) -> bool:
+        """Fetches the indexes `urls` again (once per operation); True when one was fetched."""
+        done = False
+        for url in urls:
+            if url in self.refreshed:
+                continue
+            self.refreshed.add(url)
+            try:
+                self.index(url).update()
+            except ix.IndexReadError as e:
+                raise DepError(str(e)) from None
+            done = True
+        return done
+
+    def requirement(self, local: str, spec: dict, package: str | None = None,
+                    commit: str | None = None) -> resolve.Requirement:
+        """A project.json dependency as a requirement: a git one at its place, an index one unpinned (run chooses)."""
+        if is_index_spec(spec):
+            pkg, req, url = index_spec(local, spec, self.prj.meta)
+            return resolve.Requirement(local, pkg, version=req, index=url, commit=commit)
+        return _requirement(local, spec, package, commit)
+
+    def solve(self, wants: list[ix.Want], fixed: dict[str, resolve.Node]) -> dict[tuple[str, str], ix.Line]:
+        """index.solve over the indexes, the packages locked here held (`fixed`) or tried first (`prefer`). When no
+        choice meets the requirements, each index involved is fetched again once (it may list newer versions) and
+        the choice made again."""
+        from undine.pdks import compat
+        held = {(n.index, n.package): n.version for n in fixed.values() if n.index and n.version is not None}
+        lock_versions = {}
+        for e in self.graph.entries.values():
+            if isinstance(e.get("index"), str) and isinstance(e.get("package"), str):
+                try:
+                    lock_versions[(e["index"], e["package"])] = Version.parse(e.get("version"))
+                except SemverError:
+                    pass
+        prefer = lock_versions if self.prefer else {}
+        locked = {(u, n, v) for (u, n), v in lock_versions.items()}
+
+        def pdk_check(line: ix.Line) -> str | None:
+            req = line.pdk_req()
+            return compat.check(req, self.target) if req is not None else None
+        for again in (False, True):
+            try:
+                return ix.solve(wants, self.lines, held=held, prefer=prefer, locked=locked, pdk_check=pdk_check)
+            except ix.SolveError as e:
+                if again or self.refresh_on_miss is False or not self.refresh({w.index for w in wants}):
+                    raise ResolveError([resolve.Problem(u.code, u.message, u.chains) for u in e.problems]) from None
+        raise AssertionError("unreachable")
+
+    def pin(self, r: resolve.Requirement, line: ix.Line, requirer: str | None = None) -> resolve.Requirement:
+        """An index requirement as a git one at the commit its chosen line names."""
+        self.chosen[(line.git, line.commit, line.subdir or None)] = line
+        return resolve.Requirement(r.local, line.name, line.git, None, line.subdir, r.version, requirer,
+                                   line.commit, index=line.index)
+
+    def index_pin(self, node: resolve.Node, dep: mf.IndexDep) -> resolve.Requirement | None:
+        """resolve's IndexPin: a manifest's index requirement, pinned at the chosen version, or noted for the next
+        choice (None). The index is the requirement's own, else (cargo's rule) the index of the package naming it,
+        else the default index."""
+        if node.index is not None:
+            line = self.chosen.get((node.git, node.commit, node.subdir or None))
+            d = next((x for x in (line.deps if line else ()) if x.local == dep.local), None)
+            url = (d.index if d is not None and d.index else None) or node.index
+        else:
+            try:
+                url = ix.url_of(dep.index, self.prj.meta)
+            except ix.IndexReadError as e:
+                raise mf.ManifestError(f"{resolve.name_text(node)}: dependencies.{dep.local}: {e}") from None
+        try:
+            req = Req.parse(dep.version)
+        except SemverError as e:
+            raise mf.ManifestError(f"{resolve.name_text(node)}: dependencies.{dep.local}: version: {e}") from None
+        line = self.choice.get((url, dep.package))
+        if line is None:
+            key = (url, dep.package, dep.local, node.id)
+            self.unpinned.setdefault(key, ix.Want(dep.local, dep.package, req, url,
+                                                  (self.prj.name, resolve.node_text(node))))
+            return None
+        return self.pin(resolve.Requirement(dep.local, dep.package, version=req, index=url), line, node.id)
 
     def commit_of(self, local: str, spec: dict, commit: str | None) -> str:
         """The commit spec's rev names, or `commit` itself, in the kept repository (fetched when it is not there):
@@ -1019,8 +1160,30 @@ class _Graph:
         m = None if data is None else mf.parse(data, where)
         if m is not None and self.fmt < 2 and (m.dependencies or m.name != req.local):
             raise self.needs_2(self.why_2(req.local, m))
+        if req.index is not None:
+            self.check_line(self.chosen[(req.git, commit, req.subdir or None)], m, where)
         return resolve.Node("?", git=req.git, rev=req.rev, subdir=req.subdir, commit=commit,
-                            files_mode="include" if m is not None and self.fmt >= 2 else "all", manifest=m)
+                            files_mode="include" if m is not None and self.fmt >= 2 else "all", manifest=m,
+                            index=req.index)
+
+    @staticmethod
+    def check_line(line: ix.Line, m: mf.Manifest | None, where: str) -> None:
+        """A package's manifest at the commit its index line names must be what the line says: the same name and
+        version, and the same index requirements (an index package depends only on index packages)."""
+        said = f"{line.label} in index {line.index}"
+        if m is None:
+            raise mf.ManifestError(f"{said}: {where} has no {mf.MANIFEST}")
+        if m.name != line.name or m.version != line.vers:
+            raise mf.ManifestError(f"{said}: {where} is {m.name} {m.version}: the index line and the repository "
+                                   "disagree")
+        gits = [d.local for d in m.dependencies.values() if isinstance(d, mf.GitDep)]
+        if gits:
+            raise mf.ManifestError(f"{said}: {where} names git dependencies ({', '.join(gits)}): a package from an "
+                                   "index depends only on packages from an index")
+        have = {(d.local, d.package, str(Req.parse(d.version))) for d in m.dependencies.values()}
+        want = {(d.local, d.package, str(d.req)) for d in line.deps}
+        if have != want:
+            raise mf.ManifestError(f"{said}: {where}'s [dependencies] differ from the index line's deps")
 
     def fixed(self, keys, skip: set[str] = frozenset()) -> dict[str, resolve.Node]:
         """The locked entries reached from the direct names `keys` (but the ids in `skip`, which are resolved
@@ -1053,7 +1216,7 @@ class _Graph:
             node = resolve.Node(m.name if m else f"git:{key}", m.name if m else None, m.version if m else None,
                                 e.get("git"), e.get("rev"), e.get("subdir"), e.get("commit"), e.get("tree"),
                                 _mode(e), files, m, True, g.chain_text(self.prj.name, chains[0]) if chains else None,
-                                held=held)
+                                held=held, index=e.get("index") if isinstance(e.get("index"), str) else None)
             k = node.id
             while k in out:                    # one package under two direct names: two entries, either matches
                 k += "+"
@@ -1103,6 +1266,12 @@ class _Graph:
             node.files, self.hashes[node] = self.trees[key]
             if self.kind == "tree":
                 node.tree = self.hashes[node]
+            line = self.chosen.get((node.git, node.commit, node.subdir or None)) if node.index else None
+            if line is not None and node.tree != line.tree:
+                problems.append(resolve.Problem(
+                    "index_tree", f"{line.label} in index {line.index}: the files at {node.commit[:12]} hash to "
+                                  f"{node.tree}, the index says {line.tree}: the index line and the repository "
+                                  "disagree; nothing of it is installed"))
         if not any(n.manifest is not None for n in res.nodes.values()):
             return problems
         labels = {id: resolve.name_text(n) for id, n in res.nodes.items()}
@@ -1115,13 +1284,40 @@ class _Graph:
 
     def run(self, direct: dict[str, resolve.Requirement], fixed: dict[str, resolve.Node]) -> resolve.Resolution:
         """Resolves `direct` with `fixed` held; ResolveError with every problem. On a format 1 lock, what it cannot
-        record is NeedsFormat2."""
-        self.direct = direct
-        try:
-            res = resolve.resolve(self.prj.name, direct, self.read, fixed=fixed,
-                                  reserved=_reserved(self.prj, self.lock), pdk_check=self.pdk_check, cells=self.cells)
-        except resolve.ResolveError as e:
-            raise ResolveError(e.problems) from None
+        record is NeedsFormat2. Index requirements (project.json's, and those of the manifests read) are chosen
+        first (solve) and walked as git requirements pinned at their chosen commits; an index requirement found in a
+        manifest only during the walk is added to the choice, and the walk made again."""
+        roots = [ix.Want(k, r.package, r.version or Req.parse("*"), r.index, (self.prj.name,))
+                 for k, r in direct.items() if r.index is not None and r.git is None]
+        if roots and self.fmt < 2:
+            raise self.needs_2(f"{roots[0].local}: a package from an index")
+        found: dict[tuple, ix.Want] = {}
+        walked: list[resolve.Problem] = []               # the last walk's problems, said with a failed choice
+        for _ in range(32):
+            wants = roots + list(found.values())
+            try:
+                self.choice = self.solve(wants, fixed) if wants else {}
+            except ResolveError as e:
+                raise ResolveError(walked + e.problems) from None
+            self.unpinned = {}
+            pinned = {k: (self.pin(r, self.choice[(r.index, r.package)]) if r.index is not None and r.git is None
+                          else r) for k, r in direct.items()}
+            self.direct = pinned
+            try:
+                res = resolve.resolve(self.prj.name, pinned, self.read, fixed=fixed,
+                                      reserved=_reserved(self.prj, self.lock), pdk_check=self.pdk_check,
+                                      cells=self.cells, index_pin=self.index_pin)
+            except resolve.ResolveError as e:
+                if self._more(found):
+                    walked = e.problems
+                    continue
+                raise ResolveError(e.problems) from None
+            if self._more(found):
+                walked = []
+                continue
+            break
+        else:
+            raise ResolveError([resolve.Problem("index", "the index requirements kept growing: nothing was changed")])
         if self.fmt < 2:
             for id, node in res.nodes.items():
                 keys = [k for k, i in res.direct.items() if i == id]
@@ -1130,6 +1326,12 @@ class _Graph:
                 if node.manifest is not None and (res.deps.get(id) or not keys or set(res.names_of(id)) - set(keys)):
                     raise self.needs_2(self.why_2(keys[0] if keys else res.names_of(id)[0], node.manifest))
         return res
+
+    def _more(self, found: dict) -> bool:
+        """Adds the index requirements the walk could not pin to `found`; True when one was new."""
+        new = {k: w for k, w in self.unpinned.items() if k not in found}
+        found.update(new)
+        return bool(new)
 
     # -- what to write
 
@@ -1149,6 +1351,8 @@ class _Graph:
         e |= {"commit": node.commit, self.kind: self.hashes[node]}
         if node.files_mode == "include":
             e["files"] = "include"
+        if node.index is not None:
+            e["index"] = node.index
         return e
 
     def tables(self, res: resolve.Resolution) -> tuple[dict, dict, dict]:
@@ -1317,8 +1521,9 @@ def _result_cells(item: dict, d: Path, m: mf.Manifest | None) -> dict:
     return item | {"cells": cells, "public_cells": [c for c in cells if c not in internal], "internal_cells": internal}
 
 
-def add(prj, name: str, git: str, rev: str | None = None, subdir: str | None = None, guard=None,
-        local_roots: list[Path] | None = None, *, package: str | None = None) -> dict:
+def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | None = None, guard=None,
+        local_roots: list[Path] | None = None, *, package: str | None = None, version: str | None = None,
+        index: str | None = None) -> dict:
     """Adds a dependency, hashed as the lock's format says (`sha` in format 1, `tree` in format 2), with every
     package its manifest needs, resolved together with what is locked (held as locked, never fetched again). Nothing
     is written until every manifest is read and the whole graph checked (ResolveError lists every problem).
@@ -1326,14 +1531,25 @@ def add(prj, name: str, git: str, rev: str | None = None, subdir: str | None = N
     HTTP (serve --dep-root), where a local repository may be (_source), for every URL a manifest names too. Returns
     the entry with `cells` (`public_cells`, `internal_cells` by [exports]), `created` (whether this call made the
     lock), `package`, `version`, `resolved` (every entry resolved: the dependency and the packages it brought) and
-    `flagged` / `trusted` (what the trust rule would refuse in it)."""
+    `flagged` / `trusted` (what the trust rule would refuse in it).
+
+    `git` None: a package from an index (`pkg add`): `package` (default: `name`), `version` a requirement (default:
+    the newest version that fits, written to project.json as ^<that version>) and `index` a nickname or URL
+    (default: the default index); the lock must be format 2."""
     from undine.store.project import check_name
     check_name(name)
     _not_taken(prj, name)
     if package is not None and not (isinstance(package, str) and mf.NAME.match(package)):
         raise DepError(f"package {package!r} is not a package name ({mf._NAME_FIX}); nothing was changed")
-    spec = {"git": git, **({"rev": rev} if rev else {}), **({"subdir": subdir} if subdir else {}),
-            **({"package": package} if package else {})}
+    if git is None:
+        if rev or subdir:
+            raise DepError("rev and subdir are for a git dependency; a package from an index has a version")
+        spec = {**({"package": package} if package and package != name else {}),
+                "version": version or "*", **({"index": index} if index else {})}
+        index_spec(name, spec, prj.meta)
+    else:
+        spec = {"git": git, **({"rev": rev} if rev else {}), **({"subdir": subdir} if subdir else {}),
+                **({"package": package} if package else {})}
     with _deps_lock(prj.path):
         _reread(prj)
         _not_taken(prj, name)
@@ -1343,13 +1559,17 @@ def add(prj, name: str, git: str, rev: str | None = None, subdir: str | None = N
         if what:
             raise DepError(f"{name}: {what} has that name, and .undine/deps would shadow it: choose another local "
                            "name; nothing was changed")
-        g = _Graph(prj, lock, local_roots, f"lib add {prj.name} {name} {git}")
-        _check_spec(spec)
+        g = _Graph(prj, lock, local_roots, f"lib add {prj.name} {name} {git}" if git else
+                   f"pkg add {prj.name} {package or name}")
+        if git is not None:
+            _check_spec(spec)
         with _in_store(prj):
             keys = g.walked(exclude={name})
             direct = g.held(keys)
-            direct[name] = _requirement(name, spec, package)
+            direct[name] = g.requirement(name, spec, package)
             res = g.run(direct, g.fixed(keys))
+            if git is None and version is None:          # cargo add: the newest that fits, as ^<it>
+                spec["version"] = f"^{res.nodes[res.direct[name]].version}"
             libs, pkgs, installs = g.tables(res)
             staged = g.stage(installs)
             try:
@@ -1401,7 +1621,7 @@ def _placed_by(prj, name: str) -> list[str]:
 
 def _dep_spec(prj, name: str) -> dict:
     spec = prj.library_specs().get(name)
-    if not spec or "git" not in spec:
+    if not spec or not is_dep(spec):
         placed = _placed_by(prj, name) if spec is None and _plain_name(name) else []
         if placed:
             raise NotDirect(f"{name}: placed by {' and '.join(placed)}; update or remove that instead", placed)
@@ -1409,26 +1629,38 @@ def _dep_spec(prj, name: str) -> dict:
     return spec
 
 
-def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list[Path] | None = None) -> dict:
+def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list[Path] | None = None, *,
+           version: str | None = None) -> dict:
     """Moves a dependency to `rev` (default: its rev again, e.g. a branch that moved), hashed as the lock's format says
     (a format 2 lock's entry gets a `tree` and loses its `sha`; a package moves onto its [files] include set). Its
     packages are resolved again with it, every other locked package held as locked; a package no longer reached is
     dropped with its names. Returns what changed: `changed` and `used_by` for it, `packages_changed` ({package,
     names, from, to, changed} per entry moved, added or dropped) and `used_by` over every local name of each. A
-    name only a package places is NotDirect. `local_roots`: as add's."""
+    name only a package places is NotDirect. `local_roots`: as add's. A package from an index moves to the newest
+    version its requirement (or `version`, written to project.json) accepts, with its index fetched again first;
+    the packages only it reaches move with it."""
     _dep_spec(prj, name)
     with _deps_lock(prj.path):
         _reread(prj)
         base = _dep_spec(prj, name)                      # as the operation before this one left it
         lock = read_lock(prj.path)                       # a lock this Undine cannot write: refused before fetching
-        spec = dict(base, **({"rev": rev} if rev else {}))
+        indexed = is_index_spec(base)
+        if indexed and rev:
+            raise DepError(f"{name} is a package from an index: give a version, not a rev")
+        if not indexed and version:
+            raise DepError(f"{name} is a git dependency: give a rev, not a version")
+        spec = dict(base, **({"rev": rev} if rev else {}), **({"version": version} if version else {}))
         _own_dir(prj.path, name)
         g = _Graph(prj, lock, local_roots, f"lib update {prj.name} {name}")
-        _check_spec(spec)
+        if indexed:
+            g.prefer = False
+            g.refresh([index_spec(name, spec, prj.meta)[2]])
+        else:
+            _check_spec(spec)
         with _in_store(prj):
             keys = g.walked(exclude={name})
             direct = g.held(keys)
-            direct[name] = _requirement(name, spec, spec.get("package"))
+            direct[name] = g.requirement(name, spec, spec.get("package"))
             target = g.graph.direct.get(name)
             res = g.run(direct, g.fixed(keys, {target} if target else set()))
             libs, pkgs, installs = g.tables(res)
@@ -1592,19 +1824,27 @@ def _removal(prj, lock: dict | None, name: str, others: list[str]) -> tuple[list
 
 
 def _git_specs(prj) -> dict[str, dict]:
-    return {n: s for n, s in prj.library_specs().items() if "git" in s}
+    """project.json's dependencies, git and index ones (the name is from before the index)."""
+    return {n: s for n, s in prj.library_specs().items() if is_dep(s)}
 
 
-def _stale(specs: dict[str, dict], lock: dict | None) -> dict[str, str]:
-    """The git dependencies of project.json that the lock does not pin as named there, {name: why}: not locked, or
+def _stale(specs: dict[str, dict], lock: dict | None, meta: dict | None = None) -> dict[str, str]:
+    """The dependencies of project.json that the lock does not pin as named there, {name: why}: not locked, or
     locked with another git, rev or subdir, or (format 2) as another package than project.json's `package` (a pull
-    that changed a requirement, a hand edit). A format 1 lock records no package, so there it is not compared."""
+    that changed a requirement, a hand edit). A format 1 lock records no package, so there it is not compared. An
+    index dependency is stale when its entry is from another index or package, or at a version its requirement does
+    not accept. `meta`: project.json, for the index nicknames it names."""
     locked = (lock or {}).get("libraries", {})
     out = {}
     for name, spec in specs.items():
         want = locked.get(name)
         if not isinstance(want, dict):
             out[name] = f"{name}: not in {LOCK}"
+            continue
+        if is_index_spec(spec):
+            why = _index_stale(name, spec, want, meta)
+            if why:
+                out[name] = why
             continue
         keys = [k for k in ("git", "rev", "subdir") if want.get(k) != spec.get(k)]
         if spec.get("package") and lock_format(lock) >= 2 and want.get("package") != spec["package"]:
@@ -1614,6 +1854,21 @@ def _stale(specs: dict[str, dict], lock: dict | None) -> dict[str, str]:
             locks = ", ".join(str(want[k]) if want.get(k) else f"no {k}" for k in keys)
             out[name] = f"{name}: project.json asks for {asks}, {LOCK} locks {locks}"
     return out
+
+
+def _index_stale(name: str, spec: dict, want: dict, meta: dict | None) -> str | None:
+    package, req, url = index_spec(name, spec, meta)
+    if want.get("index") != url or want.get("package") != package:
+        asks = f"{package} from {ix.nickname(url, meta)}"
+        locks = f"{want.get('package') or 'no package'} from {want.get('index') or 'git ' + str(want.get('git'))}"
+        return f"{name}: project.json asks for {asks}, {LOCK} locks {locks}"
+    try:
+        v = Version.parse(want.get("version"))
+    except SemverError:
+        return f"{name}: {LOCK} has no version for it"
+    if not req.matches(v):
+        return f"{name}: project.json asks for {package} {req}, {LOCK} locks {v}"
+    return None
 
 
 def _unresolved(prj, lock: dict | None) -> dict[str, tuple[str, str]]:
@@ -1694,7 +1949,7 @@ def _frozen(prj, specs: dict[str, dict], lock: dict | None) -> None:
     whose graph cannot be installed as it is (a package it needs and does not lock, a local name claimed twice or
     reserved: _incomplete from the lock alone), is refused before anything is read or fetched, naming each entry and
     the commands that resolve it."""
-    why = _stale(specs, lock)
+    why = _stale(specs, lock, prj.meta)
     for k, w in _incomplete(prj, lock, manifests=False).items():
         why.setdefault(k, w)
     if why:
@@ -1811,7 +2066,10 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
         specs = _git_specs(prj)
         for name, spec in specs.items():                 # all refused before anything is read, nothing half done
             _own_dir(prj.path, name)
-            _check_spec(spec, git=False)
+            if is_index_spec(spec):
+                index_spec(name, spec, prj.meta)
+            else:
+                _check_spec(spec, git=False)
         _frozen(prj, specs, lock)
         lock = lock or new_lock(environment(prj.pdk))    # no git dependency: a lock as `lib lock` makes one
         plan = _plan(specs, lock)
@@ -1949,7 +2207,7 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
     _reread(prj)
     if upgrade is None:
         lock = read_lock(prj.path)
-        if not _stale(_git_specs(prj), lock) and not _incomplete(prj, lock):
+        if not _stale(_git_specs(prj), lock, prj.meta) and not _incomplete(prj, lock):
             with _in_store(prj):                         # nothing to fetch: no wait behind a fetch in progress
                 lock, created, _ = _record_env(prj, guard, [])
             return {"lock": lock, "resolved": [], "created": created}
@@ -1958,20 +2216,28 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
         start = read_lock(prj.path)
         lock = upgrade(copy.deepcopy(start) if start is not None else {"libraries": {}}) if upgrade else start
         specs = _git_specs(prj)
-        stale, incomplete = _stale(specs, lock), _incomplete(prj, lock)
+        stale, incomplete = _stale(specs, lock, prj.meta), _incomplete(prj, lock)
         todo = [n for n in specs if n in stale or n in incomplete]
         for name in todo:                                # all refused before the first fetch
             _own_dir(prj.path, name)
-            _check_spec(specs[name])
+            if is_index_spec(specs[name]):
+                index_spec(name, specs[name], prj.meta)
+            else:
+                _check_spec(specs[name])
         g = _Graph(prj, lock, local_roots, f"lib lock {prj.name}")
         for name in todo:
-            g.source(specs[name])
+            if not is_index_spec(specs[name]):
+                g.source(specs[name])
         with _in_store(prj):
             keys = g.walked(exclude=set(todo))
             direct = g.held(keys)
             for name in todo:                            # complete only: read again at the commit it is locked at
-                at = None if name in stale else g.graph.entries[g.graph.direct[name]].get("commit")
-                direct[name] = _requirement(name, specs[name], specs[name].get("package"), at)
+                e = g.graph.entries[g.graph.direct[name]] if name not in stale else None
+                if e is not None and is_index_spec(specs[name]):     # at the version it is locked at
+                    direct[name] = g.requirement(name, {**specs[name], "version": f"={e.get('version')}"})
+                    continue
+                at = e.get("commit") if e is not None else None
+                direct[name] = g.requirement(name, specs[name], specs[name].get("package"), at)
             res = g.run(direct, g.fixed(keys, {g.graph.direct[n] for n in todo if n in g.graph.direct}))
             libs, pkgs, installs = g.tables(res)
             staged = g.stage(installs)
@@ -2060,7 +2326,25 @@ def status(prj) -> dict:
     libs = []
     view = _Installed(prj, lock)
     for name, spec in prj.library_specs().items():
-        if "git" in spec:
+        if is_index_spec(spec):
+            want = (lock or {}).get("libraries", {}).get(name)
+            have = installed(prj.path, name)
+            try:
+                why = _index_stale(name, spec, want, prj.meta) if isinstance(want, dict) else f"{name}: not in {LOCK}"
+            except DepError as e:
+                why = str(e)
+            state = "unlocked" if why else _state(prj.path, name, want, have)
+            if state != "ok":
+                issues.append(f"library {name}: {state}" + (f" ({why})" if why else "")
+                              + (f": run `python -m undine lib lock {prj.name}` to lock it, or `python -m undine pkg "
+                                 f"update {prj.name} {name}`" if state == "unlocked" else
+                                 f": run `python -m undine lib sync {prj.name}`"))
+            libs.append({"name": name, "kind": "dependency", "git": (want or {}).get("git"), "rev": None,
+                         "subdir": (want or {}).get("subdir"), "index": (want or {}).get("index"),
+                         "requirement": spec.get("version", "*"), "locked": (want or {}).get("commit"),
+                         "installed": (have or {}).get("commit"), "state": state, **_in_store_of(want),
+                         **view.fields(name, state)})
+        elif "git" in spec:
             want = (lock or {}).get("libraries", {}).get(name)
             have = installed(prj.path, name)
             named = [k for k in ("git", "rev", "subdir") if want and want.get(k) != spec.get(k)]
@@ -2096,7 +2380,7 @@ def status(prj) -> dict:
                      **view.fields(name, state)})
     # what project.json no longer names: until sync removes it, a schematic placing its symbols works here and not in
     # a fresh checkout (.undine/deps/ is on the symbol path while any dependency is declared)
-    resolves = any("git" in s for s in prj.library_specs().values())
+    resolves = any(is_dep(s) for s in prj.library_specs().values())
     try:
         gone = leftovers(prj, lock)
     except DepError as e:                                # .undine/deps is a link: reported, never followed
@@ -2144,8 +2428,31 @@ def status(prj) -> dict:
         if lock_format(lock) == 1:
             notes.append("origins, Undine version and pixi.lock are not recorded (format 1)")
     notes += view.notes
+    warnings += _yanked(prj, lock)
     return {"format": lock_format(lock) if lock else None, "libraries": libs, "pdk": pdk, "tools": tl,
             "issues": issues, "warnings": warnings, "notes": notes, "ok": not issues}
+
+
+def _yanked(prj, lock: dict | None) -> list[str]:
+    """A warning per locked package whose version its index has yanked since, from the local copy of each index
+    (status fetches nothing; `pkg index update` brings the copy up to date)."""
+    out: list[str] = []
+    copies: dict[str, ix.Index] = {}
+    for e in resolve.lock_graph(lock).entries.values():
+        url, package = e.get("index"), e.get("package")
+        if not (isinstance(url, str) and isinstance(package, str)):
+            continue
+        try:
+            i = copies.setdefault(url, ix.Index(url))
+            if not i.fetched():
+                continue
+            line = next((x for x in i.versions(package) if str(x.vers) == e.get("version")), None)
+        except (ix.IndexReadError, gitsrc.GitSourceError):
+            continue
+        if line is not None and line.yanked:
+            out.append(f"{package} {e.get('version')} is yanked in {ix.nickname(url, prj.meta)}: it stays locked; "
+                       f"`python -m undine pkg update {prj.name}` moves to a version that is not")
+    return out
 
 
 # the package fields of a dependency row that is not installed from a lock entry (unlocked, a leftover)
@@ -2455,7 +2762,7 @@ def _used_by(prj, name: str, changes: dict[str, list[str]]) -> list[str]:
     changed = {Path(f).stem: Path(f).suffix for f in changes["modified"] + changes["removed"]}
     out = []
     for lname, spec in prj.library_specs().items():
-        if "git" in spec:
+        if is_dep(spec):
             continue
         lib = prj.library(lname)
         for sch in sorted(lib.path.glob("*.sch")) if lib.path.is_dir() else []:

@@ -710,20 +710,31 @@ pixi run python -m undine lib lock PROJECT --format 2
 あります。lock 自体がそのようなパッケージを持っているとき(pull の後)は、`lib lock --format 2` が変換と解決を一度に行います。
 ボタンはなく、コマンドラインだけです。
 
-<a id="an-index-requirement-or-a-version-range"></a>
-### インデックスの要求、またはバージョンの範囲
+<a id="a-package-from-an-index-is-refused"></a>
+### インデックスのパッケージが拒否される
 
-メッセージ: `...: undine-package.toml: dependencies.sar_common: an index requirement (sar_common ^1.2), which comes with
-the package index (phase 3): name its git repository, sar_common = { git = "https://...", rev = "v1.2.0", version =
-"^1.2" }`、または `...: undine-package.toml: dependencies.sar_common.version: '>=1.2': version ranges come with the
-package index (phase 3): use ^, ~ or =`。
+メッセージ(どれも `nothing was changed` で終わります):
 
-**原因。** マニフェストが、Undine にまだないパッケージのインデックスの書き方を使っています: バージョンの文字列や `index` で示した
-依存関係、または比較演算子(`>=`、`<`、`!=`)やカンマを含むバージョンの要求です。
+- `demo -> analog_ip ^1.2: index https://... lists no package analog_ip`: ここで取得したインデックスに、その名前がありません。
+  `pkg search` で名前を探し、`pkg index update` でインデックスを取得し直します(何も見つからなかった解決は、一度は自分で取得し
+  直します)。
+- `sar_common: no version matches: ...; https://... lists 1.0.0, 2.0.0`: インデックスが一覧にするどのバージョンも要求を満たし
+  ません。`project.json` の要求を変える(または `pkg update --version`)か、公開した人に頼みます。
+- `sar_common: no version meets all of them: demo -> analog_ip 1.2.0 -> sar_common ^1.2 and demo -> sar_common ~1.0 ... (one
+  version per package)`: 2 つのパッケージが、1 つのパッケージの重ならないバージョンを必要としています。要求する側の一方を合う
+  バージョンに動かす(`pkg update`)か、自分の要求を緩めます。
+- `... sar_common is locked at 1.0.0: pkg update sar_common moves it`: ほかの依存の追加や更新では、固定したものは固定したまま
+  です。新しい要求には、それを動かす必要があります。それを持ち込む依存に `pkg update` を実行します。
+- `every sar_common version that matches is yanked`: 公開した人が取り下げました。それを固定している lock はそのまま持ちます。
+- `sar_common: from two indexes, ... and ...: one index per package name`: 2 つの依存が、同じ名前のパッケージを別々のインデックス
+  から求めています。どちらか一方から取ります(`project.json` の `"index"`)。
+- `... in index https://...: the files at 229914698b1f hash to sha256:..., the index says sha256:...: the index line and the
+  repository disagree`、または `... [dependencies] differ from the index line's deps`: インデックスとパッケージのリポジトリが、
+  同じリリースを示していません。インデックスの管理者に知らせてください。そのパッケージは何もインストールされません。
+- `analog_ip: a package from an index: needs lock format 2`: `python -m undine lib lock demo --format 2` を一度実行します。
 
-**対処。** 依存関係を git のテーブル `{ git = "...", rev = "...", version = "^1.2" }` で書き(メッセージが書くものを示します)、
-要求には `^`、`~`、`=`、または `^` のない `MAJOR.MINOR` を使います。ほかの人が公開するパッケージなら、その作者に頼むか、そう
-書いているバージョンを使います。
+マニフェストや `project.json` のバージョンの要求を読めないときは、書くものを示します: `'>=1.2,': an empty part in a comma
+list`、`~ needs MAJOR.MINOR, e.g. ~1.2`。
 
 <a id="undine-packagetoml-is-refused"></a>
 ### `undine-package.toml` が拒否される

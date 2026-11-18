@@ -106,8 +106,8 @@ A dependency may have a manifest, `undine-package.toml`, at the top of its direc
 installs those too), the PDKs its cells are for, and which of its cells are public. A dependency without a manifest is
 a plain git dependency and works as before.
 
-There is no package index yet: every package, and every package it depends on, is found by its git URL and a `rev`.
-`lib add` takes a package as it takes any dependency:
+A package comes from a [package index](#packages-from-an-index) by name and version (`pkg add`), or from its git
+repository by URL and `rev`. `lib add` takes a package from git as it takes any dependency:
 
 ```sh
 pixi run python -m undine lib add demo analog_ip https://github.com/me/analog_ip.git --rev v1.2.0 --subdir lib
@@ -145,6 +145,66 @@ cells and the PDK, and refuse once with every problem found, ending `nothing was
 problems listed ([HTTP API](../reference/api.md#dependency-refusals)); the browser shows them in a dialog over the
 form, which keeps what you typed.
 
+### Packages from an index
+
+An index lists packages by name and version, as crates.io or npm do. `pkg search` looks for one, `pkg info` shows
+every version of it, and `pkg add` adds the newest version that fits, writing the requirement into `project.json`:
+
+```sh
+pixi run python -m undine pkg search sar
+pixi run python -m undine pkg add demo analog_ip            # or analog_ip@^1.2, --as ip, --index acme
+```
+
+```
+analog_ip 1.2.0 at 229914698b1f (4 cells), requirement ^1.2.0, locked in undine.lock
+  + sar_common 1.3.1 as sar_common, via analog_ip
+```
+
+`project.json` then names the package and a version requirement instead of a git URL (`package` when the local name
+is another, `index` when it is not the default index):
+
+```json
+"libraries": {"analog_ip": {"version": "^1.2.0"},
+              "bias": {"package": "bias_gen", "version": "~0.3", "index": "acme"}}
+```
+
+- **Which version.** For each package, the newest version that is not yanked, fits the project's PDK, and that every
+  requirement on it accepts, its own dependencies resolving too: when the newest needs something that cannot be met,
+  an older one is taken. One version per package in a project. What is locked already stays as locked; `pkg update`
+  moves it.
+- **The index names the commit.** Each version's line in the index gives its git repository, commit and tree hash.
+  Undine fetches that commit and refuses it when its files hash to another tree, or when its manifest gives another
+  name, version or list of dependencies than the line: `the index line and the repository disagree; nothing was
+  changed`. A package from an index depends only on packages from an index.
+- **The lock** needs [format 2](#undinelock). An entry records `index` (the index's URL) and `version`, and no `rev`.
+  `lib sync` installs from it as from any entry, without reading the index.
+- **Moving.** `pkg update demo [NAME]` fetches the index again and moves a package, with what only it reaches, to the
+  newest version its requirement accepts (every package from an index when no name is given); `--version ^2` gives
+  it a new requirement too. `pkg outdated demo` lists each locked version with the newest its requirement accepts
+  and the newest listed.
+- **Yanked versions.** A version its publisher yanked is skipped by every new resolution, but stays where it is
+  locked; `lib status` warns about it.
+- **The graph.** `pkg tree demo` prints the dependencies as locked, `pkg why demo sar_common` the chains that bring a
+  package in.
+- **Indexes.** The default index, `undine`, is `https://github.com/kadomoto-lab/undine-index.git`. Name more in
+  `~/.undine/config.toml`, or in `project.json` so that a clone of the project finds them (`project.json` wins for a
+  nickname both give):
+
+  ```toml
+  [indexes]
+  acme = "git@github.com:acme/undine-index.git"
+  ```
+
+  `--index acme` (or `"index": "acme"`) takes a package from it. A dependency a package names without `index` comes
+  from that package's own index (cargo's rule): a package from `acme` that needs `sar_common` gets acme's, never one
+  someone published under that name elsewhere. One package name from two indexes in one project is refused. Access
+  is git's: ssh keys or a credential helper. Each index is fetched once into the store and again only by `pkg index
+  update`, `pkg update`, or a resolution that finds no version it needs; `pkg index list` says when each was fetched.
+
+Still to come ([roadmap](../roadmap.md)): the packages' licenses and sources in the tapeout bundle (`pkg licenses`,
+`pkg vendor`), a Packages section in the library browser, and a limit on the hosts and the size of what a package
+from an index fetches.
+
 ### The manifest
 
 ```toml
@@ -180,13 +240,15 @@ include = ["*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "rtl/**
   (`bias/ref.sym`). A table with `git` and `rev` (both required: a tag, branch or commit), and optionally `subdir`,
   `package` (the [package] name it must have; default: the key) and `version`. `{ subdir = "..." }` alone is a
   **sibling**: another package in the same repository at the same commit, its `subdir` counted from the repository's
-  top. A dependency must be a package itself: only `project.json` names a plain git dependency.
-- **`version`** is checked against the [package] version of the tree `rev` names: `^1.3` (the same major version,
-  1.3.0 or later; for `0.x`, the same minor), `~0.3` (the same minor), `=1.3.1`, a bare `1.3` (as `^1.3`) or `*`
-  (any). A version with a pre-release (`1.4.0-rc.1`) matches only a requirement that names one of that release.
-  Comparators (`>=1.2`, `<2`), lists (`^1.2, <1.5`) and index requirements (`sar_common = "^1.2"`, `{ version = "^2",
-  index = "acme" }`) come with the package index and are refused, saying what to write instead
-  ([troubleshooting](../troubleshooting.md#an-index-requirement-or-a-version-range)).
+  top. Or a package from an [index](#packages-from-an-index): a version string (`sar_common = "^1.2"`) or a table with
+  `version`, `package` and `index` (a nickname or URL; without it, the index of this package, or the default index
+  for a package from git). A dependency must be a package itself: only `project.json` names a plain git dependency.
+- **`version`**: `^1.3` (the same major version, 1.3.0 or later; for `0.x`, the same minor), `~0.3` (the same minor),
+  `=1.3.1`, a bare `1.3` (as `^1.3`), `*` (any), comparators (`>=1.2`, `>1.2`, `<2`, `<=1.4`) and comma lists meaning
+  all of their parts (`>=1.2, <1.5`). A version with a pre-release (`1.4.0-rc.1`) matches only a requirement that
+  names one of that release. For a git requirement it is checked against the [package] version of the tree `rev`
+  names; for an index requirement it chooses among the versions the index lists
+  ([troubleshooting](../troubleshooting.md#a-package-from-an-index-is-refused)).
 - **`[pdk]`**: see [PDK compatibility](#pdk-compatibility). Optional; without it the package is not checked, and
   `lib status` says so.
 - **`[exports]`**: the public cells. The others are **internal**: installed, placed by the package's own cells and

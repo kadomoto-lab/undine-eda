@@ -14,8 +14,11 @@ fetched through ciel after you confirm) are done, and so is phase 2 (a package m
 own dependencies; cell-name clashes and PDK mismatches found before anything is installed; a dependency's code blocks
 and RTL used only once a person trusts it; see [Libraries and dependencies](guide/libraries.md)). Still to build:
 
-- [ ] **Phase 3: index.** An index to search for packages and add them by version, public and private; a Packages
-  section in the library browser; the packages' licenses and sources in the tapeout bundle.
+- [ ] **Phase 3: index.** Packages from an index by name and version, public and private, are done: `pkg search`,
+  `pkg add`, `pkg update`, version ranges, yanked versions, several indexes
+  ([Packages from an index](guide/libraries.md#packages-from-an-index)). Still to build: the default index
+  repository, a Packages section in the library browser, the packages' licenses and sources in the tapeout bundle,
+  and limits on the hosts and the size of what a package from an index fetches.
 - [ ] **Phase 4: changesets and agents.** Dependency changes reviewed and adopted like any other change; an agent can
   propose a dependency, but only a person fetches it; results that record the package and PDK versions they were
   made with.

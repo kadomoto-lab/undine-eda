@@ -780,7 +780,7 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 | 0. 修正 | 読むときに `format` を確かめる(知らない形式は拒否)。`set-pdk` が常に lock を書く。`project.json` から消えた依存を `sync` が消し、`status` が残りを報告する。CLI とサーバーのためのプロジェクトの flock。HTTP の取得を `srv.lock` の外で行う。`--dep-root`。ネットリスタが、1 つのネットリストに入る同じ名前で中身の違う 2 つのセルを拒否する。`osdi.sh` を直す(まだ PDK の木に書く。段階 1 で移す)。載っていないエンドポイントの docs | `test_deps.py` の lock のテスト。`format: 2` の lock をこのコードが拒否する。CLI とサーバーが同時に 1 つのプロジェクトを sync しても lock と `project.json` が壊れない。遅い偽のリモートが別のリクエストを止めない。HTTP からの `file://` を拒否する。1 つのテストベンチに中身の違う `inv` を持つ 2 つのライブラリがあれば、両方を示して拒否する | **済み**。[段階 0 の状況](#phase-0-status)を参照 |
 | 1. ストアと lock 2 | ストア、ファイル単位の重複の省略、固定どおりでオフラインの `sync`。git 依存の lock format 2(明示的なコマンドだけが書く)。git の blob からの木のハッシュ。除外の一覧つきの PDK の commit 全体と木のハッシュ、`pdk verify`、確認つきの ciel による `pdk fetch`(ルートは上のとおりに選ぶ)、PDK の再走査。`PYTHONDONTWRITEBYTECODE=1` で動く PCell のワーカー。ストアに作る OSDI: プロファイルの `osdi` の項目はモデルの名前(`psp103`)になり、まず `store/build/<commit>/<variant>/osdi/` で、次に PDK の木の今のパス(それを持つ install)で探す。`sim.py` と `doctor` は 1 つの関数からパスを得る。ツールのバージョン番号と出どころ | 2 つのバージョンが変わっていないオブジェクトを共有する。ストアからオフラインで sync する。`project.json` をもう満たさない lock を `sync` が拒否する。1 つの commit が `core.autocrlf=true` と export-subst のファイルがあっても同じハッシュになる。lock 1 → 2 は明示的なコマンドのときだけ。接頭辞 → commit 全体。`__pycache__` のある sky130 の木と `osdi/` のある IHP の木が検証に通る。PDK のファイルの変更を報告する。ciel は偽の実行ファイルで置き換える。`~/.volare` しか探さないとき `pdk fetch` を拒否する。IHP のシミュレーションがストアから OSDI を読み込む。上の各ツールのバナーから番号が取れる | **済み**。[段階 1 の状況](#phase-1-status)を参照 |
 | 2. manifest と解決 | `undine-package.toml`。manifest からの推移的な依存(まだ git の URL)。プロジェクト全体で共通のローカル名と、それぞれの下への install。セル名が重ならないこと。PDK の互換性。コードブロックと RTL についての信頼の規則 | ダイヤモンドを一度だけ入れる。両立しない要求が両方の経路を示す。`comparator` を持つ 2 つのパッケージを、両方を示して拒否する。ローカルな別名で解決でき、Xschem のネットリスタのバックエンドでも解決できる。2 つのライブラリが 1 つのローカル名に別々のパッケージを当てれば拒否する。互換でない PDK を拒否する。`.control` か絶対パスの `.include` を持つ依存のセルを、信頼するまで拒否する | **済み**。[段階 2 の状況](#phase-2-status)を参照 |
-| 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **予定** |
+| 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **進行中**、[段階 3 の状況](#phase-3-status)を参照 |
 | 4. changeset とエージェント | changeset での依存の操作、依存の変更のレビュー(コードブロックと RTL の一覧)、確認のトークン、取得の後の通知、DATA の規則つきのエージェントのツール、git のマージドライバでの `project.json` と `undine.lock` のマージの規則(`merge.md` も直す)、`key` の外のパッケージと PDK の情報と、`key` の中のモデルのファイルとプロファイルの欄を含む evidence | changeset で追加、採用、元に戻す。エージェントの追加は *取得が必要* を記録し、取得せず、人の取得の後に続けられる。トークンを返すツールはない。別々のパッケージを追加する 2 つの changeset を、どちらの順でも採用できる。両立しない要求は採用のときに拒否する。1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない | **予定** |
 | 5. 公開 | `pkg init / check / pack / publish / yank`、`[checks]`、検証の報告と、index の行と PR からのそのリンク、semver の報告、報告に入るスペックの結果、`[renames]`、セル単位の更新の報告、レイアウトのコピーの更新、index の CI のワークフロー(DRC / LVS なし) | この木について通った報告がなければ publish は拒否し、PR の本文は報告をその SHA-256 とともにリンクする。SHA-256、commit、木が行と違う報告を index の CI が拒否する。改名したセルが改名として報告され、参照が書き換わる。ピンを消したりレイアウトのピンを動かしたりするとメジャーバージョンが要る。免除した規則は `check` に通り、示される。リポジトリが渡さない木の publish を拒否する。2 つのパッケージを持つリポジトリでのタグ `<name>-v<version>`。更新の後、コピーしたセルが changeset の中で新しくなり、その LVS が古くなる。編集したコピーは置き換えず、示す | **予定** |
 | 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、レイヤーの色を変えても古くならない | **予定** |
@@ -1008,6 +1008,39 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 書き換えること、ライブラリをまたいだ RTL、依存のセルと同じ名前のプロジェクトのセルを作る、改名する、コピーする、取り込むときの
 拒否、Undine の外で開いた Xschem と、シェルを持つプロセスが書き換える `project.json` の `trusted` の一覧を守ること、信頼のキーを
 木に結び付けること、`lib lock --format 2` と `pdk verify --pin` の HTTP のルートやボタン(段階 1 と同じくコマンドラインだけ)。
+
+<a id="phase-3-status"></a>
+### 段階 3 の状況
+
+済んだもの(store/index.py、store/deps.py と store/resolve.py の index の部分、undine/pkgcli.py。テストは `test_pkg_index.py`):
+
+- **index の形式**を [Index](#index) のとおりに: パスの規則、欄ごとに確かめる 1 バージョン 1 行の JSON(git とストアに渡るものは、
+  形式が許すものそのものでなければ拒否する)、`format: 1` の `config.json`(ほかの形式は拒否する)、1 つのファイルで各バージョンは
+  一度だけ。
+- **手元の写し。** 各 index は `store/index/<URL の sha256>.git` の bare リポジトリで、その ref `refs/undine/index` が最後に取得した
+  index。ファイルは `git cat-file` で読み、checkout しない。最初に使うときに取得し、その後は `pkg index update`、`pkg update`、
+  必要なバージョンが見つからなかった解決のとき(一度)だけ取得し直す。HTTP からは、ローカルの index は、ローカルの git の依存と
+  同じく `--dep-root` の下のものだけを取る。
+- **複数の index。** `undine`(既定の index の URL。`$UNDINE_HOME/config.toml` で置き換えられる)、`config.toml` の `[indexes]` と
+  `project.json` の `indexes`(こちらが優先する: クローンでも見つかる)。要求の `index` は略称か URL。ないときは cargo の規則:
+  それを書いたパッケージの index、プロジェクト自身の要求と git のパッケージでは既定の index。2 つの index からの同じパッケージ名は
+  拒否する。
+- **バージョン範囲**(semver.py): `^`、`~`、`=`、`^` なし、`*` に加えて、比較演算子とカンマの並び。
+- **選び方**(index.solve): index の行の上で、新しいものから順に、バックトラックする深さ優先の探索。固定したバージョンを先に試す
+  (`prefer`)か、そのまま保つ(`held`: ほかの依存についての操作)。yank したものは固定していなければ飛ばし、PDK は行の `pdk` から
+  バージョンごとに確かめる。失敗は、要求とその経路を示す。依存の層は、選んだ各バージョンを、行のコミットに固定した git の要求に
+  して、ほかの要求と同じようにたどる(解決 3〜6 は変わらない)。たどる途中で manifest に初めて出てきた index の要求は、選び方に
+  加え、もう一度たどる。そのコミットの manifest は行の名前、バージョン、依存を、そのファイルは行の木を持たなければならない。
+  index のパッケージが依存できるのは index のパッケージだけ。
+- **lock**: index からの項目は `index`(URL)と `version` を記録し、`rev` は持たない。`project.json` は `{package?, version,
+  index?}` を書く。古くなった項目(別の index やパッケージ、または要求がもう受け付けないバージョン)は `lib lock` が解決する。
+  `sync` は index を読まずに lock からインストールする。形式 2 だけ。
+- **yank**: 新しい解決では飛ばし、固定したところでは残す。`status` は手元の写しから警告する。
+- **コマンド**: `pkg search / info / add / update / outdated / tree / why / lock / index list / index update`。
+
+段階 3 でこれから作るもの: 既定の index のリポジトリそのもの(`kadomoto-lab/undine-index`)。index のパッケージに対するリモートの
+ホストの方針と取得の大きさの上限。ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント。`pkg licenses`、`pkg vendor`
+(とそれを実行するテープアウトの書き出し)、`pkg sync --from-vendor`。
 
 <a id="decisions"></a>
 <a id="open-questions"></a>

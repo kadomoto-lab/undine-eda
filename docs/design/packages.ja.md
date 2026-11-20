@@ -180,7 +180,7 @@ tree で、署名はありません(署名は[後で](#decisions))。あるバ�
 公開する人の検証の報告へのリンクとその SHA-256 です([公開](#publishing)を参照)。
 
 **既定の index** は `undine` です。GitHub の kadomoto-lab の organisation に置くリポジトリ
-`https://github.com/kadomoto-lab/undine-index.git` です(リポジトリ名は仮のもので、リポジトリは[段階 3](#phases) で作ります)。URL は
+`https://github.com/kadomoto-lab/undine-index.git` です(2026-11-20 に作成。まだパッケージはありません)。URL は
 Undine の設定にあります。当面、その PR は kadomoto がレビューします。
 
 **複数の index。** ほかの index は `$UNDINE_HOME/config.toml`
@@ -1038,7 +1038,10 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 - **yank**: 新しい解決では飛ばし、固定したところでは残す。`status` は手元の写しから警告する。
 - **コマンド**: `pkg search / info / add / update / outdated / tree / why / lock / index list / index update`。
 
-段階 3 でこれから作るもの: 既定の index のリポジトリそのもの(`kadomoto-lab/undine-index`)。index のパッケージに対するリモートの
+既定の index のリポジトリ [`kadomoto-lab/undine-index`](https://github.com/kadomoto-lab/undine-index) はできています(2026-11-20 に
+作成。`config.json` だけで、パッケージはまだありません)。
+
+段階 3 でこれから作るもの: index のパッケージに対するリモートの
 ホストの方針と取得の大きさの上限。ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント。`pkg licenses`、`pkg vendor`
 (とそれを実行するテープアウトの書き出し)、`pkg sync --from-vendor`。
 
@@ -1050,8 +1053,8 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 2026-11-05 にユーザーと決めました。項目ごとに、決めたことと理由を書きます。
 
 1. **manifest は TOML。** 人が手で書き、TOML はコメントを書けます。Python の `tomllib` で読めます。
-2. **既定の index は GitHub の kadomoto-lab の organisation に置くリポジトリ**(`kadomoto-lab/undine-index`。名前は仮のもので、これから
-   作る)。当面、その PR は kadomoto がレビューします。公開する人が少ないうちは、Undine のそばの 1 か所で足ります。
+2. **既定の index は GitHub の kadomoto-lab の organisation に置くリポジトリ**(`kadomoto-lab/undine-index`。2026-11-20 に
+   作成)。当面、その PR は kadomoto がレビューします。公開する人が少ないうちは、Undine のそばの 1 か所で足ります。
 3. **1 つのプロジェクトに、1 つのパッケージの複数のメジャーバージョンは入れない(拒否する)。** サブサーキットとレイアウトの
    セルはセル名で名付けられるので、1 つのセルの 2 つのバージョンが 1 つのネットリストやレイアウトで衝突します。
 4. **パッケージの間のセル名の重なりは解決のエラー**にし、セルと両方のパッケージを示します。セル名は作った人が書いたとおりに残り、

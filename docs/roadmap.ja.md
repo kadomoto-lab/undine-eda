@@ -15,8 +15,9 @@ commit 全体と木のハッシュで固定し、確認した後に ciel で取�
 
 - [ ] **段階 3: index。** 公開と private の index から、パッケージを名前とバージョンで取ることはできました: `pkg search`、
   `pkg add`、`pkg update`、バージョン範囲、yank されたバージョン、複数の index
-  ([インデックスのパッケージ](guide/libraries.ja.md#packages-from-an-index))。これから作るもの: 既定の index のリポジトリ、
-  ライブラリブラウザのパッケージ欄、テープアウトのバンドルに入るパッケージのライセンスとソース、index のパッケージが取得する
+  ([インデックスのパッケージ](guide/libraries.ja.md#packages-from-an-index))。既定の index
+  [kadomoto-lab/undine-index](https://github.com/kadomoto-lab/undine-index) はできていますが、まだパッケージはありません。
+  これから作るもの: ライブラリブラウザのパッケージ欄、テープアウトのバンドルに入るパッケージのライセンスとソース、index のパッケージが取得する
   ホストと大きさの上限。
 - [ ] **段階 4: changeset とエージェント。** 依存の変更を、ほかの変更と同じようにレビューして採用する。エージェントは依存を提案
   できるが、取得するのは人だけ。結果に、それを作ったパッケージと PDK のバージョンを記録する。

@@ -16,8 +16,9 @@ and RTL used only once a person trusts it; see [Libraries and dependencies](guid
 
 - [ ] **Phase 3: index.** Packages from an index by name and version, public and private, are done: `pkg search`,
   `pkg add`, `pkg update`, version ranges, yanked versions, several indexes
-  ([Packages from an index](guide/libraries.md#packages-from-an-index)). Still to build: the default index
-  repository, a Packages section in the library browser, the packages' licenses and sources in the tapeout bundle,
+  ([Packages from an index](guide/libraries.md#packages-from-an-index)). The default index,
+  [kadomoto-lab/undine-index](https://github.com/kadomoto-lab/undine-index), exists and lists no package yet. Still to
+  build: a Packages section in the library browser, the packages' licenses and sources in the tapeout bundle,
   and limits on the hosts and the size of what a package from an index fetches.
 - [ ] **Phase 4: changesets and agents.** Dependency changes reviewed and adopted like any other change; an agent can
   propose a dependency, but only a person fetches it; results that record the package and PDK versions they were

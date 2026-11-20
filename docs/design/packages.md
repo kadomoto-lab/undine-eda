@@ -182,8 +182,8 @@ version's content; there is no signature (signing is [later](#decisions)). A ver
 is the link to the publisher's check report and its SHA-256 (see [Publishing](#publishing)).
 
 **The default index** is `undine`: a repository in the kadomoto-lab GitHub organisation,
-`https://github.com/kadomoto-lab/undine-index.git` (the repository name is a placeholder; the repository is to be created in
-[phase 3](#phases)). Its URL is in Undine's configuration. For now kadomoto reviews its PRs.
+`https://github.com/kadomoto-lab/undine-index.git` (created on 2026-11-20, empty so far). Its URL is in Undine's
+configuration. For now kadomoto reviews its PRs.
 
 **Several indexes.** More indexes are named in
 `$UNDINE_HOME/config.toml` (`UNDINE_HOME` defaults to `~/.undine`) and, so that a clone of the project works, in
@@ -1070,7 +1070,10 @@ Done (store/index.py, the index parts of store/deps.py and store/resolve.py, und
 - **Yank**: skipped by new resolutions, kept where locked; `status` warns from the local copy.
 - **Commands**: `pkg search / info / add / update / outdated / tree / why / lock / index list / index update`.
 
-Still to build in phase 3: the default index repository itself (`kadomoto-lab/undine-index`); the remote-host policy
+The default index repository, [`kadomoto-lab/undine-index`](https://github.com/kadomoto-lab/undine-index), exists
+(created on 2026-11-20, `config.json` only, no package yet).
+
+Still to build in phase 3: the remote-host policy
 and the fetch size limit for packages from an index; the library browser's Packages section and its HTTP endpoints;
 `pkg licenses`, `pkg vendor` (and the tapeout export running it) and `pkg sync --from-vendor`.
 
@@ -1079,8 +1082,8 @@ and the fetch size limit for packages from an index; the library browser's Packa
 Decided with the user on 2026-11-05. Each item gives the decision and why.
 
 1. **The manifest is TOML.** People write it by hand, and TOML takes comments; Python reads it with `tomllib`.
-2. **The default index is a repository in the kadomoto-lab GitHub organisation** (`kadomoto-lab/undine-index`, a placeholder
-   name, to be created); for now kadomoto reviews its PRs. One place next to Undine is enough while publishers are few.
+2. **The default index is a repository in the kadomoto-lab GitHub organisation** (`kadomoto-lab/undine-index`, created on
+   2026-11-20); for now kadomoto reviews its PRs. One place next to Undine is enough while publishers are few.
 3. **Several major versions of one package in a project are refused.** Subcircuits and layout cells are named by cell
    name, so two versions of one cell would collide in one netlist or layout.
 4. **A cell-name clash between packages is a resolution error** that names the cell and both packages. Cell names stay

@@ -108,8 +108,8 @@ error: analog_ip: project.json asks for rev v1.3.0, undine.lock locks v1.2.0: ru
 インストールします)、セルがどの PDK 向けか、どのセルが公開かを示します。マニフェストのない依存関係は通常の git の依存関係で、
 これまでどおり動きます。
 
-パッケージのインデックスはまだありません。どのパッケージも、それが依存するパッケージも、git の URL と `rev` で見つけます。
-`lib add` は、ほかの依存関係と同じようにパッケージを受け付けます:
+パッケージは、[パッケージのインデックス](#packages-from-an-index)から名前とバージョンで(`pkg add`)、または git リポジトリから
+URL と `rev` で取ります。`lib add` は、ほかの依存関係と同じように git のパッケージを受け付けます:
 
 ```sh
 pixi run python -m undine lib add demo analog_ip https://github.com/me/analog_ip.git --rev v1.2.0 --subdir lib
@@ -143,6 +143,65 @@ git から、固定のままのものはストアかインストール済みの�
 すべて挙げて一度に拒否します。最後は `nothing was changed` です。`project.json`、`undine.lock`、`.undine/deps/` を書くのは
 その後だけです。HTTP では、問題を並べた 409 `resolution_refused` になります([HTTP API](../reference/api.ja.md#dependency-refusals))。
 ブラウザは、入力したものを残したフォームの上のダイアログに問題を表示します。
+
+<a id="packages-from-an-index"></a>
+### インデックスのパッケージ
+
+インデックスは、crates.io や npm のように、パッケージを名前とバージョンで一覧にします。`pkg search` で探し、`pkg info` で全
+バージョンを見て、`pkg add` で合う最新のバージョンを追加します。要求は `project.json` に書かれます:
+
+```sh
+pixi run python -m undine pkg search sar
+pixi run python -m undine pkg add demo analog_ip            # analog_ip@^1.2、--as ip、--index acme も使えます
+```
+
+```
+analog_ip 1.2.0 at 229914698b1f (4 cells), requirement ^1.2.0, locked in undine.lock
+  + sar_common 1.3.1 as sar_common, via analog_ip
+```
+
+`project.json` には git の URL の代わりに、パッケージとバージョンの要求が書かれます(ローカル名が別のときは `package`、既定の
+インデックスでないときは `index`):
+
+```json
+"libraries": {"analog_ip": {"version": "^1.2.0"},
+              "bias": {"package": "bias_gen", "version": "~0.3", "index": "acme"}}
+```
+
+- **どのバージョンか。** パッケージごとに、yank されておらず、プロジェクトの PDK に合い、そのパッケージへのすべての要求が受け
+  付ける最新のバージョンです。そのパッケージ自身の依存も解決できなければなりません: 最新のものが満たせないものを必要とするときは、
+  古いバージョンを取ります。1 つのプロジェクトでは、1 つのパッケージは 1 つのバージョンです。すでに固定したものは固定したまま
+  で、動かすのは `pkg update` です。
+- **コミットはインデックスが示します。** インデックスにある各バージョンの行は、git リポジトリ、コミット、木のハッシュを示します。
+  Undine はそのコミットを取得し、ファイルのハッシュが別の木になるとき、またはマニフェストの名前、バージョン、依存の一覧が行と
+  違うときは拒否します: `the index line and the repository disagree; nothing was changed`。インデックスのパッケージが依存できる
+  のは、インデックスのパッケージだけです。
+- **lock** は[形式 2](#undinelock) が必要です。項目は `index`(インデックスの URL)と `version` を持ち、`rev` は持ちません。
+  `lib sync` は、ほかの項目と同じようにそこからインストールし、インデックスは読みません。
+- **動かす。** `pkg update demo [NAME]` はインデックスを取得し直し、パッケージを、それだけがたどるものと一緒に、要求が受け付ける
+  最新のバージョンに動かします(名前を省くと、インデックスのパッケージすべて)。`--version ^2` は要求も書き換えます。
+  `pkg outdated demo` は、固定した各バージョンを、要求が受け付ける最新のものと、一覧にある最新のものと並べて示します。
+- **yank されたバージョン。** 公開した人が yank したバージョンは、新しい解決ではすべて飛ばしますが、固定してあるところでは
+  そのまま残ります。`lib status` が警告します。
+- **依存のグラフ。** `pkg tree demo` は固定したとおりの依存を、`pkg why demo sar_common` はそのパッケージを持ち込む経路を表示
+  します。
+- **インデックス。** 既定のインデックス `undine` は `https://github.com/kadomoto-lab/undine-index.git` です。ほかのものは
+  `~/.undine/config.toml` か、プロジェクトのクローンでも見つかるように `project.json` に書きます(両方が同じ略称を書くときは
+  `project.json` が優先します):
+
+  ```toml
+  [indexes]
+  acme = "git@github.com:acme/undine-index.git"
+  ```
+
+  `--index acme`(または `"index": "acme"`)で、そこからパッケージを取ります。パッケージが `index` なしで書いた依存は、そのパッケージ
+  自身のインデックスから来ます(cargo の規則): `acme` のパッケージが `sar_common` を必要とすれば acme のものを取り、別の場所で誰かが
+  その名前で公開したものは取りません。1 つのプロジェクトで、1 つのパッケージ名を 2 つのインデックスから取ることは拒否します。
+  アクセスは git のものです: ssh の鍵か認証ヘルパー。各インデックスはストアに一度取得し、取得し直すのは `pkg index update`、
+  `pkg update`、必要なバージョンが見つからなかった解決のときだけです。`pkg index list` で、それぞれをいつ取得したかがわかります。
+
+これから作るもの([ロードマップ](../roadmap.ja.md)): テープアウトのバンドルに入るパッケージのライセンスとソース(`pkg licenses`、
+`pkg vendor`)、ライブラリブラウザのパッケージ欄、インデックスのパッケージが取得するホストと大きさの上限。
 
 <a id="the-manifest"></a>
 ### マニフェスト
@@ -179,14 +238,15 @@ include = ["*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "rtl/**
 - **`[dependencies]`**: 各キーは、このパッケージの回路図がその依存先のシンボルを配置するときの**ローカル名**です(`bias/ref.sym`)。
   値は `git` と `rev`(どちらも必須。タグ、ブランチ、コミット)を持つテーブルで、省略可能な `subdir`、`package`(持つべき
   [package] の名前。省略時はキー)、`version` を持てます。`{ subdir = "..." }` だけのものは**兄弟**です: 同じリポジトリの同じ
-  コミットにある別のパッケージで、`subdir` はリポジトリの最上位から数えます。依存先もパッケージでなければなりません。通常の git
+  コミットにある別のパッケージで、`subdir` はリポジトリの最上位から数えます。または[インデックス](#packages-from-an-index)の
+  パッケージ: バージョンの文字列(`sar_common = "^1.2"`)か、`version`、`package`、`index`(略称か URL。省くと、このパッケージの
+  インデックス、git のパッケージでは既定のインデックス)を持つテーブルです。依存先もパッケージでなければなりません。通常の git
   の依存関係を指定できるのは `project.json` だけです。
-- **`version`** は、`rev` が指すツリーの [package] のバージョンと照合します: `^1.3`(同じメジャーバージョンで 1.3.0 以上。`0.x`
-  では同じマイナー)、`~0.3`(同じマイナー)、`=1.3.1`、`^` のない `1.3`(`^1.3` と同じ)、`*`(何でも)。プレリリースのある
-  バージョン(`1.4.0-rc.1`)は、そのリリースのプレリリースを指定した要求にだけ合います。比較演算子(`>=1.2`、`<2`)、並び
-  (`^1.2, <1.5`)、インデックスの要求(`sar_common = "^1.2"`、`{ version = "^2", index = "acme" }`)はパッケージのインデックスと
-  ともに使えるようになるもので、代わりに書くものを示して拒否します
-  ([トラブルシューティング](../troubleshooting.ja.md#an-index-requirement-or-a-version-range))。
+- **`version`**: `^1.3`(同じメジャーバージョンで 1.3.0 以上。`0.x` では同じマイナー)、`~0.3`(同じマイナー)、`=1.3.1`、`^`
+  のない `1.3`(`^1.3` と同じ)、`*`(何でも)、比較演算子(`>=1.2`、`>1.2`、`<2`、`<=1.4`)、すべての部分を満たすことを意味する
+  カンマの並び(`>=1.2, <1.5`)。プレリリースのあるバージョン(`1.4.0-rc.1`)は、そのリリースのプレリリースを指定した要求にだけ
+  合います。git の要求では `rev` が指すツリーの [package] のバージョンと照合し、インデックスの要求ではインデックスが一覧にする
+  バージョンから選びます([トラブルシューティング](../troubleshooting.ja.md#a-package-from-an-index-is-refused))。
 - **`[pdk]`**: [PDK との互換性](#pdk-compatibility)を参照してください。省略可能で、ないときはパッケージを確かめず、`lib status` が
   そう表示します。
 - **`[exports]`**: 公開するセルです。それ以外は**内部**のセルです: インストールされ、パッケージ自身のセルが配置し、いつもどおり

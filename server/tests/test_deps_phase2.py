@@ -447,16 +447,17 @@ def test_a_bad_manifest_and_an_index_requirement_are_refused_with_their_messages
     c = src / "c"
     _put(c, {"c_cell.sym": SYM, MANIFEST: '[package]\nname = "c"\nversion = "1.0.0"\nrevision = "main"\n'}, "v1.0.0")
     a = _package(src, "a", deps_={"c": _dep(c), "sar": '"^1.2"'})
+    index = tmp_path / "index"                        # the default index, here an empty one (test_pkg_index.py)
+    _put(index, {"config.json": '{"name": "undine", "format": 1}'}, "v0")
+    (Path(os.environ["UNDINE_HOME"]) / "config.toml").write_text(f'[indexes]\nundine = "{index}"\n')
     store, prj = _project(tmp_path)
     before = _files(prj)
     e = _refused(lambda: deps.add(prj, "a", str(a), "v1.0.0"), deps.ResolveError)
-    assert sorted(p.code for p in e.problems) == ["index_dependency", "manifest"]
+    assert sorted(p.code for p in e.problems) == ["manifest", "no_package"]
     text = str(e)
     assert text.startswith("2 problems with the dependencies:\n- ") and text.endswith("\nnothing was changed")
     assert "undine-package.toml: package.revision: unknown key" in text and "(required by p -> a 1.0.0" in text
-    assert ("undine-package.toml: dependencies.sar: an index requirement (sar ^1.2), which comes with the package "
-            'index (phase 3): name its git repository, sar = { git = "https://...", rev = "v1.2.0", '
-            'version = "^1.2" }') in text
+    assert f"p -> a 1.0.0 (v1.0.0 @ " in text and f"-> sar ^1.2: index {index} lists no package sar" in text
     assert _files(prj) == before
 
 

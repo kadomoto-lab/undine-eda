@@ -1,4 +1,5 @@
-"""store/semver.py: strict SemVer 2.0.0 versions and the requirement forms phase 2 accepts (^, ~, =, bare, *)."""
+"""store/semver.py: strict SemVer 2.0.0 versions and cargo's requirement forms (^, ~, =, bare, *, comparators, comma
+lists)."""
 import pytest
 
 from undine.store.semver import Req, SemverError, Version
@@ -70,9 +71,32 @@ def test_a_pre_release_matches_only_a_requirement_naming_its_release_with_a_pre_
     assert Req.parse("=1.2.3-rc.1").matches(V("1.2.3-rc.1")) and not Req.parse("=1.2.3-rc.1").matches(V("1.2.3"))
 
 
-@pytest.mark.parametrize("bad", [">=1.2", "<2", "^1, <2", ">1.0.0", "<=1.0.0", "1.2, 1.3"])
-def test_ranges_are_refused_with_the_phase_3_hint(bad):
-    with pytest.raises(SemverError, match=r"version ranges come with the package index \(phase 3\): use \^, ~ or ="):
+@pytest.mark.parametrize("req, yes, no", [
+    (">=1.2", ["1.2.0", "3.0.0"], ["1.1.9"]),
+    (">1.2", ["1.3.0"], ["1.2.9", "1.2.0"]),                       # above every 1.2.x
+    (">1.2.3", ["1.2.4"], ["1.2.3"]),
+    ("<2", ["1.9.9", "0.1.0"], ["2.0.0"]),
+    ("<=1.2", ["1.2.9", "1.0.0"], ["1.3.0"]),                       # up to every 1.2.x
+    ("<=1.2.3", ["1.2.3"], ["1.2.4"]),
+    (">=1.2, <1.5", ["1.2.0", "1.4.9"], ["1.1.0", "1.5.0"]),
+    ("^1, <1.3", ["1.0.0", "1.2.9"], ["1.3.0", "2.0.0"]),
+    ("1.2, 1.3", ["1.3.0", "1.9.0"], ["1.2.5"]),                     # both carets: >=1.3, <2
+])
+def test_comparators_and_comma_lists(req, yes, no):
+    r = Req.parse(req)
+    assert str(r) == req
+    assert [v for v in yes if not r.matches(V(v))] == []
+    assert [v for v in no if r.matches(V(v))] == []
+
+
+def test_the_lowest_bound_of_a_requirement():
+    assert str(Req.parse("^1.2").lo) == "1.2.0" and str(Req.parse(">=1.2, ^1.4").lo) == "1.4.0"
+    assert Req.parse("*").lo is None and Req.parse("<2").lo is None
+
+
+@pytest.mark.parametrize("bad, msg", [("^1,", "an empty part"), ("*, ^1", "stands alone"), (">=", "not a version")])
+def test_malformed_comma_lists_say_what_to_write(bad, msg):
+    with pytest.raises(SemverError, match=msg):
         Req.parse(bad)
 
 

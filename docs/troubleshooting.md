@@ -693,19 +693,30 @@ It pins the PDK as installed here (fetch it first if it is missing) and needs ev
 Undine version. When it is the lock itself that has such a package (after a pull), `lib lock --format 2` converts
 and resolves in one step. There is no button for it: the command line only.
 
-### An index requirement, or a version range
+### A package from an index is refused
 
-The messages: `...: undine-package.toml: dependencies.sar_common: an index requirement (sar_common ^1.2), which comes
-with the package index (phase 3): name its git repository, sar_common = { git = "https://...", rev = "v1.2.0",
-version = "^1.2" }`, or `...: undine-package.toml: dependencies.sar_common.version: '>=1.2': version ranges come
-with the package index (phase 3): use ^, ~ or =`.
+The messages, each ending `nothing was changed`:
 
-**Cause.** The manifest uses a form of the package index, which Undine does not have yet: a dependency given as a
-version string or with `index`, or a version requirement with a comparator (`>=`, `<`, `!=`) or a comma.
+- `demo -> analog_ip ^1.2: index https://... lists no package analog_ip`: the name is not in the index as fetched
+  here. `pkg search` looks for the name; `pkg index update` fetches the index again (a resolution that finds nothing
+  fetches it once by itself).
+- `sar_common: no version matches: ...; https://... lists 1.0.0, 2.0.0`: no version the index lists meets the
+  requirement. Change the requirement in `project.json` (or `pkg update --version`), or ask the publisher.
+- `sar_common: no version meets all of them: demo -> analog_ip 1.2.0 -> sar_common ^1.2 and demo -> sar_common ~1.0
+  ... (one version per package)`: two packages need versions of one package that do not overlap. Move one of the
+  requirers to a version that agrees (`pkg update`), or loosen your own requirement.
+- `... sar_common is locked at 1.0.0: pkg update sar_common moves it`: an add or an update of another dependency
+  keeps what is locked; the new requirement needs it moved. Run `pkg update` for the dependency that brings it in.
+- `every sar_common version that matches is yanked`: the publisher withdrew them; a lock that has one keeps it.
+- `sar_common: from two indexes, ... and ...: one index per package name`: two dependencies ask for packages of one
+  name from different indexes. Take both from one of them (`"index"` in `project.json`).
+- `... in index https://...: the files at 229914698b1f hash to sha256:..., the index says sha256:...: the index line
+  and the repository disagree`, or `... [dependencies] differ from the index line's deps`: the index and the
+  package's repository do not describe the same release. Tell the index's maintainers; nothing of it is installed.
+- `analog_ip: a package from an index: needs lock format 2`: run `python -m undine lib lock demo --format 2` once.
 
-**Fix.** Give the dependency as a git table, `{ git = "...", rev = "...", version = "^1.2" }` (the message says what
-to write), with `^`, `~`, `=` or a bare `MAJOR.MINOR` as the requirement. For a package someone else publishes, ask
-its author, or use a version that does.
+A version requirement in a manifest or in `project.json` that Undine cannot read says what to write: `'>=1.2,': an
+empty part in a comma list`, or `~ needs MAJOR.MINOR, e.g. ~1.2`.
 
 ### `undine-package.toml` is refused
 

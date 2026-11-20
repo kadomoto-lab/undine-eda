@@ -760,6 +760,9 @@ def main() -> None:
         if name == "lock":
             x.add_argument("--format", type=int, choices=[2],
                            help="write lock format 2 (the PDK pinned by its tree hashes, the tools with their origin)")
+    from undine.pkgcli import add_parser as pkg_parser
+
+    pkg_parser(sub)                                 # pkg search / info / add / update / outdated / tree / why / index
     g = sub.add_parser("git-setup")
     g.add_argument("project")
     ms = sub.add_parser("mcp-stdio", help="local MCP entry for desktop LLM clients: starts or reuses Undine, opens the review")
@@ -885,6 +888,10 @@ def main() -> None:
         print(f"imported {len(cells)} cells into {args.project}/{args.lib}")
     elif args.cmd == "lib":
         raise SystemExit(lib_command(store.get(args.project), args))
+    elif args.cmd == "pkg":
+        from undine.pkgcli import run as pkg_run
+
+        raise SystemExit(pkg_run(args, store))
     elif args.cmd == "git-setup":
         git_setup(store.get(args.project).path)
     elif args.cmd == "serve":

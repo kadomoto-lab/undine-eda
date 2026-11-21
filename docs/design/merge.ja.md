@@ -122,16 +122,23 @@ GDS / OASIS の図形には id がなく、Undine も作りません。操作ロ
   両方の側がレイアウトを変え、どちらかに未保存の編集がある場合は、ログが衝突になります(`layout-journal`)。各ブランチでレイアウトを保存してコミットし、マージし直してください
   (この衝突を解決すると、未保存の編集は捨てられます)。`git-setup` が入れる pre-commit フックは、ステージした操作ログに未保存のレイアウトの編集があるコミットを拒否するので、
   これが起きるのはフックを通らなかったコミットのときだけです。
-- それ以外(RTL、`project.json`、`undine.lock`、changeset の記録)は git に任せます。
-  パッケージの設計([packages.ja.md](packages.ja.md#changesets-and-evidence)、段階 4、未実装)は、`project.json`(`libraries`、
-  `indexes`、`pdk`)と `undine.lock` のマージの規則を提案しています。エントリ単位でマージしてからもう一度解決し、解決できなければ
-  採用を拒否します。
+- **`project.json` と `undine.lock`**(vcs/depmerge.py、[packages.ja.md](packages.ja.md#changesets-and-evidence) の段階 4)は、
+  JSON としてエントリ単位で、どの値にも同じ規則でマージします: `project.json` の `libraries` と `indexes` はエントリごと、
+  `trusted` は集合として、ほかのキーは 1 つの値として(`pdk`、`name`)。lock の `libraries` と `packages` はエントリごと、
+  `tools` はツールごと、ほかのキーは 1 つの値として(`format`、`pdk`)。別々の依存を加えた 2 つのブランチは、どちらの順でも
+  きれいにマージされます。1 つのエントリを違うように変えた 2 つは、そこで衝突します(`library ip`、`locked package amp`。
+  ours を残します)。マージしたファイルは Undine が書くとおりの形で書きます。changeset の採用では続いて、マージした lock が
+  マージした `project.json` の求めるものをまだ固定しているかを、2 つのファイルだけから(git もネットワークも使わずに)確かめます:
+  プロジェクト自身のファイルになかった問題があれば、`undine.lock` の衝突として採用を拒否します(`after merging project.json
+  and undine.lock: ...`)。Undine の外の `git merge` はこの確認をしません: `lib status` が報告します。
+- それ以外(RTL、changeset の記録)は git に任せます。
 
 ## git との統合
 
 `undine git-setup PROJECT`(これまでもプロジェクトを git リポジトリにする方法でした)が、マージドライバも登録します:
 
-    .gitattributes   *.sch *.sym *.oas *.netlist.yaml *.intent.yaml history/*.jsonl  merge=undine
+    .gitattributes   *.sch *.sym *.oas *.netlist.yaml *.intent.yaml history/*.jsonl project.json undine.lock
+                     merge=undine
     .git/config      merge.undine.driver = <python> -P -m undine merge-driver %O %A %B %P
                      merge.undine.recursive = undine-base
                      merge.undine-base.driver = <python> -P -m undine merge-driver --virtual-base %O %A %B %P

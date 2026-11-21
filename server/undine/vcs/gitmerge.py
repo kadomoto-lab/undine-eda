@@ -4,7 +4,8 @@ two revisions.
 
 `undine git-setup` registers the drivers and installs the hook:
 
-    .gitattributes   *.sch *.sym *.oas *.netlist.yaml *.intent.yaml history/*.jsonl  merge=undine
+    .gitattributes   *.sch *.sym *.oas *.netlist.yaml *.intent.yaml history/*.jsonl project.json undine.lock
+                     merge=undine
     .gitignore       GITIGNORE: Undine's own output (job results, tapeout bundles, the assistant's log, the installed
                      dependencies, a legacy layout.oas a split left, changeset evidence and the request log), which
                      history.py never lists either
@@ -19,8 +20,8 @@ would run instead of PyYAML. -P leaves it out; Python 3.10 has no -P, so there <
 site-packages and PYTHONPATH, where Undine may be installed.)
 
 driver       git runs it for a file both sides changed (only then; a file one side changed is taken from that side).
-             kind_of(%P) picks the view's merge (schmerge, layoutmerge, yamlmerge, logmerge); base %O is an empty file
-             when there is no common ancestor (no base). The merged file replaces ours %A by a rename, so on any error
+             kind_of(%P) picks the view's merge (schmerge, layoutmerge, yamlmerge, logmerge, depmerge); base %O is
+             an empty file when there is no common ancestor (no base). The merged file replaces ours %A by a rename, so on any error
              %A stays ours whole. Exit 0: merged; 1: conflicts open (the file has ours' value for each) or an error, and
              git marks the file conflicted. It prints one line (stderr): what it merged, or the conflicts left open with
              the commands to go on (merge-check, resolve); with one open conflict, that conflict's own words ("what"),
@@ -133,7 +134,7 @@ import klayout.db as kdb
 
 from undine.layouts import layoutstore
 from undine.schematics import xschem
-from undine.vcs import layoutmerge, logmerge, merge3, schmerge, yamlmerge
+from undine.vcs import depmerge, layoutmerge, logmerge, merge3, schmerge, yamlmerge
 
 REPORTS = "undine-merge"                    # in the git dir: the reports of the merges of files
 # what git-setup's .gitignore keeps out (history.py never lists it either): job results, tapeout bundles, the
@@ -145,7 +146,7 @@ GITIGNORE = ["/runs/", "/tapeout/", "/llm/", "/.undine/", "*.pre-split",
              "/changesets/*/evidence/", "/changesets/requests.jsonl", "/changesets/requests/"]
 VIEWS = (".sch", ".sym", layoutstore.SUFFIX, yamlmerge.SUFFIXES["netlist"])     # what DRC / LVS see of a cell
 _MODULES = {"schematic": schmerge, "symbol": schmerge, "layout": layoutmerge, "netlist": yamlmerge,
-            "intent": yamlmerge, "log": logmerge}
+            "intent": yamlmerge, "log": logmerge, "project": depmerge, "lock": depmerge}
 _SIGN = {"add": "+", "del": "-", "mod": "~"}
 _ROUNDS = 8                                 # resolve --all-*: deciding conflicts can surface others
 _HEADS = (("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick"), ("REBASE_HEAD", "rebase"))   # stage 3's commit
@@ -165,7 +166,7 @@ def kind_of(path: str | Path) -> str | None:
         return "log"
     if p.suffix == layoutstore.SUFFIX:
         return "layout"
-    return schmerge.kind_of(p) or yamlmerge.kind_of(p)
+    return schmerge.kind_of(p) or yamlmerge.kind_of(p) or depmerge.kind_of(p)
 
 
 def _module(kind: str):

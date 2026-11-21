@@ -62,7 +62,8 @@ from undine.store.project import ProjectStore, import_layout
 DEFAULT_ROOT = Path(os.environ.get("UNDINE_ROOT", Path.home() / "undine-projects"))
 
 
-MERGED = ["*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "history/*.jsonl"]   # vcs.gitmerge.kind_of
+MERGED = ["*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "history/*.jsonl",   # gitmerge.kind_of
+          "project.json", "undine.lock"]
 GITATTRIBUTES = ["*.oas diff=undine-layout", "*.gds diff=undine-layout", *(f"{p} merge=undine" for p in MERGED)]
 # Python 3.10 has no -P: -c puts "" (the current directory) first on the path, the prelude takes it out
 PRELUDE = ('import sys; del sys.path[0]; import runpy; '

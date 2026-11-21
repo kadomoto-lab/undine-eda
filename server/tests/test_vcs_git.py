@@ -152,8 +152,9 @@ def test_kind_of():
                                           "libs/l/inv.netlist.yaml", "libs/l/inv.intent.yaml", "history/l.jsonl",
                                           "prj/history/l.jsonl")] == \
         ["schematic", "symbol", "layout", "netlist", "intent", "log", "log"]
-    assert [gitmerge.kind_of(p) for p in ("project.json", "undine.lock", "rtl/inv.v", "l.jsonl", "libs/l/x.yaml")] == \
-        [None] * 5
+    assert [gitmerge.kind_of(p) for p in ("rtl/inv.v", "l.jsonl", "libs/l/x.yaml")] == [None] * 3
+    # entry by entry since phase 4 of docs/design/packages.md (vcs/depmerge.py)
+    assert [gitmerge.kind_of(p) for p in ("project.json", "undine.lock")] == ["project", "lock"]
 
 
 def test_git_setup_registers_the_driver_and_is_idempotent(tmp_path):
@@ -181,9 +182,11 @@ def test_git_setup_registers_the_driver_and_is_idempotent(tmp_path):
     assert git(d, "config", "--get-all", "diff.undine-layout.textconv").stdout.splitlines() == [textconv]
     assert git(d, "config", "--get-all", "merge.undine.recursive").stdout.splitlines() == ["undine-base"]
     assert git(d, "config", "--get-all", "merge.undine-base.driver").stdout.splitlines() == [virtual]
-    attrs = git(d, "check-attr", "merge", "--", "history/l.jsonl", "libs/l/inv.oas", "project.json").stdout
+    attrs = git(d, "check-attr", "merge", "--", "history/l.jsonl", "libs/l/inv.oas", "project.json", "undine.lock",
+                "rtl/inv.v").stdout
     assert attrs.splitlines() == ["history/l.jsonl: merge: undine", "libs/l/inv.oas: merge: undine",
-                                  "project.json: merge: unspecified"]
+                                  "project.json: merge: undine", "undine.lock: merge: undine",
+                                  "rtl/inv.v: merge: unspecified"]
 
 
 def test_the_commands_git_runs_never_import_from_its_directory(tmp_path):

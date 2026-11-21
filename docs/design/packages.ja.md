@@ -576,6 +576,11 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   2 つのファイルはテキストとしてマージされます(`merge.md`)。そのため、それぞれ依存を変えた 2 つの changeset は行の衝突を起こすか、
   install した木と合わない lock にきれいにマージされてしまいます。段階 4 で、Undine の git のマージドライバにこの 2 つのファイルの
   マージの規則を加えます。
+  *実装済み(段階 4、vcs/depmerge.py):* 2 つのファイルは、git のマージドライバ(`git-setup` がこの 2 つにも登録します)でも
+  changeset の採用(branches.plan_merge)でも、JSON としてエントリ単位でマージします。キーごとの規則は [merge.ja.md](merge.ja.md)
+  にあります。「もう一度解決する」は、採用では、マージしたファイルだけからの確認です(`deps.merged_problems`: どの要求も指定どおりに
+  固定されていて、固定したグラフが欠けていないこと)。何も取得せず、バージョンも選びません。プロジェクトのファイルに前はなかった
+  問題は `undine.lock` の衝突となり、理由を示して採用を拒否します。採用の後の install は、changeset での依存の操作と一緒に作ります。
 - 人がライブラリブラウザで自分で **追加** しても、同じ操作を小さな changeset に作り、1 クリックで採用します。経路は 1 つです。
 - **エージェント**は、手元の index の clone をそのまま使って、自分の changeset に `dep_add` / `dep_update` / `dep_remove` を
   提案できます。取得はしません。木がストアになければ、操作を *取得が必要*(URL、大きさ)として記録し、レビューに **取得** ボタンを
@@ -815,7 +820,7 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 | 1. ストアと lock 2 | ストア、ファイル単位の重複の省略、固定どおりでオフラインの `sync`。git 依存の lock format 2(明示的なコマンドだけが書く)。git の blob からの木のハッシュ。除外の一覧つきの PDK の commit 全体と木のハッシュ、`pdk verify`、確認つきの ciel による `pdk fetch`(ルートは上のとおりに選ぶ)、PDK の再走査。`PYTHONDONTWRITEBYTECODE=1` で動く PCell のワーカー。ストアに作る OSDI: プロファイルの `osdi` の項目はモデルの名前(`psp103`)になり、まず `store/build/<commit>/<variant>/osdi/` で、次に PDK の木の今のパス(それを持つ install)で探す。`sim.py` と `doctor` は 1 つの関数からパスを得る。ツールのバージョン番号と出どころ | 2 つのバージョンが変わっていないオブジェクトを共有する。ストアからオフラインで sync する。`project.json` をもう満たさない lock を `sync` が拒否する。1 つの commit が `core.autocrlf=true` と export-subst のファイルがあっても同じハッシュになる。lock 1 → 2 は明示的なコマンドのときだけ。接頭辞 → commit 全体。`__pycache__` のある sky130 の木と `osdi/` のある IHP の木が検証に通る。PDK のファイルの変更を報告する。ciel は偽の実行ファイルで置き換える。`~/.volare` しか探さないとき `pdk fetch` を拒否する。IHP のシミュレーションがストアから OSDI を読み込む。上の各ツールのバナーから番号が取れる | **済み**。[段階 1 の状況](#phase-1-status)を参照 |
 | 2. manifest と解決 | `undine-package.toml`。manifest からの推移的な依存(まだ git の URL)。プロジェクト全体で共通のローカル名と、それぞれの下への install。セル名が重ならないこと。PDK の互換性。コードブロックと RTL についての信頼の規則 | ダイヤモンドを一度だけ入れる。両立しない要求が両方の経路を示す。`comparator` を持つ 2 つのパッケージを、両方を示して拒否する。ローカルな別名で解決でき、Xschem のネットリスタのバックエンドでも解決できる。2 つのライブラリが 1 つのローカル名に別々のパッケージを当てれば拒否する。互換でない PDK を拒否する。`.control` か絶対パスの `.include` を持つ依存のセルを、信頼するまで拒否する | **済み**。[段階 2 の状況](#phase-2-status)を参照 |
 | 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **済み**、[段階 3 の状況](#phase-3-status)を参照 |
-| 4. changeset とエージェント | changeset での依存の操作、依存の変更のレビュー(コードブロックと RTL の一覧)、確認のトークン、取得の後の通知、DATA の規則つきのエージェントのツール、git のマージドライバでの `project.json` と `undine.lock` のマージの規則(`merge.md` も直す)、`key` の外のパッケージと PDK の情報と、`key` の中のモデルのファイルとプロファイルの欄を含む evidence | changeset で追加、採用、元に戻す。エージェントの追加は *取得が必要* を記録し、取得せず、人の取得の後に続けられる。トークンを返すツールはない。別々のパッケージを追加する 2 つの changeset を、どちらの順でも採用できる。両立しない要求は採用のときに拒否する。1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない | **予定** |
+| 4. changeset とエージェント | changeset での依存の操作、依存の変更のレビュー(コードブロックと RTL の一覧)、確認のトークン、取得の後の通知、DATA の規則つきのエージェントのツール、git のマージドライバでの `project.json` と `undine.lock` のマージの規則(`merge.md` も直す)、`key` の外のパッケージと PDK の情報と、`key` の中のモデルのファイルとプロファイルの欄を含む evidence | changeset で追加、採用、元に戻す。エージェントの追加は *取得が必要* を記録し、取得せず、人の取得の後に続けられる。トークンを返すツールはない。別々のパッケージを追加する 2 つの changeset を、どちらの順でも採用できる。両立しない要求は採用のときに拒否する。1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない | **進行中**、[段階 4 の状況](#phase-4-status)を参照 |
 | 5. 公開 | `pkg init / check / pack / publish / yank`、`[checks]`、検証の報告と、index の行と PR からのそのリンク、semver の報告、報告に入るスペックの結果、`[renames]`、セル単位の更新の報告、レイアウトのコピーの更新、index の CI のワークフロー(DRC / LVS なし) | この木について通った報告がなければ publish は拒否し、PR の本文は報告をその SHA-256 とともにリンクする。SHA-256、commit、木が行と違う報告を index の CI が拒否する。改名したセルが改名として報告され、参照が書き換わる。ピンを消したりレイアウトのピンを動かしたりするとメジャーバージョンが要る。免除した規則は `check` に通り、示される。リポジトリが渡さない木の publish を拒否する。2 つのパッケージを持つリポジトリでのタグ `<name>-v<version>`。更新の後、コピーしたセルが changeset の中で新しくなり、その LVS が古くなる。編集したコピーは置き換えず、示す | **予定** |
 | 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、レイヤーの色を変えても古くならない | **予定** |
 
@@ -1084,6 +1089,18 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント(`GET /api/packages`、`GET /api/packages/{name}`、`GET /api/indexes`、
 `POST /api/indexes/{name}/refresh`、インデックスのパッケージを受け付ける `POST /deps`)はできています([UI、CLI、HTTP、エージェントのツール](#ui-cli-http-agent-tools)を参照)。
 段階 3 は済みました。パッケージの公開セルのシンボルのプレビューは、あとに回します。
+
+<a id="phase-4-status"></a>
+### 段階 4 の状況
+
+できたもの: `project.json` と `undine.lock` のマージの規則(vcs/depmerge.py)を git のマージドライバと changeset の採用に入れ、
+採用ではマージした 2 つのファイルを確かめます([changeset と evidence](#changesets-and-evidence)を参照)。テスト:
+`test_depmerge.py`(別々の依存を加えた 2 つの changeset がどちらの順でも採用できる。衝突する要求を拒否する。lock を古いままにする
+マージを理由付きで拒否する。2 つのブランチの `git merge` がドライバを通る)。
+
+段階 4 でこれから作るもの: changeset での依存の操作(作業コピーでの `dep_add` / `dep_update` / `dep_remove` / `pdk_set` と、
+採用の後の install)、そのレビュー、エージェントの *needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、
+パッケージと PDK の情報を持つ evidence。
 
 <a id="decisions"></a>
 <a id="open-questions"></a>

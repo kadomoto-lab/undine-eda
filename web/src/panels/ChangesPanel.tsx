@@ -109,7 +109,7 @@ const symbolOf = (s: string) => s.replace(/ \((?:schematic|symbol)\)$/, "");
 const NOT_FILE = "not a file in the project";            // branches.plan_merge: a folder (say) where the file is
 const isNotFile = (c: GitConflict) => c.id === "file" && c.what === NOT_FILE;
 // a file's kind as the server names it in "the <kind> file cannot be read" (yamlmerge: intent, netlist)
-const KINDS = ["schematic", "symbol", "layout", "intent", "netlist"] as const;
+const KINDS = ["schematic", "symbol", "layout", "intent", "netlist", "project", "lock"] as const;
 const kindName = (k: string): UiText => ((KINDS as readonly string[]).includes(k) ? msg(`review:view.${k as typeof KINDS[number]}`) : k);
 /** Every conflict of the 409 is a file that changed while the merge was being made: doing it again is all it takes. */
 const changedOnly = (files: ChangesetConflictFile[]) =>

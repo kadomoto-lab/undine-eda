@@ -146,16 +146,23 @@ a merged one does not.
   has unsaved edits, the log is a conflict (`layout-journal`): save the layouts on each branch, commit, and merge again
   (resolving it drops the unsaved edits). The pre-commit hook `git-setup` installs refuses a commit whose staged logs
   hold unsaved layout edits, so this only happens with commits made around it.
-- Everything else (RTL, `project.json`, `undine.lock`, changeset records) is left to git.
-  The package design ([packages.md](packages.md#changesets-and-evidence), phase 4, not implemented) proposes a merge
-  rule for `project.json` (`libraries`, `indexes`, `pdk`) and `undine.lock`: entry by entry, then resolved again,
-  and an adopt refused when the result does not resolve.
+- **`project.json` and `undine.lock`** (vcs/depmerge.py, phase 4 of [packages.md](packages.md#changesets-and-evidence))
+  merge as JSON, entry by entry, with the same rule for each value: `project.json`'s `libraries` and `indexes` entry by
+  entry and `trusted` as a set, every other key one value (`pdk`, `name`); the lock's `libraries` and `packages` entry
+  by entry, `tools` tool by tool, every other key one value (`format`, `pdk`). Two branches that add different
+  dependencies merge cleanly in either order; two that change one entry differently conflict on it (`library ip`,
+  `locked package amp`), ours kept. The merged files are written as Undine writes them. A changeset's adopt then checks
+  that the merged lock still pins what the merged `project.json` asks, from the two files alone (no git, no network):
+  a problem the project's own files did not have refuses the adopt, as a conflict of `undine.lock` (`after merging
+  project.json and undine.lock: ...`). A `git merge` outside Undine does not run that check: `lib status` reports it.
+- Everything else (RTL, changeset records) is left to git.
 
 ## Git integration
 
 `undine git-setup PROJECT` (already the way a project becomes a git repository) also registers the merge driver:
 
-    .gitattributes   *.sch *.sym *.oas *.netlist.yaml *.intent.yaml history/*.jsonl  merge=undine
+    .gitattributes   *.sch *.sym *.oas *.netlist.yaml *.intent.yaml history/*.jsonl project.json undine.lock
+                     merge=undine
     .git/config      merge.undine.driver = <python> -P -m undine merge-driver %O %A %B %P
                      merge.undine.recursive = undine-base
                      merge.undine-base.driver = <python> -P -m undine merge-driver --virtual-base %O %A %B %P

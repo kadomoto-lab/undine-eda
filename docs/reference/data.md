@@ -87,8 +87,8 @@ of the project, so that a library named `runs` is not ignored; the changeset rec
        inst sky130_fd_pr__nfet_01v8_w1p0_l0p15_nf1_451f14  r0 *1 645,975
     ```
 
-- a **merge driver** for the files of a cell and the operation log (`*.sch`, `*.sym`, `*.oas`, `*.netlist.yaml`,
-  `*.intent.yaml`, `history/*.jsonl`: `merge=undine`), so that `git merge` (and `git pull`, `git rebase`,
+- a **merge driver** for the files of a cell, the operation log, `project.json` and `undine.lock` (`*.sch`, `*.sym`,
+  `*.oas`, `*.netlist.yaml`, `*.intent.yaml`, `history/*.jsonl`, `project.json`, `undine.lock`: `merge=undine`), so that `git merge` (and `git pull`, `git rebase`,
   `git cherry-pick`) merges them object by object instead of by lines. With it goes the driver of the **virtual merge
   base** (`merge.undine.recursive = undine-base`, running `merge-driver --virtual-base`): branches that merged each
   other have several merge bases, which git first merges into one. Where those merge bases conflict (two branches

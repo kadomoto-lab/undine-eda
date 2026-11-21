@@ -92,7 +92,16 @@ Refusals, with HTTP 400 and a `detail` that says what to do:
   directory are under a directory given with `serve --dep-root`; the message names `--dep-root` and the
   `python -m undine lib ...` command that does it from the command line. A `file://` URL with a host other than
   `localhost`, a query or a fragment is refused as `not a plain file:// URL (file:///path/to/repo)`. Remote URLs
-  (`https://`, `ssh://`, `git://`, `git@host:path`) are not affected.
+  (`https://`, `ssh://`, `git://`, `git@host:path`) are checked by their host instead (next item).
+- **A remote host not allowed.** The same routes fetch a remote repository or index only from the host of an index
+  this machine configures (the default index's, `github.com`, and those in `$UNDINE_HOME/config.toml`, not a
+  project's own `indexes`) or one given with `serve --dep-host`. This covers a URL from the request and one that
+  project.json, a manifest or an index line names. Anything else is refused before git runs:
+  `https://gitlab.com/me/ip.git: from the browser this server fetches only from github.com (...); not from
+  gitlab.com. Start the server with --dep-host gitlab.com, or run python -m undine lib add ... from the command
+  line`. From these routes, a commit the server does not serve by itself (an abbreviated id, a commit no branch or
+  tag reaches) is not looked for by fetching every branch and tag; the message says to run the operation once from
+  the command line, which keeps the commit for the browser to read.
 
 The refusals of [packages](../guide/libraries.md#packages) have codes of their own; `detail` is the whole message,
 and each nothing changed:

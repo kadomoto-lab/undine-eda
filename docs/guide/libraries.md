@@ -99,6 +99,19 @@ e6d28176...)`. Run the sync once with the network.
     copy of a local repository outside those directories, even one a `lib` command fetched. A sync that installs
     from the store's files alone reads no repository and is not checked.
 
+!!! warning "Remote hosts over HTTP"
+
+    The `lib` and `pkg` commands fetch from any host. The browser and the HTTP API fetch a repository or an index
+    only from the host of an index this machine configures (the default index's, `github.com`, and those in
+    `$UNDINE_HOME/config.toml`) or one given with `undine serve --dep-host HOST` (once per host). This holds for
+    every URL: the request's own, and those a cloned `project.json`, a manifest or an index line names. A
+    project's own `indexes` adds no host, since a clone brings it. They also do not fetch every branch and tag of a
+    repository to find a commit its server does not serve by itself; run that operation once from the command
+    line.
+
+Every fetch, from the command line too, stops once it has received `UNDINE_FETCH_MAX` bytes (1 GiB by default), and
+the store's copy of that repository is removed, so nothing of it stays.
+
 ## Packages
 
 A dependency may have a manifest, `undine-package.toml`, at the top of its directory (the repository's top, or its
@@ -282,7 +295,8 @@ every other locked package stays as it is locked (a `rev` such as `main` that mo
   it once.
 - **A version that does not match** the requirement is refused, naming the chain and the version the `rev` has.
 - **Local repositories.** A package from a remote URL may not name a local one (`file://`, `/path`, `~/...`) in its
-  manifest. Over HTTP every URL a manifest names is checked against `--dep-root` as the request's own.
+  manifest. Over HTTP every URL a manifest names is checked against `--dep-root` and `--dep-host` as the request's
+  own.
 - **Which packages are placed by whom.** A package another one brought in is not a dependency of the project:
   `lib update` and `lib remove` refuse it, naming the dependency that places it (`sar_common: placed by analog_ip;
   update or remove that instead`). `lib remove analog_ip` removes it with the packages nothing needs any more, and

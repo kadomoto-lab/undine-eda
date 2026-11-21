@@ -462,6 +462,43 @@ server with a directory above the repository:
 pixi run python -m undine serve --dep-root ~/ip
 ```
 
+### Adding from the browser: `from the browser this server fetches only from …`
+
+The whole message ends with `not from gitlab.com. Start the server with --dep-host gitlab.com, or run python -m
+undine lib add ... from the command line`.
+
+**Cause.** A dependency or an index was added, updated, locked or synced through the browser or the HTTP API, and
+one of its URLs is on a host that is neither one of the indexes this machine configures (the default index's,
+`github.com`, and those in `$UNDINE_HOME/config.toml`) nor one given with `--dep-host`. The URL may come from the
+request, project.json, a package's manifest or an index line. A cloned `project.json` can name any host, so its own
+`indexes` add none.
+
+**Fix.** Run the command the message names from the command line, which fetches from any host. Or restart the
+server with that host:
+
+```sh
+pixi run python -m undine serve --dep-host gitlab.com
+```
+
+Also from the browser: `… does not fetch every branch and tag of … for a request from the browser`. The repository's
+server does not serve that commit by itself (an abbreviated commit id, or a commit no branch or tag reaches). Run
+the same operation once from the command line; the store then keeps the commit, and the browser reads it from there.
+
+### A fetch is stopped: `the fetch received more than … bytes`
+
+The whole message ends with `the most one fetch may take (UNDINE_FETCH_MAX); it was stopped and nothing of it was
+kept`.
+
+**Cause.** A dependency's repository or an index sent more than `UNDINE_FETCH_MAX` bytes (1 GiB by default), counted
+while git ran. The store's copy of that repository was removed, so no part of the fetch stays.
+
+**Fix.** Check that the URL names the repository you meant: a whole monorepo, or a history fetched in full, is often
+much larger than the package. When the size is expected, raise the limit for that command:
+
+```sh
+UNDINE_FETCH_MAX=4294967296 pixi run python -m undine pkg add demo big_ip
+```
+
 ## Dependencies and the store
 
 ### `lib sync`: `… project.json asks for rev …, undine.lock locks …` (or `not in undine.lock`)

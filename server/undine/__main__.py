@@ -705,6 +705,10 @@ def main() -> None:
                    help="directories under which the browser and the HTTP API may add or sync a library dependency "
                         "from a local repository (file://, /path, ~/path; default: none). The CLI's `lib` commands "
                         "take any local path")
+    s.add_argument("--dep-host", action="append",
+                   help="a host the browser and the HTTP API may fetch a dependency or an index from, besides the "
+                        "hosts of the indexes this machine configures (the default index's, github.com, and "
+                        "$UNDINE_HOME/config.toml's); repeatable. The CLI fetches from any host")
     s.add_argument("--stop-jobs", action="store_true",
                    help="stop the simulations when this server stops (queued ones cancelled, running ngspice ended). "
                         "Without it they run on, and the next server on the same root takes them up: a restart loses "
@@ -916,7 +920,8 @@ def main() -> None:
 
         static = Path(__file__).resolve().parents[2] / "web" / "dist"
         srv = Server(store.root, pdks, args.import_root or [Path.home()], args.llm_policy, args.mcp,
-                     dep_roots=args.dep_root or [], pdk_roots=args.pdk_root or default_pdk_roots())
+                     dep_roots=args.dep_root or [], pdk_roots=args.pdk_root or default_pdk_roots(),
+                     dep_hosts=args.dep_host or [])
         srv.stop_jobs = args.stop_jobs  # what a waiting tool tells the agent when the server stops (wait_for)
         # uvicorn ends a shutdown on a signal by raising it again under the handler it found: SIGTERM's default would
         # end the process before the `finally` below hands its simulations over (or stops them: --stop-jobs)

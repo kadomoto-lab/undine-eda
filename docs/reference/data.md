@@ -342,7 +342,7 @@ user, on every projects root:
 | `UNDINE_STORE_LINK` | `link` | `copy`: install dependencies as read-only copies, not hard links (any other value is refused) |
 | `UNDINE_OFFLINE` | off | `1`: `lib sync` and `POST .../deps/sync` install from the store only and never fetch, as `lib sync --offline` |
 | `UNDINE_CIEL` | the `ciel` beside Undine's Python, else `PATH` | the ciel that `pdk fetch` runs; set to a path that is not a file, no ciel runs |
-| `UNDINE_FETCH_MAX` | `1073741824` (1 GiB) | the most bytes one dependency's files may have; with more than 100 000 files it is refused too, before any file is read |
+| `UNDINE_FETCH_MAX` | `1073741824` (1 GiB) | the most bytes one dependency's files may have; with more than 100 000 files it is refused too, before any file is read. Also the most bytes one fetch (of a dependency or an index) may receive, counted while git runs: past it git is stopped and the store's copy of that repository removed |
 
 ## Operation log
 

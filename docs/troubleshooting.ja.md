@@ -476,6 +476,44 @@ HTTP API で追加、更新、同期しようとしましたが、サーバー�
 pixi run python -m undine serve --dep-root ~/ip
 ```
 
+<a id="adding-from-the-browser-from-the-browser-this-server-fetches-only-from"></a>
+### ブラウザから追加する: `from the browser this server fetches only from …`
+
+メッセージ全体は `not from gitlab.com. Start the server with --dep-host gitlab.com, or run python -m undine lib add ...
+from the command line` で終わります。
+
+**原因。** 依存関係やインデックスを、ブラウザか HTTP API で追加、更新、ロック、同期しようとしましたが、その URL のどれかのホストが、
+このマシンが設定するインデックスのホスト(既定のインデックスの `github.com` と、`$UNDINE_HOME/config.toml` にあるもの)でも、
+`--dep-host` で指定したホストでもありません。URL は、リクエスト、project.json、パッケージのマニフェスト、インデックスの行の
+どれから来たものでもかまいません。クローンした `project.json` はどのホストでも指定できるので、その `indexes` はホストを足しません。
+
+**対処。** メッセージにあるコマンドをコマンドラインで実行します。コマンドラインはどのホストからも取得します。または、そのホストを
+指定してサーバーを起動し直します:
+
+```sh
+pixi run python -m undine serve --dep-host gitlab.com
+```
+
+ブラウザからは、`… does not fetch every branch and tag of … for a request from the browser` と出ることもあります。リポジトリの
+サーバーが、そのコミットをそれだけでは渡しません(短縮したコミット ID や、どのブランチやタグからもたどれないコミット)。同じ操作を
+一度コマンドラインで実行してください。コミットがストアに残り、ブラウザからはそこを読みます。
+
+<a id="a-fetch-is-stopped-the-fetch-received-more-than-bytes"></a>
+### 取得が止まる: `the fetch received more than … bytes`
+
+メッセージ全体は `the most one fetch may take (UNDINE_FETCH_MAX); it was stopped and nothing of it was kept` で
+終わります。
+
+**原因。** 依存関係のリポジトリかインデックスが、`UNDINE_FETCH_MAX` バイト(既定は 1 GiB)より多くを送ってきました。量は git の
+実行中に数えます。そのリポジトリのストアの写しは消したので、取得したものは何も残っていません。
+
+**対処。** URL が意図したリポジトリを指しているか確かめてください。モノレポ全体や、履歴をすべて取得したものは、パッケージより
+ずっと大きいことがよくあります。その大きさが想定どおりなら、そのコマンドだけ上限を上げます:
+
+```sh
+UNDINE_FETCH_MAX=4294967296 pixi run python -m undine pkg add demo big_ip
+```
+
 <a id="dependencies-and-the-store"></a>
 ## 依存関係とストア
 

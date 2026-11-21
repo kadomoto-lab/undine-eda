@@ -87,7 +87,15 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
   `git` を、その実際のパス(シンボリックリンクと `..` を解決したもの)と git ディレクトリが `serve --dep-root` で指定したディレクトリの
   下になければ拒否します。メッセージは `--dep-root` と、同じことをコマンドラインで行う `python -m undine lib ...` のコマンドを示します。
   `localhost` 以外のホスト、クエリ、フラグメントを持つ `file://` の URL は `not a plain file:// URL (file:///path/to/repo)` として
-  拒否します。リモートの URL(`https://`、`ssh://`、`git://`、`git@host:path`)には関係しません。
+  拒否します。リモートの URL(`https://`、`ssh://`、`git://`、`git@host:path`)は、代わりにホストで確かめます(次の項目)。
+- **許されていないリモートのホスト。** 同じルートは、リモートのリポジトリやインデックスを、このマシンが設定するインデックスのホスト
+  (既定のインデックスの `github.com` と、`$UNDINE_HOME/config.toml` にあるもの。プロジェクト自身の `indexes` は含みません)か、
+  `serve --dep-host` で指定したホストからだけ取得します。これは、リクエストの URL にも、project.json、マニフェスト、インデックスの行が
+  指定する URL にも当てはまります。それ以外は git を実行する前に拒否します: `https://gitlab.com/me/ip.git: from the browser this
+  server fetches only from github.com (...); not from gitlab.com. Start the server with --dep-host gitlab.com, or run
+  python -m undine lib add ... from the command line`。これらのルートからは、サーバーがそれだけでは渡さないコミット(短縮した ID や、
+  どのブランチやタグからもたどれないコミット)を、すべてのブランチとタグを取得して探すことはしません。メッセージは、その操作を
+  一度コマンドラインで実行するように言います。そうすればコミットがストアに残り、ブラウザからも読めます。
 
 [パッケージ](../guide/libraries.ja.md#packages)についての拒否には、それぞれのコードがあります。`detail` はメッセージ全体で、
 どれも何も変えません:

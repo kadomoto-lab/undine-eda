@@ -434,19 +434,40 @@ def _local_path(url: str) -> Path | None:
     return None
 
 
-def _source(spec: dict, local_roots: list[Path] | None, command: str) -> str | None:
+def allowed_hosts(dep_hosts=()) -> list[str]:
+    """The hosts a request over HTTP may fetch from: those of the indexes this machine configures (the default index
+    and $UNDINE_HOME/config.toml's [indexes]; never a project.json's `indexes`, which a clone brings), then
+    `dep_hosts` (serve --dep-host), lower case, each once."""
+    try:
+        urls = ix.configured().values()
+    except ix.IndexReadError as e:
+        raise DepError(str(e)) from None
+    hosts = [gitsrc.remote_host(u) for u in urls] + [str(h).strip().lower() for h in dep_hosts]
+    return list(dict.fromkeys(h for h in hosts if h))
+
+
+def _source(spec: dict, local_roots: list[Path] | None, command: str, hosts=()) -> str | None:
     """What git fetches `spec` from, checked before any fetch. `local_roots` None (the CLI): the URL as written. A list
     (HTTP: serve --dep-root): a local repository only when it is an existing directory whose real path and git
     directory (and that one's common directory) are under one of them, and then that git directory, so that git reads
-    the very repository checked (given a path, git would also try <path>.git); a remote URL as written. Applies to a URL from the request and to
-    one project.json names alike: a project.json from a clone or an adopted changeset can name any path on the disk,
-    and what is fetched becomes readable through the browser. `command`: the CLI command that does it anyway."""
+    the very repository checked (given a path, git would also try <path>.git); a remote URL only when its host is
+    one allowed_hosts(`hosts`) gives (serve --dep-host), and then as a gitsrc.HttpRemote, which the all-refs fallback
+    is not used for. Applies to a URL from the request and to one project.json, a manifest or an index line names
+    alike: a project.json from a clone or an adopted changeset can name any path on the disk or any host, and what is
+    fetched becomes readable through the browser. `command`: the CLI command that does it anyway."""
     if local_roots is None:
         return None
     _check_spec(spec)
     src = _local_path(spec["git"])
     if src is None:
-        return None
+        url = spec["git"]
+        host, allowed = gitsrc.remote_host(url), allowed_hosts(hosts)
+        if host is None or host not in allowed:
+            raise DepError(f"{url}: from the browser this server fetches only from {', '.join(allowed) or 'no host'} "
+                           f"(the hosts of the indexes this machine configures, and --dep-host); not from "
+                           f"{host or 'a URL with no host'}. Start the server with `--dep-host {host or 'HOST'}`, or "
+                           f"run `python -m undine {command}` from the command line")
+        return gitsrc.HttpRemote(url)
     _under_roots(spec, src, local_roots, command)
     if not src.is_dir():
         # git would try <path>.git and <path>.git/.git next, which may be a symlink to anywhere
@@ -990,12 +1011,12 @@ class _Graph:
     resolve runs with them: PDK compatibility and cell names. Then what to write: the lock's tables and one install
     per (package, local name)."""
 
-    def __init__(self, prj, lock: dict | None, local_roots: list[Path] | None, command: str):
+    def __init__(self, prj, lock: dict | None, local_roots: list[Path] | None, command: str, hosts=()):
         from undine.pdks import compat
         self.prj, self.lock = prj, lock
         self.fmt = lock_format(lock) if lock else FORMAT
         self.kind = "tree" if self.fmt >= 2 else "sha"
-        self.local_roots, self.command = local_roots, command
+        self.local_roots, self.command, self.hosts = local_roots, command, tuple(hosts)
         self.graph = resolve.lock_graph(lock)
         self.sources: dict[str, str | None] = {}
         self.commits: dict[tuple, str] = {}
@@ -1019,7 +1040,7 @@ class _Graph:
         git is about to read its repository."""
         url = spec["git"]
         if url not in self.sources:
-            self.sources[url] = _source(spec, self.local_roots, self.command)
+            self.sources[url] = _source(spec, self.local_roots, self.command, self.hosts)
         return self.sources[url]
 
     # -- indexes
@@ -1028,7 +1049,8 @@ class _Graph:
         """The local copy of index `url`: over HTTP a local one only below --dep-root (as a local git URL)."""
         if url not in self.indexes:
             try:
-                src = _source({"git": url}, self.local_roots, self.command) if self.local_roots is not None else None
+                src = (_source({"git": url}, self.local_roots, self.command, self.hosts)
+                       if self.local_roots is not None else None)
             except DepError as e:
                 raise DepError(f"index {url}: {e}") from None
             self.indexes[url] = ix.Index(url, src)
@@ -1523,12 +1545,13 @@ def _result_cells(item: dict, d: Path, m: mf.Manifest | None) -> dict:
 
 def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | None = None, guard=None,
         local_roots: list[Path] | None = None, *, package: str | None = None, version: str | None = None,
-        index: str | None = None) -> dict:
+        index: str | None = None, hosts=()) -> dict:
     """Adds a dependency, hashed as the lock's format says (`sha` in format 1, `tree` in format 2), with every
     package its manifest needs, resolved together with what is locked (held as locked, never fetched again). Nothing
     is written until every manifest is read and the whole graph checked (ResolveError lists every problem).
     `package`: the [package] name the repository must have (recorded in project.json). `local_roots`: given from
-    HTTP (serve --dep-root), where a local repository may be (_source), for every URL a manifest names too. Returns
+    HTTP (serve --dep-root), where a local repository may be, and `hosts` (serve --dep-host), with the indexes' hosts
+    the remote hosts it may fetch from (_source), for every URL a manifest, an index or an index line names too. Returns
     the entry with `cells` (`public_cells`, `internal_cells` by [exports]), `created` (whether this call made the
     lock), `package`, `version`, `resolved` (every entry resolved: the dependency and the packages it brought) and
     `flagged` / `trusted` (what the trust rule would refuse in it).
@@ -1560,7 +1583,7 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
             raise DepError(f"{name}: {what} has that name, and .undine/deps would shadow it: choose another local "
                            "name; nothing was changed")
         g = _Graph(prj, lock, local_roots, f"lib add {prj.name} {name} {git}" if git else
-                   f"pkg add {prj.name} {package or name}")
+                   f"pkg add {prj.name} {package or name}", hosts)
         if git is not None:
             _check_spec(spec)
         with _in_store(prj):
@@ -1630,15 +1653,15 @@ def _dep_spec(prj, name: str) -> dict:
 
 
 def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list[Path] | None = None, *,
-           version: str | None = None) -> dict:
+           version: str | None = None, hosts=()) -> dict:
     """Moves a dependency to `rev` (default: its rev again, e.g. a branch that moved), hashed as the lock's format says
     (a format 2 lock's entry gets a `tree` and loses its `sha`; a package moves onto its [files] include set). Its
     packages are resolved again with it, every other locked package held as locked; a package no longer reached is
     dropped with its names. Returns what changed: `changed` and `used_by` for it, `packages_changed` ({package,
     names, from, to, changed} per entry moved, added or dropped) and `used_by` over every local name of each. A
-    name only a package places is NotDirect. `local_roots`: as add's. A package from an index moves to the newest
-    version its requirement (or `version`, written to project.json) accepts, with its index fetched again first;
-    the packages only it reaches move with it."""
+    name only a package places is NotDirect. `local_roots` and `hosts`: as add's. A package from an index moves to
+    the newest version its requirement (or `version`, written to project.json) accepts, with its index fetched again
+    first; the packages only it reaches move with it."""
     _dep_spec(prj, name)
     with _deps_lock(prj.path):
         _reread(prj)
@@ -1651,7 +1674,7 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
             raise DepError(f"{name} is a git dependency: give a rev, not a version")
         spec = dict(base, **({"rev": rev} if rev else {}), **({"version": version} if version else {}))
         _own_dir(prj.path, name)
-        g = _Graph(prj, lock, local_roots, f"lib update {prj.name} {name}")
+        g = _Graph(prj, lock, local_roots, f"lib update {prj.name} {name}", hosts)
         if indexed:
             g.prefer = False
             g.refresh([index_spec(name, spec, prj.meta)[2]])
@@ -2040,23 +2063,24 @@ def _row(name: str, action: str, commit, entry: dict | None) -> dict:
         {"package": package} if isinstance(package, str) and package else {})
 
 
-def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool | None = None) -> list[dict]:
-    """Installs every dependency exactly as locked: each of project.json's git dependencies and every package their
-    lock entries reach (`packages`, through `deps`), under each of its local names. Frozen: a dependency of
-    project.json that the lock does not pin as named (not locked, or another git / rev / subdir / package), or whose
-    locked graph cannot be installed as it is (a package missing from the lock, a local name claimed twice), is
-    refused before anything is read (`lib lock` or `lib update` resolves it). Each entry not installed as locked
-    comes from the store when its record and objects are there (no repository is read), else from the kept
-    repository, else is fetched (once per repository and commit); `offline` (default: UNDINE_OFFLINE=1) never
-    fetches and names what is missing. All or nothing: when one fails (a remote unreachable, files that do not match
-    the lock) none is installed, and nothing removed. A dependency that nothing of project.json places any more
-    (leftovers()) loses its files and its lock entry, a package entry no dependency reaches too. A name whose
-    project.json requirement or lock entry changed once staged (a changeset adopted, a git command) is left out:
-    neither installed nor removed, as this sync did not see that change; the next one acts on it. `local_roots`: as
-    add's, before git reads a dependency's repository; one installed from the store or as locked reads none, so it is
-    not checked. An install that matches its lock entry but is not in the store is imported into it. Returns one row
-    per name ({name, action, commit}, `package` for a package), and `warning` on a package the locked PDK does not
-    fit: it is installed all the same (status reports it)."""
+def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool | None = None,
+         hosts=()) -> list[dict]:
+    """Installs every dependency exactly as locked: each of project.json's git dependencies and every package their lock
+    entries reach (`packages`, through `deps`), under each of its local names. Frozen: a dependency of project.json that
+    the lock does not pin as named (not locked, or another git / rev / subdir / package), or whose locked graph cannot
+    be installed as it is (a package missing from the lock, a local name claimed twice), is refused before anything is
+    read (`lib lock` or `lib update` resolves it). Each entry not installed as locked comes from the store when its
+    record and objects are there (no repository is read), else from the kept repository, else is fetched (once per
+    repository and commit); `offline` (default: UNDINE_OFFLINE=1) never fetches and names what is missing. All or
+    nothing: when one fails (a remote unreachable, files that do not match the lock) none is installed, and nothing
+    removed. A dependency that nothing of project.json places any more (leftovers()) loses its files and its lock entry,
+    a package entry no dependency reaches too. A name whose project.json requirement or lock entry changed once staged
+    (a changeset adopted, a git command) is left out: neither installed nor removed, as this sync did not see that
+    change; the next one acts on it. `local_roots` and `hosts`: as add's, before git reads a dependency's repository;
+    one installed from the store or as locked reads none, so it is not checked. An install that matches its lock entry
+    but is not in the store is imported into it. Returns one row per name ({name, action, commit}, `package` for a
+    package), and `warning` on a package the locked PDK does not fit: it is installed all the same (status reports
+    it)."""
     if offline is None:
         offline = os.environ.get("UNDINE_OFFLINE") == "1"
     command = f"lib sync {prj.name}"
@@ -2095,7 +2119,7 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
                 if id not in sources:
                     spec = _spec_of(entries[id])
                     _check_spec(spec)
-                    sources[id] = _source(spec, local_roots, command)
+                    sources[id] = _source(spec, local_roots, command, hosts)
                 return sources[id]
             missing = [id for id, files in stored.items() if files is None]
             for id in missing:
@@ -2194,16 +2218,16 @@ def _warn_unfit(prj, lock: dict, rows: list[dict]) -> None:
 
 
 def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
-           upgrade: Callable[[dict], dict] | None = None) -> dict:
+           upgrade: Callable[[dict], dict] | None = None, hosts=()) -> dict:
     """`lib lock`: resolves the git dependencies the lock does not pin as project.json names them (not locked, or
-    another git / rev / subdir / package) or whose locked graph is incomplete (_incomplete: then at its locked
-    commit), with the packages their manifests need, every other locked package held as locked; all or nothing,
-    fetching them (with add's checks, `local_roots` as its) and installing them. Then it records the tool versions
-    in use now, and the PDK id in format 1, in the lock's own format: format 2 gets its tools only, as numbers with
-    their origin; its PDK pin (an object) is moved by the PDK commands. `upgrade` (pdkops.upgrader's converter): the
-    lock is converted to format 2 in memory first, resolved in format 2 and written once, so a refused resolution
-    leaves the lock as it was. A trust given to an entry whose commit or files change goes. Returns {lock, resolved:
-    the entries resolved, created: whether this call made the lock}."""
+    another git / rev / subdir / package) or whose locked graph is incomplete (_incomplete: then at its locked commit),
+    with the packages their manifests need, every other locked package held as locked; all or nothing, fetching them
+    (with add's checks, `local_roots` and `hosts` as its) and installing them. Then it records the tool versions in use
+    now, and the PDK id in format 1, in the lock's own format: format 2 gets its tools only, as numbers with their
+    origin; its PDK pin (an object) is moved by the PDK commands. `upgrade` (pdkops.upgrader's converter): the lock is
+    converted to format 2 in memory first, resolved in format 2 and written once, so a refused resolution leaves the
+    lock as it was. A trust given to an entry whose commit or files change goes. Returns {lock, resolved: the entries
+    resolved, created: whether this call made the lock}."""
     _reread(prj)
     if upgrade is None:
         lock = read_lock(prj.path)
@@ -2224,7 +2248,7 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
                 index_spec(name, specs[name], prj.meta)
             else:
                 _check_spec(specs[name])
-        g = _Graph(prj, lock, local_roots, f"lib lock {prj.name}")
+        g = _Graph(prj, lock, local_roots, f"lib lock {prj.name}", hosts)
         for name in todo:
             if not is_index_spec(specs[name]):
                 g.source(specs[name])

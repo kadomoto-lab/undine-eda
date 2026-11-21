@@ -499,6 +499,34 @@ much larger than the package. When the size is expected, raise the limit for tha
 UNDINE_FETCH_MAX=4294967296 pixi run python -m undine pkg add demo big_ip
 ```
 
+### `pkg vendor`: `not in the store or installed: …`
+
+The whole message ends with `run python -m undine lib sync PROJECT, or pkg vendor from the command line, which
+fetches them; nothing was written`. In a tapeout bundle, `report.json` has it under `vendor.error`, and the `vendor`
+check warns.
+
+**Cause.** A locked tree is neither in the store nor installed in the project exactly as locked (a fresh clone, the
+store emptied, or an install changed by hand). The tapeout export does not fetch, and `--offline` does not either.
+
+**Fix.** Install the lock, then vendor or export again:
+
+```sh
+pixi run python -m undine lib sync demo
+```
+
+### `pkg sync --from-vendor`: `its files do not hash to the lock's tree`
+
+The whole message ends with `a file was changed, added or removed after pkg vendor; restore it from the bundle's zip,
+or vendor again; nothing was imported`.
+
+**Cause.** A file under that `vendor/<dir>/` is not what `pkg vendor` wrote: edited, added or removed. The tree is
+checked against `undine.lock` before anything enters the store, so nothing was imported. `is not a regular file`
+means a link or a special file there, which `pkg vendor` never writes.
+
+**Fix.** Take `vendor/` again from the bundle's zip, which the export wrote next to the directory. If `undine.lock`
+itself changed since the bundle was made, check out the commit the bundle was made from: `vendor.json` records the
+lock's SHA-256 (`lock.sha256`).
+
 ## Dependencies and the store
 
 ### `lib sync`: `… project.json asks for rev …, undine.lock locks …` (or `not in undine.lock`)

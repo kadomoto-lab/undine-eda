@@ -17,8 +17,10 @@ and RTL used only once a person trusts it; see [Libraries and dependencies](guid
 - [ ] **Phase 3: index.** Packages from an index by name and version, public and private, are done: `pkg search`,
   `pkg add`, `pkg update`, version ranges, yanked versions, several indexes
   ([Packages from an index](guide/libraries.md#packages-from-an-index)). The default index,
-  [kadomoto-lab/undine-index](https://github.com/kadomoto-lab/undine-index), exists and lists no package yet. Still to
-  build: a Packages section in the library browser, and the packages' licenses and sources in the tapeout bundle.
+  [kadomoto-lab/undine-index](https://github.com/kadomoto-lab/undine-index), exists and lists no package yet. `pkg licenses`,
+  `pkg vendor` and `pkg sync --from-vendor` are done, and the tapeout bundle carries the locked trees and their
+  licences ([Licences and vendoring](guide/libraries.md#licences-and-vendoring)). Still to build: a Packages section in
+  the library browser.
   From the browser, a fetch goes only to the hosts of the configured indexes and those given with
   `serve --dep-host`, and every fetch stops at `UNDINE_FETCH_MAX`.
 - [ ] **Phase 4: changesets and agents.** Dependency changes reviewed and adopted like any other change; an agent can

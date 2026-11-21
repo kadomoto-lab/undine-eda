@@ -446,6 +446,39 @@ characterisation run) is never fetched into the store nor installed.
 The format 2 lock keeps the direct dependencies in `libraries` and the packages reached only through manifests in
 `packages`, with their versions, local names and dependencies ([undine.lock](../reference/data.md#undinelock)).
 
+### Licences and vendoring
+
+A dependency's files stay in its publisher's repository. A repository that is deleted, made private or rewritten loses
+that version for every machine whose store does not have it yet. So keep your own copy of what a tapeout used:
+
+```sh
+pixi run python -m undine pkg licenses demo          # the licence of each locked dependency and of the PDK
+pixi run python -m undine pkg vendor demo out/       # out/vendor/: the locked trees, vendor.json, LICENSES.*
+```
+
+`pkg vendor` writes every locked tree as plain files, one directory each: `<package>@<version>/` for a package, and
+`<name>@<commit>/` for a plain git dependency. `vendor.json` records what the lock records of each one (index, git
+URL, subdir, commit, tree hash) and the PDK pin. `LICENSES.json` and `LICENSES.md` list the licences. A package's
+licence comes from its manifest, else from the index. A plain git dependency records none, so its top-level
+`LICENSE`, `COPYING` or `NOTICE` files are named instead. The PDK is recorded but not copied: ciel's releases keep
+it, and `pdk fetch` installs it again.
+
+Every tree is hashed again and compared with the lock before `vendor/` is put in place. The trees come from the store,
+or from the project's install when it is exactly the locked tree. One in neither is fetched after asking (`--yes`
+fetches without asking, `--offline` refuses).
+
+The [tapeout export](tapeout.md) runs the same step into every bundle, and its `report.json` lists the vendored trees
+and their licences.
+
+To install the project again from that copy, with no repository and no network:
+
+```sh
+pixi run python -m undine pkg sync demo --from-vendor tapeout/tt-sky130-analog/tt_um_demo-20261121-101500
+```
+
+Each vendored directory is hashed and compared with `undine.lock` before any of its files enters the store. A file
+changed, added or removed by hand is refused, and nothing is imported. The lock is then installed offline.
+
 ## undine.lock
 
 Besides the dependencies, the lock records what else the design depends on: the PDK version (the id `project.json`

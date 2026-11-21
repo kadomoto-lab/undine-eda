@@ -291,3 +291,17 @@ if __name__ == "__main__":
         if n.startswith("test_"):
             f()
             print("ok", n)
+
+
+def test_export_bundle_refuses_a_top_name_that_leaves_the_tapeout_directory():
+    """top_module comes from the request, and allow_fail lets it past the tt_top check: it must not name a path."""
+    root = Path(tempfile.mkdtemp())
+    outside = root.parent / f"{root.name}-outside"
+    for bad in (f"../../../{outside.name}/x", "a/b", ".hidden", "-x", " .. "):
+        try:
+            tapeout.export_bundle(root, tile(), "lib", "mycell", PDK, "tt-sky130-analog", {**P, "top_module": bad})
+        except ValueError as e:
+            assert "names the bundle's directory" in str(e), bad
+        else:
+            raise AssertionError(f"exported with top_module {bad!r}")
+    assert not outside.exists() and not (root / "tapeout").exists()

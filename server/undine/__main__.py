@@ -766,7 +766,7 @@ def main() -> None:
                            help="write lock format 2 (the PDK pinned by its tree hashes, the tools with their origin)")
     from undine.pkgcli import add_parser as pkg_parser
 
-    pkg_parser(sub)                                 # pkg search / info / add / update / outdated / tree / why / index
+    pkg_parser(sub)                                 # pkg search ... vendor: pkgcli.py
     g = sub.add_parser("git-setup")
     g.add_argument("project")
     ms = sub.add_parser("mcp-stdio", help="local MCP entry for desktop LLM clients: starts or reuses Undine, opens the review")

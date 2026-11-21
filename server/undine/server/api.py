@@ -26,7 +26,7 @@ from pydantic import BaseModel, FiniteFloat
 
 from undine.agents import agent, turns, llm, llm_context, mcp as mcpmod
 from undine.server import live
-from undine.store import deps, locked, oplog, provenance, cellviews, trust
+from undine.store import deps, locked, oplog, provenance, cellviews, trust, vendor
 from undine.checks import magicflow, parasitics, stdcells, tapeout, verify
 from undine.pdks import ciel, compat, fetchjobs, pcell, pdkops
 from undine.schematics import schematic, xschem, symbolcheck, symbolsync, netlist as netlistmod
@@ -3580,7 +3580,8 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 res = tapeout.export_bundle(prj.path, db.layout, lib, cell, prj.pdk, req.target, req.params,
                                             llm_context.revision(srv, project, lib, cell),
                                             {"layout": provenance.layout_entry(db, lib, cell),
-                                             "signoff": srv.signoff(project, lib, cell, req.target)}, golden)
+                                             "signoff": srv.signoff(project, lib, cell, req.target)}, golden,
+                                            vendor=lambda d: vendor.vendor(prj, d, offline=True))
             return {k: v for k, v in res.items() if k != "report"} | {"target": req.target}
         except Exception as e:
             raise _err(e)

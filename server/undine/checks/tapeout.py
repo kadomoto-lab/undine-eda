@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import time
@@ -658,15 +659,37 @@ def _sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+_BUNDLE_NAME = re.compile(r"^[A-Za-z0-9_$][A-Za-z0-9_$.-]*$")
+
+
+def _bundle_dir(project_path: Path, target: str, top: str) -> Path:
+    """<project>/tapeout/<target>/<top>-<time>/, refused unless it stays there: `top` comes from the request (Tiny
+    Tapeout's top_module, which allow_fail lets past the tt_top check) or is a cell name, and it names the directory,
+    the GDS and the LEF."""
+    if target not in TARGETS:
+        raise KeyError(f"unknown target {target}")
+    if not _BUNDLE_NAME.match(top or ""):
+        raise ValueError(f"the top cell's name {top!r} names the bundle's directory and files: use letters, digits, "
+                         "_, $, . and - only, not starting with . or -")
+    base = os.path.realpath(project_path / "tapeout" / target)
+    d = os.path.realpath(os.path.join(base, f"{top}-{time.strftime('%Y%m%d-%H%M%S')}"))
+    if not d.startswith(base + os.sep):
+        raise ValueError(f"the bundle's directory {d} is not under {base}")
+    return Path(d)
+
+
 def export_bundle(project_path: Path, layout: kdb.Layout, lib: str, cell_name: str, pdk: Pdk, target: str, params: dict,
-                  revision: str | None = None, provenance: dict | None = None, golden: Path | None = None) -> dict:
+                  revision: str | None = None, provenance: dict | None = None, golden: Path | None = None,
+                  vendor=None) -> dict:
     """Writes <project>/tapeout/<target>/<top>-<time>/: GDS, LEF, Verilog stub, info.yaml, docs and report.json (+ zip).
-    `provenance` goes into report.json: {"layout": content hash of the exported cell, "signoff": Server.signoff()}."""
+    `provenance` goes into report.json: {"layout": content hash of the exported cell, "signoff": Server.signoff()}.
+    `vendor(dir)`: writes dir/vendor/ (store/vendor.py: the locked dependency trees and their licences) and returns its
+    summary, which report.json lists; when it fails the bundle is written all the same, report.json says why and a
+    `vendor` check warns."""
     checks = run_checks(layout, cell_name, pdk, target, params, golden)
     top = ((params.get("top_module") or cell_name).strip() if target == "tt-sky130-analog" else
            cf_top(params) if target == "chipfoundry-caravel" else cell_name)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    d = project_path / "tapeout" / target / f"{top}-{stamp}"
+    d = _bundle_dir(project_path, target, top)
     (d / "gds").mkdir(parents=True)
     new, nc = renamed_copy(layout, cell_name, top)
     opt = kdb.SaveLayoutOptions()
@@ -693,11 +716,24 @@ def export_bundle(project_path: Path, layout: kdb.Layout, lib: str, cell_name: s
     if target == "chipfoundry-caravel":
         (d / "SUBMIT.md").write_text(_cf_submit(top, params))
         files.append(d / "SUBMIT.md")
+    vendored = None
+    if vendor is not None:
+        try:
+            v = vendor(d)
+            vendored = {"dir": "vendor", "entries": v["entries"], "pdk": v["pdk"],
+                        "licenses": [{k: e.get(k) for k in ("name", "package", "version", "license")}
+                                     for e in v["licenses"]["entries"]]}
+            files += [p for p in sorted((d / "vendor").glob("*")) if p.is_file()]
+        except Exception as e:                       # the layout bundle stands without it; report.json says why
+            vendored = {"error": str(e)}
+            checks = checks + [Check("vendor", "Dependencies vendored", "warn",
+                                     f"vendor/ was not written: {e}").public()]
     report = {"target": target, "label": TARGETS[target]["label"], "params": params, "lib": lib, "cell": cell_name, "top": top,
               "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "pdk": pdk.id, "tools": _tool_versions(), "design_revision": revision,
               "checks": checks, "files": {str(f.relative_to(d)): _sha(f) for f in files}, **(provenance or {}),
+              **({"vendor": vendored} if vendor is not None else {}),
               "note": "Local layout checks only. Run the sign-off suite (KLayout, Magic DRC, Magic+Netgen LVS) and the shuttle's own precheck before submitting."}
     (d / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     z = shutil.make_archive(str(d), "zip", d.parent, d.name)
-    return {"dir": str(d.relative_to(project_path)), "zip": Path(z).name, "files": sorted(str(p.relative_to(d)) for p in d.rglob("*") if p.is_file()),
+    return {"dir": str(Path("tapeout") / target / d.name), "zip": Path(z).name, "files": sorted(str(p.relative_to(d)) for p in d.rglob("*") if p.is_file()),
             "checks": checks, "report": report}

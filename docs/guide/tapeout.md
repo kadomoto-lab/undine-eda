@@ -9,6 +9,13 @@ suite, and export the bundle. For a walk-through from a finished cell to the bun
 - **ChipFoundry - Caravel user project (SKY130)**
 - **Layout hygiene only (any shuttle)**
 
+Every bundle also has `vendor/`: the project's locked dependencies as plain files, `vendor.json` with what
+`undine.lock` pins (the PDK included, which is recorded but not copied) and `LICENSES.md` / `LICENSES.json`. The
+bundle then does not depend on the dependencies' repositories staying online, and `pkg sync --from-vendor BUNDLE`
+installs the project again from it ([Licences and vendoring](libraries.md#licences-and-vendoring)). `report.json`
+lists the vendored trees and their licences. When a locked tree is in neither the store nor the install, the bundle
+is written without `vendor/`, `report.json` says why and the `vendor` check warns: run `lib sync`, then export again.
+
 ## Tiny Tapeout - SKY130 analog
 
 Its layout checks mirror the precheck of `tt-support-tools` (Apache-2.0) using the official pin table (`server/undine/data/tt_sky130A_analog.json`):

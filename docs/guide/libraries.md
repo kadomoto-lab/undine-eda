@@ -214,9 +214,27 @@ is another, `index` when it is not the default index):
   is git's: ssh keys or a credential helper. Each index is fetched once into the store and again only by `pkg index
   update`, `pkg update`, or a resolution that finds no version it needs; `pkg index list` says when each was fetched.
 
-Still to come ([roadmap](../roadmap.md)): the packages' licenses and sources in the tapeout bundle (`pkg licenses`,
-`pkg vendor`), a Packages section in the library browser, and a limit on the hosts and the size of what a package
-from an index fetches.
+### Packages in the browser
+
+The package button at the top of the library browser opens **Packages**. Pick an index (`undine`, those of
+`~/.undine/config.toml` and of `project.json`) and type part of a name or description. Each package shows its newest
+version, its licence and a warning when it does not fit this project's PDK. Pick one to see every version (a yanked one
+struck through), its repository and commit, its exported cells, what it needs, and whether the newest fits the PDK
+and why not.
+
+**Add** takes a local name (the package's by default) and a version requirement (`^` the newest by default; click a
+version to require exactly it), and adds the package as `pkg add` does. The first read of an index fetches it on the
+server; after that the local copy is read until the refresh button fetches it again. From the browser an index is read
+under the same rule as a git dependency: a local one only below `--dep-root`, a remote one only on the host of a
+configured index or one given with `serve --dep-host`
+([troubleshooting](../troubleshooting.md#adding-from-the-browser-from-the-browser-this-server-fetches-only-from)).
+
+A dependency from an index shows `→ 1.3.0` beside its version when the local copy of its index lists a newer one that
+its requirement accepts (or a newer major, when only that is listed); the tooltip names both. Its **Update** moves it to
+the newest version its requirement accepts, or takes a new requirement.
+
+Exported cells are listed by name only: a symbol preview needs the package's files, which are fetched only when it
+is added.
 
 ### The manifest
 

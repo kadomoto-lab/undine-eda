@@ -50,6 +50,9 @@ export interface DepsStatus {
   libraries: ({ name: string; kind: "own" | "linked" | "dependency"; state: string; git?: string; rev?: string | null;
     subdir?: string | null; locked?: string | null; installed?: string | null; path?: string;
     hash?: "sha" | "tree" | null;  // what the lock entry pins the files by
+    index?: string | null;         // a package from an index: its URL
+    requirement?: string;          // a package from an index: project.json's version requirement
+    newer?: PackageNewer;          // a package from an index with a newer version in the local copy of the index
     in_store?: boolean } & DepPackageFields)[];  // the locked files are all in the store (sync needs no network)
   pdk: PdkLockState;
   tools: { name: string; locked: ToolRecord | null; now: ToolRecord | null; now_path?: string | null; ok: boolean }[];
@@ -58,6 +61,27 @@ export interface DepsStatus {
   notes?: string[];
   ok: boolean;
 }
+/** The newer versions of a dependency from an index (store/packages.py newer): the newest its requirement accepts
+ * (null when only a newer major is listed) and the newest listed, each null when not newer than the locked one. */
+export interface PackageNewer { accepted: string | null; newest: string | null }
+/** Whether a version of a package accepts the project's PDK; null when no project was given. */
+export type PackageFit = { ok: boolean; reason: string | null } | null;
+/** Which index a package read came from: its URL, its name here and the commit of the local copy. */
+export interface IndexWhere { index: string; index_name: string; commit: string | null }
+export interface PackageSummary {
+  name: string; version: string; description: string | null; license: string | null; yanked: boolean; fits: PackageFit;
+}
+export interface PackageVersion extends PackageSummary {
+  git: string; subdir: string | null; commit: string; tree: string; size: number | null;
+  pdk: { family: string; variants?: string[]; compat?: string[]; built_with?: string } | null;
+  exports: string[] | null;      // null: every cell is public
+  deps: { name: string; package: string; req: string; index: string | null; index_name: string | null }[];
+}
+export interface PackageInfo extends IndexWhere {
+  name: string; newest: string; versions: PackageVersion[];   // newest first
+  locked: string | null;         // the version the project locks of it from this index
+}
+export interface IndexInfo { name: string; url: string; commit: string | null }
 /** What the trust rule would refuse in a dependency (trust.counts): findings in SPICE code, RTL and Tcl. */
 export interface TrustCounts { spice: number; rtl: number; tcl: number }
 /** A dependency row's package fields (deps.status, phase 2); an older server leaves them out. */
@@ -804,8 +828,23 @@ export const api = {
   // (problemsOf), 409 needs_lock_format_2, 409 not_synced (a locked package neither in the store nor installed)
   depAdd: (p: string, name: string, git: string, rev?: string, subdir?: string, pkg?: string) =>
     req<DepAdd>(`${P(p)}/deps`, { name, git, rev: rev || null, subdir: subdir || null, ...(pkg ? { package: pkg } : {}) }),
-  // 400 not_direct (placedByOf) for a name a package placed
-  depUpdate: (p: string, name: string, rev?: string) => req<DepUpdate>(`${P(p)}/deps/${enc(name)}/update`, { rev: rev || null }),
+  // a package from an index (pkg add): version a requirement (left out: ^ the newest that fits), index a nickname or URL
+  depAddPackage: (p: string, name: string, pkg: string, version?: string, index?: string) =>
+    req<DepAdd>(`${P(p)}/deps`, { name, package: pkg, ...(version ? { version } : {}), ...(index ? { index } : {}) }),
+  // 400 not_direct (placedByOf) for a name a package placed; version: a package from an index's new requirement
+  depUpdate: (p: string, name: string, rev?: string, version?: string) =>
+    req<DepUpdate>(`${P(p)}/deps/${enc(name)}/update`, { rev: rev || null, ...(version ? { version } : {}) }),
+  // the library browser's Packages section (store/packages.py): the first read of an index fetches it, then the local
+  // copy is read until refreshIndex; project: for the indexes its project.json names and the PDK fit
+  packages: (q: string, index?: string, project?: string) =>
+    req<IndexWhere & { packages: PackageSummary[] }>(`/api/packages?${new URLSearchParams({ q,
+      ...(index ? { index } : {}), ...(project ? { project } : {}) })}`),
+  packageInfo: (name: string, index?: string, project?: string) =>
+    req<PackageInfo>(`/api/packages/${enc(name)}?${new URLSearchParams({ ...(index ? { index } : {}),
+      ...(project ? { project } : {}) })}`),
+  indexes: (project?: string) => req<{ indexes: IndexInfo[] }>(`/api/indexes${project ? `?project=${enc(project)}` : ""}`),
+  refreshIndex: (name: string, project?: string) =>
+    req<IndexWhere>(`/api/indexes/${enc(name)}/refresh${project ? `?project=${enc(project)}` : ""}`, {}),
   depRemove: (p: string, name: string) => req<DepRemove>(`${P(p)}/deps/${enc(name)}/remove`, {}),
   // offline: install from the store only (null / left out: the server's UNDINE_OFFLINE)
   depsSync: (p: string, opts: { offline?: boolean | null } = {}) =>

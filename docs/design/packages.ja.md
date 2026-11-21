@@ -598,6 +598,13 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 - **ライブラリブラウザ**: *パッケージ* の欄で index の clone を検索します。パッケージのページには、バージョン、ライセンス、説明、
   シンボルのプレビュー付きの公開セル、依存、このプロジェクトの PDK に合うか(合わなければその理由)を出します。依存の行には
   `analog_ip 1.2.0` と、あればより新しいバージョンを出します。
+  *実装済み(段階 3、store/packages.py、web/src/PackagesDialog.tsx):* ライブラリブラウザの上の **パッケージ** のダイアログ:
+  index の選択、検索、一覧(yank されていない最新のバージョン、ライセンス、PDK の警告)と、パッケージのページ(yank したものは
+  取り消し線付きで、それぞれの PDK の適合も示すすべてのバージョン、リポジトリ、コミット、公開セル、必要なもの)と **追加**
+  (ローカル名、要求。バージョンをクリックするとそのバージョンだけを要求)。index は最初に読むときに --dep-root / --dep-host の
+  規則の下で取得し、更新で取得し直します。index の依存の行は、手元の写しから `→ VERSION` を出し(そのために取得はしません)、
+  その **更新** は新しい要求を受け取ります。公開セルは名前だけを示します。シンボルのプレビューにはパッケージのファイルが要り、
+  それは追加したときだけ取得するので、あとに回します。
 - **lock のバッジ**: 今と同じ `locked` / `N lock issues` に加えて、PDK(検証済み / 未検証 / なし → **取得...**)、更新できる
   バージョン、yank されたバージョンを出します。*実装済み(段階 1):* PDK の状態は PDK のバッジに出し、そのメニューには状態の
   説明、**取得...**(PDK がないか変更されているとき)、**PDK を再検出** があります。lock のダイアログは、lock の形式、依存ごとの
@@ -807,7 +814,7 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 | 0. 修正 | 読むときに `format` を確かめる(知らない形式は拒否)。`set-pdk` が常に lock を書く。`project.json` から消えた依存を `sync` が消し、`status` が残りを報告する。CLI とサーバーのためのプロジェクトの flock。HTTP の取得を `srv.lock` の外で行う。`--dep-root`。ネットリスタが、1 つのネットリストに入る同じ名前で中身の違う 2 つのセルを拒否する。`osdi.sh` を直す(まだ PDK の木に書く。段階 1 で移す)。載っていないエンドポイントの docs | `test_deps.py` の lock のテスト。`format: 2` の lock をこのコードが拒否する。CLI とサーバーが同時に 1 つのプロジェクトを sync しても lock と `project.json` が壊れない。遅い偽のリモートが別のリクエストを止めない。HTTP からの `file://` を拒否する。1 つのテストベンチに中身の違う `inv` を持つ 2 つのライブラリがあれば、両方を示して拒否する | **済み**。[段階 0 の状況](#phase-0-status)を参照 |
 | 1. ストアと lock 2 | ストア、ファイル単位の重複の省略、固定どおりでオフラインの `sync`。git 依存の lock format 2(明示的なコマンドだけが書く)。git の blob からの木のハッシュ。除外の一覧つきの PDK の commit 全体と木のハッシュ、`pdk verify`、確認つきの ciel による `pdk fetch`(ルートは上のとおりに選ぶ)、PDK の再走査。`PYTHONDONTWRITEBYTECODE=1` で動く PCell のワーカー。ストアに作る OSDI: プロファイルの `osdi` の項目はモデルの名前(`psp103`)になり、まず `store/build/<commit>/<variant>/osdi/` で、次に PDK の木の今のパス(それを持つ install)で探す。`sim.py` と `doctor` は 1 つの関数からパスを得る。ツールのバージョン番号と出どころ | 2 つのバージョンが変わっていないオブジェクトを共有する。ストアからオフラインで sync する。`project.json` をもう満たさない lock を `sync` が拒否する。1 つの commit が `core.autocrlf=true` と export-subst のファイルがあっても同じハッシュになる。lock 1 → 2 は明示的なコマンドのときだけ。接頭辞 → commit 全体。`__pycache__` のある sky130 の木と `osdi/` のある IHP の木が検証に通る。PDK のファイルの変更を報告する。ciel は偽の実行ファイルで置き換える。`~/.volare` しか探さないとき `pdk fetch` を拒否する。IHP のシミュレーションがストアから OSDI を読み込む。上の各ツールのバナーから番号が取れる | **済み**。[段階 1 の状況](#phase-1-status)を参照 |
 | 2. manifest と解決 | `undine-package.toml`。manifest からの推移的な依存(まだ git の URL)。プロジェクト全体で共通のローカル名と、それぞれの下への install。セル名が重ならないこと。PDK の互換性。コードブロックと RTL についての信頼の規則 | ダイヤモンドを一度だけ入れる。両立しない要求が両方の経路を示す。`comparator` を持つ 2 つのパッケージを、両方を示して拒否する。ローカルな別名で解決でき、Xschem のネットリスタのバックエンドでも解決できる。2 つのライブラリが 1 つのローカル名に別々のパッケージを当てれば拒否する。互換でない PDK を拒否する。`.control` か絶対パスの `.include` を持つ依存のセルを、信頼するまで拒否する | **済み**。[段階 2 の状況](#phase-2-status)を参照 |
-| 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **進行中**、[段階 3 の状況](#phase-3-status)を参照 |
+| 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **済み**、[段階 3 の状況](#phase-3-status)を参照 |
 | 4. changeset とエージェント | changeset での依存の操作、依存の変更のレビュー(コードブロックと RTL の一覧)、確認のトークン、取得の後の通知、DATA の規則つきのエージェントのツール、git のマージドライバでの `project.json` と `undine.lock` のマージの規則(`merge.md` も直す)、`key` の外のパッケージと PDK の情報と、`key` の中のモデルのファイルとプロファイルの欄を含む evidence | changeset で追加、採用、元に戻す。エージェントの追加は *取得が必要* を記録し、取得せず、人の取得の後に続けられる。トークンを返すツールはない。別々のパッケージを追加する 2 つの changeset を、どちらの順でも採用できる。両立しない要求は採用のときに拒否する。1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない | **予定** |
 | 5. 公開 | `pkg init / check / pack / publish / yank`、`[checks]`、検証の報告と、index の行と PR からのそのリンク、semver の報告、報告に入るスペックの結果、`[renames]`、セル単位の更新の報告、レイアウトのコピーの更新、index の CI のワークフロー(DRC / LVS なし) | この木について通った報告がなければ publish は拒否し、PR の本文は報告をその SHA-256 とともにリンクする。SHA-256、commit、木が行と違う報告を index の CI が拒否する。改名したセルが改名として報告され、参照が書き換わる。ピンを消したりレイアウトのピンを動かしたりするとメジャーバージョンが要る。免除した規則は `check` に通り、示される。リポジトリが渡さない木の publish を拒否する。2 つのパッケージを持つリポジトリでのタグ `<name>-v<version>`。更新の後、コピーしたセルが changeset の中で新しくなり、その LVS が古くなる。編集したコピーは置き換えず、示す | **予定** |
 | 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、レイヤーの色を変えても古くならない | **予定** |
@@ -1074,7 +1081,9 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 `pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` はできています([取得とストア](#fetch-and-store)
 の vendor と、[ライセンス](#licences)を参照)。
 
-段階 3 でこれから作るもの: ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント。
+ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント(`GET /api/packages`、`GET /api/packages/{name}`、`GET /api/indexes`、
+`POST /api/indexes/{name}/refresh`、インデックスのパッケージを受け付ける `POST /deps`)はできています([UI、CLI、HTTP、エージェントのツール](#ui-cli-http-agent-tools)を参照)。
+段階 3 は済みました。パッケージの公開セルのシンボルのプレビューは、あとに回します。
 
 <a id="decisions"></a>
 <a id="open-questions"></a>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Bot, Box, ChevronDown, ChevronRight, CircuitBoard, Cpu, Download, FileCode2, FileUp, FolderPlus, GitBranch, GitPullRequestArrow, LayoutDashboard, Library, Loader2, Lock, PackagePlus, Plus, RefreshCw, Search, Shapes, ShieldAlert, ShieldCheck, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bot, Box, ChevronDown, ChevronRight, CircuitBoard, Cpu, Download, FileCode2, FileUp, FolderPlus, GitBranch, GitPullRequestArrow, LayoutDashboard, Library, Loader2, Lock, Package, PackagePlus, Plus, RefreshCw, Search, Shapes, ShieldAlert, ShieldCheck, Trash2, X } from "lucide-react";
 import { tabViewOf, type ChangeItem } from "./panels/changeItems";
 import type { GitStatus, LiveWriter, SymbolAffectedView, Writer } from "./api";
 import { api, ChatImage, CellInfo, ChangesetMerge, DepsStatus, LibraryInfo, PdkInfo, ProbeResult, ProjectInfo, ToolRecord, ViewKind } from "./api";
@@ -7,6 +7,7 @@ import { incompatibleOf, problemsOf, type DepAdd, type ResolvedDep, type TrustCo
 import { LayoutEditor } from "./editors/LayoutEditor";
 import { LanguageMenu } from "./LanguageMenu";
 import { PdkFetchDialog, pdkStateText } from "./PdkFetchDialog";
+import { PackagesDialog } from "./PackagesDialog";
 import { TrustDialog } from "./TrustDialog";
 import { Logo } from "./Logo";
 import { ChatPanel, Selection, WorkTarget } from "./panels/ChatPanel";
@@ -176,6 +177,7 @@ export function App() {
   const [deps, setDeps] = useState<DepsStatus | null>(null);
   const [pdkMenu, setPdkMenu] = useState(false);         // the PDK badge's menu
   const [pdkFetch, setPdkFetch] = useState(false);       // the PDK Fetch dialog
+  const [showPackages, setShowPackages] = useState(false);   // the Packages section: an index's packages
   const [trustName, setTrustName] = useState<string | null>(null);   // the Trust dialog of that dependency
   const [refusal, setRefusal] = useState<Refusal | null>(null);      // a refusal with its list (resolution, PDK)
   const pdkMenuRef = useRef<HTMLDivElement>(null);
@@ -780,6 +782,17 @@ export function App() {
       },
     });
   };
+  /** A package added from the Packages dialog: the project and its lock read again, and what came with it said. */
+  const packageAdded = async (name: string, r: DepAdd) => {
+    if (!project) return;
+    setShowPackages(false);
+    await loadProject(project);
+    await loadDeps(project);
+    toggleLib(name, true);
+    const result = addedText(name, r);
+    if (result) setTimeout(() => ask({ title: msg("app:dependency.addedTitle", { name }), message: result, fields: [], submitLabel: msg("common:actions.ok") }), 0);
+    else toast(msg("app:dependency.addedPackage", { name, package: r.package ?? name, version: r.version ?? "", commit: r.commit.slice(0, 7) }));
+  };
   /** What an add brought besides the dependency: the packages it needs, and content not trusted; null when nothing. */
   const addedText = (name: string, r: DepAdd): UiText | null => {
     const brought = (r.resolved ?? []).filter((x) => x.name !== name && x.package);
@@ -803,6 +816,7 @@ export function App() {
   const updateDep = async (lib: string) => {
     if (!project) return;
     const d = deps?.libraries.find((x) => x.name === lib);
+    if (d?.index) return updatePackage(lib, d);
     const done = await ask({
       title: msg("app:dependency.update", { library: lib }), submitLabel: msg("common:actions.update"),
       message: msg("app:dependency.updateDescription", { revision: d?.rev ?? msg("app:dependency.defaultBranch"), commit: (d?.locked ?? "").slice(0, 7) }),
@@ -836,6 +850,38 @@ export function App() {
       },
     });
     return done;
+  };
+
+  /** A package from an index moves to the newest version its requirement accepts, or a new requirement given here. */
+  const updatePackage = async (lib: string, d: DepsStatus["libraries"][number]) => {
+    if (!project) return;
+    return ask({
+      title: msg("app:dependency.updatePackage", { library: lib }), submitLabel: msg("common:actions.update"),
+      message: msg("app:dependency.updatePackageDescription", { library: lib, version: d.version ?? "" }),
+      fields: [{ name: "version", label: msg("app:packages.requirement"), value: d.requirement ?? "", mono: true }],
+      submit: async (v) => {
+        let r: Awaited<ReturnType<typeof api.depUpdate>>;
+        try {
+          const next = v.version?.trim();
+          r = await api.depUpdate(project, lib, undefined, next && next !== d.requirement ? next : undefined);
+        } catch (e) {
+          const listed = listedRefusal(e);
+          if (!listed) throw e;
+          setRefusal(listed);
+          return firstLine(e);
+        }
+        await loadProject(project);
+        await loadDeps(project);
+        await loadCells(lib);
+        const moved = (r.packages_changed ?? []).filter((x) => x.package);
+        const lines: UiText[] = moved.length ? moved.map((x) => {
+          const named = { package: x.package!, from: short(x.from), to: short(x.to) };
+          return msg(x.from === null ? "app:dependency.packageAdded" : x.to === null ? "app:dependency.packageDropped" : "app:dependency.packageMoved", named);
+        }) : [msg("app:dependency.noChanges")];
+        if (r.used_by.length) lines.push("", msg("app:dependency.usedBy"), ...r.used_by);
+        setTimeout(() => ask({ title: msg("app:dependency.updated", { library: lib }), message: joinText(lines), fields: [], submitLabel: msg("common:actions.ok") }), 0);
+      },
+    });
   };
 
   const removeDep = async (lib: string) => {
@@ -1020,6 +1066,15 @@ export function App() {
 
   // a dependency library's tags: who needs it (installed for a package, not named in project.json), the package an
   // alias name installs, or the alias a package's own name serves
+  /** "→ 1.3.0" on a dependency from an index with a newer version in the local copy of its index. */
+  const newerTag = (name: string) => {
+    const row = deps?.libraries.find((x) => x.kind === "dependency" && x.name === name);
+    const n = row?.newer;
+    if (!n || !(n.accepted ?? n.newest)) return null;
+    return <span className="tag mono newer" title={t("app:dependency.newerHint", { accepted: n.accepted ?? "-",
+      requirement: row?.requirement ?? "*", newest: n.newest ?? n.accepted ?? "-" })}>
+      {t("app:dependency.newer", { version: (n.accepted ?? n.newest)! })}</span>;
+  };
   const depTags = (l: LibraryInfo) => {
     const row = deps?.libraries.find((x) => x.kind === "dependency" && x.name === l.name);
     const via = l.via?.length ? l.via : row?.via ?? [];
@@ -1112,6 +1167,8 @@ export function App() {
     <div className="app">
       <DialogHost />
       {pdkFetch && project && <PdkFetchDialog project={project} onClose={() => setPdkFetch(false)} onFetched={() => pdksChanged()} />}
+      {showPackages && project && <PackagesDialog project={project} readOnly={inPreview} onClose={() => setShowPackages(false)}
+        taken={(n) => !!info?.libraries.some((l) => l.name === n)} onAdded={packageAdded} />}
       {trustName && project && <TrustDialog project={project} name={trustName} onClose={() => setTrustName(null)} onChanged={() => loadDeps(project)} />}
       {refusal && <RefusalDialog refusal={refusal} onClose={() => setRefusal(null)} />}
       <header className="topbar">
@@ -1196,6 +1253,7 @@ export function App() {
           <div className="lbhead">
             <div className="searchbox"><Search size={13} /><input placeholder={t("app:cell.find")} value={filter} onChange={(e) => setFilter(e.target.value)} /></div>
             <button className="icon" title={t("app:library.new")} onClick={newLibrary}><FolderPlus size={15} /></button>
+            <button className="icon" title={t("app:packages.open")} onClick={() => setShowPackages(true)}><Package size={15} /></button>
             <button className="icon" title={t("app:dependency.addHint")} disabled={inPreview} onClick={addDep}><PackagePlus size={15} /></button>
           </div>
           <div className="lbscroll">
@@ -1233,6 +1291,7 @@ export function App() {
                         {l.readonly && <Lock size={12} className="dim" />}
                         {l.version && <span className="tag mono" title={t("app:dependency.pinned", { version: l.version })}>{l.version}</span>}
                         {l.origin === "dep" && depTags(l)}
+                        {l.origin === "dep" && newerTag(l.name)}
                         <span className="grow" />
                         {libraryCount(gitCells, l.name) > 0 && <span className="gitcount" title={t("history:changedCells", { count: libraryCount(gitCells, l.name) })}>
                           {libraryCount(gitCells, l.name)}</span>}

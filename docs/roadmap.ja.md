@@ -13,12 +13,13 @@ commit 全体と木のハッシュで固定し、確認した後に ciel で取�
 自分の依存を持ち込める。セル名の重なりと PDK の食い違いを、何かを install する前に見つける。依存のコードブロックと RTL は、人が
 信頼してから使う。[ライブラリと依存関係](guide/libraries.ja.md)を参照)も済んでいます。これから作るもの:
 
-- [ ] **段階 3: index。** 公開と private の index から、パッケージを名前とバージョンで取ることはできました: `pkg search`、
+- [x] **段階 3: index。** 公開と private の index から、パッケージを名前とバージョンで取ることはできました: `pkg search`、
   `pkg add`、`pkg update`、バージョン範囲、yank されたバージョン、複数の index
   ([インデックスのパッケージ](guide/libraries.ja.md#packages-from-an-index))。既定の index
   [kadomoto-lab/undine-index](https://github.com/kadomoto-lab/undine-index) はできていますが、まだパッケージはありません。
   `pkg licenses`、`pkg vendor`、`pkg sync --from-vendor` はでき、テープアウトのバンドルが固定した木とそのライセンスを持ちます
-  ([ライセンスと vendor](guide/libraries.ja.md#licences-and-vendoring))。これから作るもの: ライブラリブラウザのパッケージ欄。ブラウザからの
+  ([ライセンスと vendor](guide/libraries.ja.md#licences-and-vendoring))。ライブラリブラウザにパッケージ欄があり、依存の行に新しいバージョンを表示します
+  ([ブラウザのパッケージ欄](guide/libraries.ja.md#packages-in-the-browser))。パッケージのセルのシンボルのプレビューはあとに回します。ブラウザからの
   取得は、設定した index のホストと `serve --dep-host` で指定したホストにだけ行き、どの取得も `UNDINE_FETCH_MAX` で止まります。
 - [ ] **段階 4: changeset とエージェント。** 依存の変更を、ほかの変更と同じようにレビューして採用する。エージェントは依存を提案
   できるが、取得するのは人だけ。結果に、それを作ったパッケージと PDK のバージョンを記録する。

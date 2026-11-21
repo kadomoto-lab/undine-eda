@@ -524,6 +524,24 @@ body.resizing iframe, body.resizing canvas { pointer-events: none; }
 .checkopt.on { color: var(--text); border-color: rgba(var(--accent-rgb), 0.6); background: rgba(var(--accent-rgb), 0.12); }
 .checkopt input { accent-color: var(--accent); margin: 0; }
 
+/* the Packages section of the library browser (PackagesDialog.tsx): an index's packages beside the one picked */
+.modal.pkgdialog { width: min(780px, calc(100vw - 32px)); }
+.pkgbar { display: flex; gap: 8px; align-items: center; }
+.pkgbar select.txt { padding: 5px 7px; width: auto; }
+.pkgpanes { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; min-height: 260px; }
+.pkglist { border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; max-height: 46vh; }
+.pkgrow { padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.pkgrow:hover { background: var(--bg2); }
+.pkgrow.cur { background: rgba(var(--accent-rgb), 0.12); }
+.pkgdetail { display: flex; flex-direction: column; gap: 8px; overflow: auto; max-height: 46vh; min-width: 0; }
+.pkgversions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.pkgversions .chip { cursor: pointer; }
+.chip.struck { text-decoration: line-through; cursor: default; }
+.pkgadd { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pkgadd .modalfield { display: flex; flex-direction: column; gap: 3px; }
+.pkgadd .fielderr { grid-column: 1 / -1; }
+@media (max-width: 640px) { .pkgpanes { grid-template-columns: 1fr; } }
+
 /* ---------------------------------------------------------------- review (a changeset docked beside the drawing) */
 /* the review of a changeset sits at the right, beside the drawing; the chat lives in the left column, above the cells */
 .main.reviewing { padding-right: var(--drawer-w, 460px); }

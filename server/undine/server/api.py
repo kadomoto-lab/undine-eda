@@ -26,7 +26,7 @@ from pydantic import BaseModel, FiniteFloat
 
 from undine.agents import agent, turns, llm, llm_context, mcp as mcpmod
 from undine.server import live
-from undine.store import deps, locked, oplog, provenance, cellviews, trust, vendor
+from undine.store import deps, locked, oplog, packages, provenance, cellviews, trust, vendor
 from undine.checks import magicflow, parasitics, stdcells, tapeout, verify
 from undine.pdks import ciel, compat, fetchjobs, pcell, pdkops
 from undine.schematics import schematic, xschem, symbolcheck, symbolsync, netlist as netlistmod
@@ -1406,14 +1406,17 @@ class NewLibrary(BaseModel):
 
 class NewDep(BaseModel):
     name: str
-    git: str
+    git: str | None = None               # None: a package from an index (`package`, `version`, `index`)
     rev: str | None = None
     subdir: str | None = None
     package: str | None = None           # the package expected at that place (its manifest's name), when not `name`
+    version: str | None = None           # a package from an index: the requirement (default: ^ the newest that fits)
+    index: str | None = None             # its index, a nickname or URL (default: the default index)
 
 
 class DepUpdate(BaseModel):
     rev: str | None = None
+    version: str | None = None           # a package from an index: a new requirement, written to project.json
 
 
 class SetPdk(BaseModel):
@@ -2040,7 +2043,51 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
     def deps_status(project: str):
         """The project as locked (undine.lock) vs. as installed here: dependencies, PDK, tool versions, issues."""
         try:
-            return deps.status(srv.project(project))
+            prj = srv.project(project)
+            st = deps.status(prj)
+            newer = packages.newer(prj)          # the local copies of the indexes: never fetched here
+            for row in st["libraries"]:
+                if row.get("name") in newer:
+                    row["newer"] = newer[row["name"]]
+            return st
+        except Exception as e:
+            raise _err(e)
+
+    # the Packages section of the library browser (store/packages.py): an index is read under the rule of a git
+    # dependency (--dep-root, --dep-host); the first read fetches it, then only a refresh does
+
+    @app.get("/api/packages")
+    def packages_search(q: str = "", index: str | None = None, project: str | None = None):
+        """The newest version of each package of an index whose name or description holds `q`."""
+        try:
+            prj = srv.project(project) if project else None
+            return packages.search(q, index, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
+        except Exception as e:
+            raise _err(e)
+
+    @app.get("/api/packages/{name}")
+    def packages_info(name: str, index: str | None = None, project: str | None = None):
+        """Every version of a package, with whether each fits the project's PDK, and the version the project locks."""
+        try:
+            prj = srv.project(project) if project else None
+            return packages.info(name, index, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
+        except Exception as e:
+            raise _err(e)
+
+    @app.get("/api/indexes")
+    def indexes_list(project: str | None = None):
+        """The indexes known here and to the project, with the commit last fetched."""
+        try:
+            return {"indexes": packages.indexes(srv.project(project) if project else None)}
+        except Exception as e:
+            raise _err(e)
+
+    @app.post("/api/indexes/{name}/refresh")
+    def indexes_refresh(name: str, project: str | None = None):
+        """Fetches an index (a nickname, or `undine`) again."""
+        try:
+            prj = srv.project(project) if project else None
+            return packages.refresh(name, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
         except Exception as e:
             raise _err(e)
 
@@ -2051,8 +2098,11 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
     def deps_add(project: str, req: NewDep):
         """Adds a library dependency (a git repository at a rev), installs it read-only and locks its commit."""
         try:
+            if req.git is None and not req.package:
+                raise ValueError("give `git` (a repository) or `package` (a package from an index)")
             r = deps.add(_no_preview(project), req.name, req.git, req.rev, req.subdir, guard=srv.lock,
-                         local_roots=srv.dep_roots, package=req.package, hosts=srv.dep_hosts)
+                         local_roots=srv.dep_roots, package=req.package, version=req.version, index=req.index,
+                         hosts=srv.dep_hosts)
             _deps_changed(project)           # packages it reached may have moved under names already open
             return r
         except Exception as e:
@@ -2086,7 +2136,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """Moves a dependency to `rev` (default: its rev again); returns the changed files and the cells using them."""
         try:
             r = deps.update(_no_preview(project), name, req.rev, guard=srv.lock, local_roots=srv.dep_roots,
-                            hosts=srv.dep_hosts)
+                            version=req.version, hosts=srv.dep_hosts)
             _deps_changed(project)
             return r
         except Exception as e:

@@ -24,6 +24,8 @@ vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")
   activity: vi.fn(async () => ({ records: [], last: 0, writer: null })),
   deps: vi.fn(),
   depsSync: vi.fn(), depsLock: vi.fn(), depAdd: vi.fn(), setPdk: vi.fn(),
+  depUpdate: vi.fn(), indexes: vi.fn(async () => ({ indexes: [] })), packageInfo: vi.fn(),
+  packages: vi.fn(async () => ({ index: "u", index_name: "undine", commit: null, packages: [] })),
   trustList: vi.fn(), trustConfirm: vi.fn(), trust: vi.fn(), untrust: vi.fn(),
   gitStatus: vi.fn(async () => ({ repo: false, setup: null, prefix: null, branch: null, head: null, operation: null, conflicted: [], cells: [], other: [], unsaved: [] })),
   gitLog: vi.fn(async () => ({ commits: [], more: false })),
@@ -218,4 +220,27 @@ it("shows the packages that do not accept the PDK when moving the PDK is refused
   expect(within(refused).getByTestId("refusal-list").textContent)
     .toBe("p -> analog_ip 1.2.0 (v1.2.0 @ 229914698b1f): bbbbbbbbbbbb is not among commits aaaaaaaaaaaa");
   expect(refused.textContent).toContain(t("app:refusal.pdkFix"));
+});
+
+it("shows the newer version of a package from an index, opens Packages, and updates it by requirement", async () => {
+  mocked.deps.mockResolvedValue(status({ libraries: ROWS.map((r) => r.name === "analog_ip"
+    ? { ...r, index: "https://github.com/kadomoto-lab/undine-index.git", requirement: "^1.2", newer: { accepted: "1.3.0", newest: "2.0.0" } } : r) }));
+  render(<App />);
+  await settle();
+  const tag = libRow("analog_ip").querySelector(".newer") as HTMLElement;
+  expect(tag.textContent).toBe(t("app:dependency.newer", { version: "1.3.0" }));
+  expect(tag.title).toContain("2.0.0");
+  expect(libRow("bias").querySelector(".newer")).toBeNull();
+
+  fireEvent.click(screen.getByTitle(t("app:packages.open")));
+  await settle();
+  expect(screen.getByRole("dialog", { name: t("app:packages.title") })).toBeTruthy();
+  fireEvent.click(screen.getByTitle(t("common:actions.cancelShortcut")));
+  await settle();
+
+  const update = [...libRow("analog_ip").querySelectorAll("button")].find((b) => b.getAttribute("title") === t("app:dependency.updateHint"))!;
+  fireEvent.click(update);
+  await settle();
+  expect(screen.getByText(t("app:dependency.updatePackage", { library: "analog_ip" }))).toBeTruthy();
+  expect((screen.getByDisplayValue("^1.2") as HTMLInputElement)).toBeTruthy();
 });

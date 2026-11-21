@@ -92,7 +92,8 @@ Undine の外でライブラリのレイアウトを読むには、その `.oas`
        inst sky130_fd_pr__nfet_01v8_w1p0_l0p15_nf1_451f14  r0 *1 645,975
     ```
 
-- セルのファイルと操作ログ(`*.sch`、`*.sym`、`*.oas`、`*.netlist.yaml`、`*.intent.yaml`、`history/*.jsonl`: `merge=undine`)の
+- セルのファイル、操作ログ、`project.json`、`undine.lock`(`*.sch`、`*.sym`、`*.oas`、`*.netlist.yaml`、`*.intent.yaml`、
+  `history/*.jsonl`、`project.json`、`undine.lock`: `merge=undine`)の
   **マージドライバ**。`git merge`(と `git pull`、`git rebase`、`git cherry-pick`)が、これらを行単位ではなくオブジェクト単位でマージします。
   これには**仮想マージベース**のドライバ(`merge.undine.recursive = undine-base`。`merge-driver --virtual-base` を実行します)が伴います:
   互いにマージし合ったブランチにはマージベースが複数あり、git はまずそれらを 1 つにマージします。それらのマージベースが衝突するところ

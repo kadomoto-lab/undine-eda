@@ -26,7 +26,9 @@ and RTL used only once a person trusts it; see [Libraries and dependencies](guid
   `serve --dep-host`, and every fetch stops at `UNDINE_FETCH_MAX`.
 - [ ] **Phase 4: changesets and agents.** Dependency changes reviewed and adopted like any other change; an agent can
   propose a dependency, but only a person fetches it; results that record the package and PDK versions they were
-  made with.
+  made with. Done so far: `project.json` and `undine.lock` merge entry by entry, in `git merge` and in a changeset's
+  adopt, and an adopt whose merged lock no longer pins what `project.json` asks is refused
+  ([merge.md](design/merge.md)).
 - [ ] **Phase 5: publishing.** Commands to check, pack and publish a package, with its check report linked from the
   index, and a report of what changed between two versions down to each cell.
 - [ ] **Phase 6: PDK profiles.** Each PDK family's process knowledge as a data package that names the PDK versions it

@@ -499,6 +499,22 @@ much larger than the package. When the size is expected, raise the limit for tha
 UNDINE_FETCH_MAX=4294967296 pixi run python -m undine pkg add demo big_ip
 ```
 
+### Adopting a changeset: `after merging project.json and undine.lock: …`
+
+The whole message names a dependency, as `lib status` would: `ip: project.json asks for rev v2, undine.lock locks v1`,
+or a package the lock needs and does not lock.
+
+**Cause.** Undine merges `project.json` and `undine.lock` entry by entry, and each side's change merged cleanly, but
+the merged pair does not fit: one change moved a requirement and the other the locked entry (or a package one side
+needs was removed by the other). The adopt was refused before anything was written.
+
+**Fix.** In the changeset, run the update again so that its requirement and its lock entry match what the project has
+now (or adopt the other change first and update after it), then adopt again. On the project itself:
+
+```sh
+pixi run python -m undine lib lock demo
+```
+
 ### `pkg vendor`: `not in the store or installed: …`
 
 The whole message ends with `run python -m undine lib sync PROJECT, or pkg vendor from the command line, which

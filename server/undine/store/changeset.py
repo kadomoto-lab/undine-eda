@@ -2574,7 +2574,41 @@ class Changesets:
         self._symbol_conflicts(prj, meta, plan, self._transactions(plan["records"]), tip, revert)
         if not revert:
             self._journal_conflicts(plan)
+        self._dependency_conflicts(prj, plan)
         return plan
+
+    @staticmethod
+    def _dependency_conflicts(prj, plan: dict) -> None:
+        """project.json and undine.lock merge entry by entry (vcs/depmerge.py), each side's change kept; the result
+        must still be a lock that pins what project.json asks (deps.merged_problems). A problem the merged files have
+        and the project's own files (ours) do not is a conflict of undine.lock: the adopt is refused with the reason,
+        nothing written. Nothing is resolved or fetched here: `lib lock` on the project, or an update in the
+        changeset, does that."""
+        d, rels = prj.path, ("project.json", deps.LOCK)
+        if not any(r in plan["paths"] for r in rels) or any(c["path"] in rels for c in plan["conflicts"]):
+            return
+
+        def ours(rel: str) -> bytes | None:
+            return (d / rel).read_bytes() if (d / rel).is_file() else None
+
+        def problems(pj: bytes | None, lk: bytes | None) -> list[str]:
+            try:
+                meta = json.loads(pj) if pj is not None else {}
+                lock = deps.parse_lock(lk.decode("utf-8")) if lk is not None else None
+            except deps.DepError as e:
+                return [str(e)]
+            except (ValueError, UnicodeDecodeError) as e:
+                return [f"project.json is not valid JSON ({e})"]
+            if not isinstance(meta, dict):
+                return ["project.json is not a JSON object"]
+            return deps.merged_problems(prj, meta, lock)
+        merged = {r: plan["writes"][r] if r in plan["writes"] else ours(r) for r in rels}
+        before = set(problems(ours("project.json"), ours(deps.LOCK)))
+        new = [p for p in problems(merged["project.json"], merged[deps.LOCK]) if p not in before]
+        if new:
+            plan["conflicts"].append({"path": deps.LOCK, "kind": "lock", "conflicts": [
+                {"id": f"resolve:{i}", "what": f"after merging project.json and {deps.LOCK}: {p}", "base": None,
+                 "ours": None, "theirs": None, "taken": "ours", "resolved": False} for i, p in enumerate(new)]})
 
     @staticmethod
     def _keep_libraries(prj, meta: dict, plan: dict, tip: str, base: str) -> None:

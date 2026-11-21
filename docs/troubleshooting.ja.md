@@ -514,6 +514,23 @@ pixi run python -m undine serve --dep-host gitlab.com
 UNDINE_FETCH_MAX=4294967296 pixi run python -m undine pkg add demo big_ip
 ```
 
+<a id="adopting-a-changeset-after-merging-projectjson-and-undinelock"></a>
+### changeset の採用: `after merging project.json and undine.lock: …`
+
+メッセージ全体は、`lib status` と同じように依存関係を示します: `ip: project.json asks for rev v2, undine.lock locks v1`、
+または lock が必要としているのに固定していないパッケージ。
+
+**原因。** Undine は `project.json` と `undine.lock` をエントリ単位でマージし、どちらの側の変更もきれいにマージされましたが、
+マージした 2 つのファイルが合っていません: 一方の変更が要求を、もう一方が固定したエントリを動かした(または一方が必要とする
+パッケージを、もう一方が取り除いた)ときです。何かを書く前に採用を拒否しました。
+
+**対処。** changeset の中で、要求と lock のエントリがプロジェクトの今の状態に合うように更新し直してから(またはもう一方の変更を
+先に採用し、その後で更新してから)、もう一度採用します。プロジェクト本体では:
+
+```sh
+pixi run python -m undine lib lock demo
+```
+
 <a id="pkg-vendor-not-in-the-store-or-installed"></a>
 ### `pkg vendor`: `not in the store or installed: …`
 

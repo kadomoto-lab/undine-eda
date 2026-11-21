@@ -184,6 +184,11 @@ def read_lock(project_path: Path) -> dict | None:
         text = (project_path / LOCK).read_text()
     except FileNotFoundError:
         return None
+    return parse_lock(text)
+
+
+def parse_lock(text: str) -> dict:
+    """The lock in `text`, refused (DepError) as read_lock refuses it."""
     try:
         lock = json.loads(text)
     except ValueError as e:
@@ -1965,6 +1970,26 @@ def _incomplete(prj, lock: dict | None, manifests: bool = True, own: bool = True
             if g.entries[g.direct[k]].get("package"):
                 out.setdefault(k, f"{k}: {why}")
     return out
+
+
+def merged_problems(prj, meta: dict, lock: dict | None) -> list[str]:
+    """What a project.json `meta` and a lock leave unresolved, from the two alone (no git, no index, no network): a
+    dependency the lock does not pin as `meta` names it (_stale), or whose locked graph cannot be installed as it is
+    (_incomplete from the lock). The adopt of a changeset checks its merged project.json and undine.lock with it
+    (changeset.py, _dependency_conflicts): each merges entry by entry (vcs/depmerge.py), and two changesets can each
+    be sound and their merge not (both moved one requirement, one changed the requirement and the other the entry)."""
+    view = copy.copy(prj)
+    view.meta = meta
+    specs = _git_specs(view)
+    if not specs:
+        return []
+    why = _stale(specs, lock, meta)
+    try:
+        for k, w in _incomplete(view, lock, manifests=False).items():
+            why.setdefault(k, w)
+    except DepError as e:
+        why.setdefault("", str(e))
+    return list(why.values())
 
 
 def _frozen(prj, specs: dict[str, dict], lock: dict | None) -> None:

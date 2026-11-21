@@ -439,6 +439,15 @@ connections. The variables, and `UNDINE_OFFLINE`, `UNDINE_STORE_LINK`, `UNDINE_C
   but not copied: ciel's releases keep it, and a sky130 variant is 1.1 GB. `pkg sync --from-vendor DIR` reads a vendored
   directory back into the store, checking every tree against the lock, so the project's dependencies can be installed
   again with no repository and no network.
+  *Implemented (phase 3, store/vendor.py):* the trees come from the store, else from an install that is exactly the
+  locked tree; the CLI asks before it fetches one in neither (`--yes`, `--offline`), the tapeout export never fetches.
+  The trees are written as plain files (0o755 for mode 100755) into `DIR/.vendor.new-<pid>`, each hashed again, and
+  the directory renamed to `vendor/` only when all match: a `vendor/` that exists is whole, and one that exists already
+  is refused. `vendor.json` also records the lock's format and SHA-256. `--from-vendor` takes the bundle or its
+  `vendor/`, matches each lock entry by commit and hash, hashes every directory (a link or special file refused)
+  before any object enters the store, then runs `lib sync --offline`; an entry the bundle lacks is left to the store.
+  When the export cannot vendor, the bundle is written without `vendor/`, `report.json` has `vendor.error` and a
+  `vendor` check warns. The profile package is not vendored yet (phase 6).
 
 ## Publishing
 
@@ -551,6 +560,11 @@ licence of every locked package and the PDK; `pkg vendor` writes that list into 
 vendored trees (see [Fetch and store](#fetch-and-store)). Third-party IP and reference data are fetched as
 packages, not copied into Undine or into a project (for example `server/undine/data/tt_sky130A_analog.json` is a
 candidate).
+
+*Implemented (phase 3):* a package's licence is its manifest's `license`, else the local copy of its index's line
+(read only, no fetch); a plain git dependency records none, and its top-level `LICENSE`, `COPYING`, `NOTICE` or
+`COPYRIGHT` files are listed. Until profile packages exist the PDK licences are a table in store/vendor.py (sky130,
+gf180mcu and ihp-sg13: Apache-2.0).
 
 ## Changesets and evidence
 
@@ -1089,8 +1103,10 @@ The default index repository, [`kadomoto-lab/undine-index`](https://github.com/k
 The remote-host policy (`serve --dep-host`) and the fetch size limit checked while git runs are built (see
 [Security](#security), Remote hosts).
 
-Still to build in phase 3: the library browser's Packages section and its HTTP endpoints; `pkg licenses`,
-`pkg vendor` (and the tapeout export running it) and `pkg sync --from-vendor`.
+`pkg licenses`, `pkg vendor` (also run by the tapeout export) and `pkg sync --from-vendor` are built (see
+[Fetch and store](#fetch-and-store), Vendoring, and [Licences](#licences)).
+
+Still to build in phase 3: the library browser's Packages section and its HTTP endpoints.
 
 ## Decisions
 

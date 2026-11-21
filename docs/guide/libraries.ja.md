@@ -442,6 +442,40 @@ ip/opamp (dependency analog_ip 1.2.0, not trusted): code block s1 line 1: .contr
 format 2 の lock は、直接の依存関係を `libraries` に、マニフェストを通してだけ届くパッケージを `packages` に、そのバージョン、
 ローカル名、依存関係とともに保ちます([undine.lock](../reference/data.ja.md#undinelock))。
 
+<a id="licences-and-vendoring"></a>
+### ライセンスと vendor
+
+依存関係のファイルは、公開した人のリポジトリに残ります。リポジトリが消されたり、private にされたり、書き換えられたりすると、
+まだストアに持っていないすべてのマシンで、そのバージョンが失われます。そこで、テープアウトに使ったものは自分の写しを持ちます:
+
+```sh
+pixi run python -m undine pkg licenses demo          # 固定した各依存関係と PDK のライセンス
+pixi run python -m undine pkg vendor demo out/       # out/vendor/: 固定した木、vendor.json、LICENSES.*
+```
+
+`pkg vendor` は固定したすべての木を、1 つずつディレクトリに分けて普通のファイルとして書きます。パッケージは
+`<package>@<version>/`、素の git 依存は `<name>@<commit>/` です。`vendor.json` には、それぞれについて lock が記録するもの
+(インデックス、git の URL、subdir、commit、木のハッシュ)と、PDK の固定を記録します。`LICENSES.json` と `LICENSES.md` は
+ライセンスの一覧です。パッケージのライセンスはマニフェストから、なければインデックスから取ります。素の git 依存には記録が
+ないので、代わりに最上位の `LICENSE`、`COPYING`、`NOTICE` のファイルを示します。PDK は記録しますがコピーしません。ciel の
+リリースが保っており、`pdk fetch` でもう一度インストールできます。
+
+どの木も、`vendor/` を置く前にハッシュし直して lock と比べます。木はストアから、またはそれが固定した木そのものであれば
+プロジェクトのインストールから取ります。どちらにもない木は、尋ねてから取得します(`--yes` なら尋ねずに取得し、`--offline`
+なら拒否します)。
+
+[テープアウトのエクスポート](tapeout.ja.md)は、すべてのバンドルに同じ手順を実行し、その `report.json` が vendor した木と
+ライセンスを一覧にします。
+
+その写しから、リポジトリもネットワークもなしにプロジェクトをインストールし直すには:
+
+```sh
+pixi run python -m undine pkg sync demo --from-vendor tapeout/tt-sky130-analog/tt_um_demo-20261121-101500
+```
+
+vendor したディレクトリは、どのファイルもストアに入れる前に、それぞれハッシュして `undine.lock` と比べます。手で変えた、
+加えた、消したファイルがあれば拒否し、何も読み込みません。そのあと lock をオフラインでインストールします。
+
 ## undine.lock
 
 ロックファイルには、依存関係のほかに、設計が依存しているものも記録します: PDK のバージョン(`project.json` が固定する id。

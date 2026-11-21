@@ -8,6 +8,9 @@
     pkg tree PROJECT            the dependency tree as locked
     pkg why PROJECT PACKAGE     the chains from the project to a package
     pkg lock PROJECT            as `lib lock`: resolve what the lock does not pin
+    pkg sync PROJECT            as `lib sync`; --from-vendor DIR installs from a vendored bundle, offline
+    pkg licenses PROJECT        the licence of every locked dependency and of the PDK
+    pkg vendor PROJECT DIR      DIR/vendor/: the locked trees and their licences, for a tapeout bundle
     pkg index list | update     the indexes known here, and fetching them again
 
 search, info and outdated read the local copy of each index (fetched once on first use); `pkg index update`, `pkg
@@ -42,6 +45,19 @@ def add_parser(sub) -> None:
         x.add_argument("project")
         if name == "outdated":
             x.add_argument("--offline", action="store_true", help="read the local copies; fetch no index")
+    y = pk.add_parser("sync", help="install the dependencies exactly as locked (as lib sync)")
+    y.add_argument("project")
+    y.add_argument("--offline", action="store_true", help="fetch nothing; install from the store")
+    y.add_argument("--from-vendor", metavar="DIR", help="read the trees `pkg vendor` wrote into DIR (a tapeout "
+                   "bundle, or its vendor/) into the store first, then install offline")
+    li = pk.add_parser("licenses", help="the licence of every locked dependency and of the PDK")
+    li.add_argument("project")
+    li.add_argument("--json", action="store_true", help="print LICENSES.json as pkg vendor writes it")
+    v = pk.add_parser("vendor", help="write the locked trees and their licences into DIR/vendor/")
+    v.add_argument("project")
+    v.add_argument("dir")
+    v.add_argument("--offline", action="store_true", help="fetch nothing: refuse a tree not in the store")
+    v.add_argument("--yes", action="store_true", help="fetch what is not in the store without asking")
     w = pk.add_parser("why", help="the chains from the project to a package")
     w.add_argument("project")
     w.add_argument("package")
@@ -80,6 +96,12 @@ def run(args: argparse.Namespace, store) -> int:
             return _tree(prj)
         elif args.pkg_cmd == "why":
             return _why(prj, args.package)
+        elif args.pkg_cmd == "sync":
+            return _sync(prj, args)
+        elif args.pkg_cmd == "licenses":
+            return _licenses(prj, args)
+        elif args.pkg_cmd == "vendor":
+            return _vendor(prj, args)
         st = deps.status(prj)
         for i in st["issues"]:
             print(f"! {i}")
@@ -270,4 +292,68 @@ def _why(prj, package: str) -> int:
     for id in ids:
         for chain in g.chains(id):
             print(g.chain_text(prj.name, chain))
+    return 0
+
+
+# ------------------------------------------------------------------ licences and vendoring
+
+
+def _sync(prj, args) -> int:
+    from undine.__main__ import _sync as lib_sync
+    from undine.store import vendor
+    if not args.from_vendor:
+        lib_sync(prj, args)
+        return 0
+    r = vendor.sync_from_vendor(prj, args.from_vendor)
+    for x in r["imported"]:
+        print(f"{x['name']}: {x['action']}" + (f" from vendor/{x['dir']}" if x["dir"] else ""))
+    for x in r["sync"]:
+        print(f"{x['name']}: {x['action']} {(x['commit'] or '-')[:12]}")
+        if x.get("warning"):
+            print(f"~ {x['warning']}")
+    return 0
+
+
+def _licenses(prj, args) -> int:
+    import json
+
+    from undine.store import vendor
+    data = vendor.licenses(prj)
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+        return 0
+    rows = [(r.get("package") or r["name"], r.get("version") or f"git {str(r.get('commit'))[:12]}",
+             r.get("license") or "not recorded",
+             r.get("license_from") or (", ".join(r["license_files"]) if r.get("license_files") else "-"),
+             r.get("note")) for r in data["entries"]]
+    if not rows:
+        print("no dependency is locked")
+    w = max([len(r[0]) for r in rows] + [10])
+    for name, version, lic, where, note in rows:
+        print(f"{name:<{w}}  {version:<16} {lic:<20} {where}" + (f"  ({note})" if note else ""))
+    p = data["pdk"]
+    if p:
+        print(f"PDK {p.get('id')}: {p.get('license') or 'not recorded'}"
+              + (f" ({p['license_from']})" if p.get("license_from") else ""))
+    return 0
+
+
+def _vendor(prj, args) -> int:
+    from undine.store import vendor
+
+    def confirm(names: list[str]) -> bool:
+        print(f"not in the store or installed: {', '.join(names)}")
+        if args.yes:
+            return True
+        try:
+            return input("fetch them from their repositories? [y/N] ").strip().lower() in ("y", "yes")
+        except EOFError:
+            return False
+    r = vendor.vendor(prj, args.dir, offline=args.offline, confirm=confirm)
+    for x in r["entries"]:
+        print(f"{x['dir']}: {x['files']} files, {x['bytes']} bytes")
+    unknown = [e.get("package") or e["name"] for e in r["licenses"]["entries"] if not e.get("license")]
+    print(f"wrote {r['dir']} ({len(r['entries'])} trees, vendor.json, LICENSES.json, LICENSES.md)")
+    if unknown:
+        print(f"~ no licence recorded for {', '.join(unknown)}: see their licence files in LICENSES.md")
     return 0

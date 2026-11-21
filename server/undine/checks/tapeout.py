@@ -659,9 +659,13 @@ def _sha(p: Path) -> str:
 
 
 def export_bundle(project_path: Path, layout: kdb.Layout, lib: str, cell_name: str, pdk: Pdk, target: str, params: dict,
-                  revision: str | None = None, provenance: dict | None = None, golden: Path | None = None) -> dict:
+                  revision: str | None = None, provenance: dict | None = None, golden: Path | None = None,
+                  vendor=None) -> dict:
     """Writes <project>/tapeout/<target>/<top>-<time>/: GDS, LEF, Verilog stub, info.yaml, docs and report.json (+ zip).
-    `provenance` goes into report.json: {"layout": content hash of the exported cell, "signoff": Server.signoff()}."""
+    `provenance` goes into report.json: {"layout": content hash of the exported cell, "signoff": Server.signoff()}.
+    `vendor(dir)`: writes dir/vendor/ (store/vendor.py: the locked dependency trees and their licences) and returns its
+    summary, which report.json lists; when it fails the bundle is written all the same, report.json says why and a
+    `vendor` check warns."""
     checks = run_checks(layout, cell_name, pdk, target, params, golden)
     top = ((params.get("top_module") or cell_name).strip() if target == "tt-sky130-analog" else
            cf_top(params) if target == "chipfoundry-caravel" else cell_name)
@@ -693,9 +697,22 @@ def export_bundle(project_path: Path, layout: kdb.Layout, lib: str, cell_name: s
     if target == "chipfoundry-caravel":
         (d / "SUBMIT.md").write_text(_cf_submit(top, params))
         files.append(d / "SUBMIT.md")
+    vendored = None
+    if vendor is not None:
+        try:
+            v = vendor(d)
+            vendored = {"dir": "vendor", "entries": v["entries"], "pdk": v["pdk"],
+                        "licenses": [{k: e.get(k) for k in ("name", "package", "version", "license")}
+                                     for e in v["licenses"]["entries"]]}
+            files += [p for p in sorted((d / "vendor").glob("*")) if p.is_file()]
+        except Exception as e:                       # the layout bundle stands without it; report.json says why
+            vendored = {"error": str(e)}
+            checks = checks + [Check("vendor", "Dependencies vendored", "warn",
+                                     f"vendor/ was not written: {e}").public()]
     report = {"target": target, "label": TARGETS[target]["label"], "params": params, "lib": lib, "cell": cell_name, "top": top,
               "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "pdk": pdk.id, "tools": _tool_versions(), "design_revision": revision,
               "checks": checks, "files": {str(f.relative_to(d)): _sha(f) for f in files}, **(provenance or {}),
+              **({"vendor": vendored} if vendor is not None else {}),
               "note": "Local layout checks only. Run the sign-off suite (KLayout, Magic DRC, Magic+Netgen LVS) and the shuttle's own precheck before submitting."}
     (d / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     z = shutil.make_archive(str(d), "zip", d.parent, d.name)

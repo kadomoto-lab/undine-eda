@@ -9,6 +9,13 @@
 - **ChipFoundry - Caravel user project (SKY130)**
 - **Layout hygiene only (any shuttle)**
 
+どのバンドルにも `vendor/` が入ります。プロジェクトが固定した依存関係を普通のファイルとして収めたもの、`undine.lock` が固定する
+ものを記録した `vendor.json`(PDK も含みます。PDK は記録するだけでコピーしません)、`LICENSES.md` / `LICENSES.json` です。これで
+バンドルは、依存関係のリポジトリが残り続けることに頼らずにすみ、`pkg sync --from-vendor BUNDLE` でそこからプロジェクトを
+インストールし直せます([ライセンスと vendor](libraries.ja.md#licences-and-vendoring))。`report.json` は vendor した木とその
+ライセンスを一覧にします。固定した木がストアにもインストールにもないときは、`vendor/` なしでバンドルを書き、`report.json` に
+理由を記録し、`vendor` のチェックが警告します。`lib sync` を実行してから、もう一度エクスポートしてください。
+
 ## Tiny Tapeout - SKY130 analog
 
 レイアウトのチェックは `tt-support-tools`(Apache-2.0)の事前チェックに倣っており、公式のピン表(`server/undine/data/tt_sky130A_analog.json`)を使います:

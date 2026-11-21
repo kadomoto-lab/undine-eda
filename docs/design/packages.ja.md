@@ -428,6 +428,15 @@ tmp/                              書き込みはすべてまずここに入り�
   リリースが保っており、sky130 の 1 つの variant は 1.1 GB あるからです。`pkg sync --from-vendor DIR` は vendor したディレクトリを
   ストアに読み戻し、どの木も lock と照合します。こうしてリポジトリもネットワークもなしに、プロジェクトの依存をもう一度 install
   できます。
+  *実装済み(段階 3、store/vendor.py):* 木はストアから、なければ固定した木そのものである install から取ります。どちらにもない
+  木は、CLI では取得の前に尋ね(`--yes`、`--offline`)、テープアウトの書き出しでは決して取得しません。木は普通のファイル
+  (モード 100755 なら 0o755)として `DIR/.vendor.new-<pid>` に書き、それぞれハッシュし直し、すべてが合ったときだけディレクトリを
+  `vendor/` に名前を変えます。そのため、ある `vendor/` は常に完全で、すでにあれば拒否します。`vendor.json` には lock の形式と
+  SHA-256 も記録します。`--from-vendor` はバンドルかその `vendor/` を受け取り、lock の各エントリを commit とハッシュで対応させ、
+  どのオブジェクトもストアに入れる前にすべてのディレクトリをハッシュし(リンクや特殊なファイルは拒否)、そのあと
+  `lib sync --offline` を実行します。バンドルにないエントリはストアに任せます。書き出しが vendor できないときは、`vendor/` なしで
+  バンドルを書き、`report.json` に `vendor.error` を入れ、`vendor` のチェックが警告します。プロファイルのパッケージはまだ vendor
+  しません(段階 6)。
 
 <a id="publishing"></a>
 
@@ -536,12 +545,18 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 ジョブが使うプロファイルの欄はジョブの入力に入るので([evidence](#changesets-and-evidence)を参照)、変わった欄を使った結果は
 古くなり、ほかの結果は古くなりません。
 
+<a id="licences"></a>
+
 ## ライセンス
 
 公開には `license`(SPDX)が必須です。PDK のライセンスはプロファイルのパッケージから取ります。`pkg licenses PROJECT` は、
 固定したすべてのパッケージと PDK のライセンスを一覧にします。`pkg vendor` はその一覧を、vendor した木と並べてテープアウトの
 バンドルに書きます([取得とストア](#fetch-and-store)を参照)。サードパーティの IP や参照データは
 パッケージとして取得し、Undine にもプロジェクトにもコピーしません(たとえば `server/undine/data/tt_sky130A_analog.json` が候補)。
+
+*実装済み(段階 3):* パッケージのライセンスは manifest の `license`、なければ手元の index の写しの行から取ります(読むだけで
+取得しない)。素の git 依存には記録がなく、最上位の `LICENSE`、`COPYING`、`NOTICE`、`COPYRIGHT` のファイルを示します。
+プロファイルのパッケージができるまでは、PDK のライセンスは store/vendor.py の表です(sky130、gf180mcu、ihp-sg13: Apache-2.0)。
 
 <a id="changesets-and-evidence"></a>
 
@@ -1056,8 +1071,10 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 リモートのホストの方針(`serve --dep-host`)と、git の実行中に確かめる取得の大きさの上限はできています([セキュリティ](#security)
 のリモートのホストを参照)。
 
-段階 3 でこれから作るもの: ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント。`pkg licenses`、`pkg vendor`(とそれを
-実行するテープアウトの書き出し)、`pkg sync --from-vendor`。
+`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` はできています([取得とストア](#fetch-and-store)
+の vendor と、[ライセンス](#licences)を参照)。
+
+段階 3 でこれから作るもの: ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント。
 
 <a id="decisions"></a>
 <a id="open-questions"></a>

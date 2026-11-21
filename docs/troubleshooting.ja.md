@@ -514,6 +514,36 @@ pixi run python -m undine serve --dep-host gitlab.com
 UNDINE_FETCH_MAX=4294967296 pixi run python -m undine pkg add demo big_ip
 ```
 
+<a id="pkg-vendor-not-in-the-store-or-installed"></a>
+### `pkg vendor`: `not in the store or installed: …`
+
+メッセージ全体は `run python -m undine lib sync PROJECT, or pkg vendor from the command line, which fetches them;
+nothing was written` で終わります。テープアウトのバンドルでは `report.json` の `vendor.error` にこれが入り、`vendor` の
+チェックが警告します。
+
+**原因。** 固定した木が、ストアにも、固定したとおりのプロジェクトのインストールにもありません(クローンしたばかり、ストアを
+空にした、インストールを手で変えた)。テープアウトのエクスポートは取得せず、`--offline` も取得しません。
+
+**対処。** lock をインストールしてから、もう一度 vendor またはエクスポートします:
+
+```sh
+pixi run python -m undine lib sync demo
+```
+
+<a id="pkg-sync-from-vendor-its-files-do-not-hash-to-the-locks-tree"></a>
+### `pkg sync --from-vendor`: `its files do not hash to the lock's tree`
+
+メッセージ全体は `a file was changed, added or removed after pkg vendor; restore it from the bundle's zip, or vendor
+again; nothing was imported` で終わります。
+
+**原因。** その `vendor/<dir>/` の下のファイルが、`pkg vendor` が書いたものと違います(変えた、加えた、消した)。木はストアに
+何かを入れる前に `undine.lock` と比べるので、何も読み込んでいません。`is not a regular file` は、そこにリンクか特殊な
+ファイルがあることを示します。`pkg vendor` はそれを書きません。
+
+**対処。** エクスポートがディレクトリの隣に書いたバンドルの zip から、`vendor/` を取り直してください。バンドルを作ってから
+`undine.lock` 自体が変わったなら、バンドルを作ったコミットをチェックアウトします。`vendor.json` に lock の SHA-256
+(`lock.sha256`)が記録されています。
+
 <a id="dependencies-and-the-store"></a>
 ## 依存関係とストア
 

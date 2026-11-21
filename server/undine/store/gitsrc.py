@@ -18,6 +18,12 @@ Two ways to read a commit's files into the store, both returning {path below sub
   kept repository, and no refs. So export-subst's %d, %D and %(describe) expand as they did then, and %h has the same
   length (git sizes an abbreviation by the number of objects it can see).
 
+Every fetch, into a kept repository or an index's copy (_fetch_git), keeps what it receives as one pack and is
+stopped when that pack passes MAX_BYTES (UNDINE_FETCH_MAX), checked while git runs and again when it ends; the
+repository is then removed, so nothing of the refused fetch stays. A fetch asked for over HTTP (a source that is an
+HttpRemote, deps._source) does not fall back to fetching every branch and tag when the server will not serve the
+commit by itself.
+
 Callers hold cas.store_lock(shared=True) and run deps' checks first (_check_spec, _check_commit, _own_dir, and
 _source over HTTP); what reaches git as an argument is checked here again. Nothing here writes into a project.
 """
@@ -29,9 +35,12 @@ import hashlib
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.parse
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -54,6 +63,11 @@ _REPO_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY
 
 class GitSourceError(RuntimeError):
     pass
+
+
+class HttpRemote(str):
+    """A remote URL to fetch from for a request over HTTP (deps._source, after its host check): fetched at the commit or
+    rev asked for only, never by the all-refs fallback, which a person has not confirmed."""
 
 
 # ------------------------------------------------------------------ git
@@ -115,6 +129,32 @@ def _check_commit(commit) -> None:
 def _check_url(url) -> None:
     if not isinstance(url, str) or not url or url.startswith("-") or "\0" in url:
         raise GitSourceError(f"not a git URL or repository path: {url!r}")
+
+
+_SCHEMES = {"http", "https", "ssh", "git", "git+ssh", "ssh+git"}
+_SCP = re.compile(r"^[^@/:]+@(\[[^\]/]+\]|[^/:\[\]@]+):")       # user@host:path, as deps._URL accepts it
+
+
+def remote_host(url: str) -> str | None:
+    """The host a remote git URL reaches (lower case, no user or port); None for a local path, another scheme, or one
+    with no host."""
+    if "://" in url:
+        u = urllib.parse.urlsplit(url)
+        if u.scheme.lower() not in _SCHEMES:
+            return None
+        try:
+            return u.hostname or None
+        except ValueError:
+            return None
+    m = _SCP.match(url)
+    if not m:
+        return None
+    h = m.group(1)
+    if h.startswith("["):                    # [host:port] or [IPv6]
+        h = h[1:-1]
+        if h.count(":") == 1:
+            h = h.split(":")[0]
+    return h.lower() or None
 
 
 def _subdir(subdir) -> str:
@@ -235,9 +275,16 @@ def fetch(url: str, source: str | None, want: str, commit: str | None = None) ->
         _ensure_repo(repo, commit)
         _clear_stale_locks(repo)
         try:
-            _git(repo, "fetch", "-q", "--depth", "1", "--end-of-options", src, want)
+            _fetch_git(repo, url, "--depth", "1", "--end-of-options", src, want)
             got = _git(repo, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
-        except GitSourceError:      # a commit the server does not serve by itself: fetch everything, then look it up
+        except FetchTooBig:
+            raise
+        except GitSourceError as e:  # a commit the server does not serve by itself: fetch everything, then look it up
+            if isinstance(source, HttpRemote):
+                raise GitSourceError(f"{e}; this server does not fetch every branch and tag of {url} to look for "
+                                     f"{want} for a request from the browser: run the same operation once from the "
+                                     "command line (`python -m undine lib ...` or `pkg ...`), which keeps the commit "
+                                     "for the browser to read") from None
             got = _fetch_all(repo, url, src, want)
         if commit is not None and got != commit:
             raise GitSourceError(f"{url} gave {got[:12]}, not the locked {commit[:12]}")
@@ -249,12 +296,78 @@ def _fetch_all(repo: Path, url: str, src: str, want: str) -> str:
     # an earlier depth-1 fetch left the repository shallow: without --unshallow the heads it already has would bring
     # no history, and an older commit would stay out of reach
     shallow = _git(repo, "rev-parse", "--is-shallow-repository") == "true"
-    _git(repo, "fetch", "-q", *(["--unshallow"] if shallow else []), "--end-of-options", src,
-         "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+    _fetch_git(repo, url, *(["--unshallow"] if shallow else []), "--end-of-options", src,
+               "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
     try:
         return _git(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{want}^{{commit}}")
     except GitSourceError:
         raise GitSourceError(f"{url} has no branch, tag or commit {want!r}") from None
+
+
+class FetchTooBig(GitSourceError):
+    """A fetch that received more than MAX_BYTES; its repository was removed."""
+
+
+_POLL = 0.1
+
+
+def _received(pack_dir: Path, before: set[str]) -> int:
+    """Bytes this fetch has written into objects/pack: index-pack's tmp_pack_* while it runs, and the packs that were
+    not there before."""
+    total = 0
+    with contextlib.suppress(OSError):
+        for e in os.scandir(pack_dir):
+            if e.name.startswith("tmp_pack_") or (e.name.endswith(".pack") and e.name not in before):
+                with contextlib.suppress(OSError):
+                    total += e.stat(follow_symlinks=False).st_size
+    return total
+
+
+def _stop_group(proc: subprocess.Popen) -> None:
+    """Ends git and the index-pack it started (its own process group): SIGTERM, then SIGKILL."""
+    for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, None)):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, sig)
+        try:
+            proc.wait(timeout=wait)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _fetch_git(repo: Path, url: str, *args: str, limit: int | None = None) -> None:
+    """`git fetch -q ARGS` into `repo`, everything received kept as one pack (fetch.unpackLimit=1: no loose objects to
+    count) and measured while git runs: past `limit` bytes (default MAX_BYTES, UNDINE_FETCH_MAX) git is stopped and the
+    repository removed, under its exclusive lock (the caller's), so no part of the fetch stays; the next one starts
+    from an empty repository. Checked again when git ends: a fetch faster than the poll is refused too."""
+    limit = MAX_BYTES if limit is None else limit
+    pack_dir = repo / "objects" / "pack"
+    before = {e.name for e in os.scandir(pack_dir)} if pack_dir.is_dir() else set()
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(_cmd(repo, "-c", "fetch.unpackLimit=1", "-c", "transfer.unpackLimit=1", "fetch", "-q",
+                                     *args), env=_env(), stdout=subprocess.DEVNULL, stderr=err,
+                                start_new_session=True)
+        deadline, over = time.monotonic() + _TIMEOUT, False
+        try:
+            while proc.poll() is None:
+                if _received(pack_dir, before) > limit:
+                    over = True
+                    break
+                if time.monotonic() > deadline:
+                    _stop_group(proc)
+                    raise GitSourceError(f"git fetch took longer than {_TIMEOUT} s: try again, or check the network")
+                time.sleep(_POLL)
+        finally:
+            if proc.poll() is None:
+                _stop_group(proc)
+        over = over or _received(pack_dir, before) > limit
+        if over:
+            shutil.rmtree(repo, ignore_errors=True)
+            raise FetchTooBig(f"{url}: the fetch received more than {limit} bytes, the most one fetch may take "
+                              "(UNDINE_FETCH_MAX); it was stopped and nothing of it was kept")
+        if proc.returncode != 0:
+            err.seek(0)
+            raise GitSourceError(_last_line(err.read()) or "git fetch failed")
 
 
 def _keep(repo: Path, commit: str) -> None:

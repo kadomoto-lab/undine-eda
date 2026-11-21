@@ -835,19 +835,24 @@ def test_serve_dep_root_is_repeatable_and_off_by_default():
     class Stop(Exception):
         pass
 
-    def fake_server(root, pdks, import_roots, llm_policy=None, mcp=False, dep_roots=None, pdk_roots=None):
-        seen["dep_roots"] = dep_roots
+    def fake_server(root, pdks, import_roots, llm_policy=None, mcp=False, dep_roots=None, pdk_roots=None,
+                    dep_hosts=None):
+        seen["dep_roots"], seen["dep_hosts"] = dep_roots, dep_hosts
         raise Stop
     root = Path(tempfile.mkdtemp())
     real = api.Server
     api.Server = fake_server
     try:
-        for extra, want in [([], []), (["--dep-root", "/a", "--dep-root", "/b"], [Path("/a"), Path("/b")])]:
+        for extra, want, hosts in [([], [], []),
+                                   (["--dep-root", "/a", "--dep-root", "/b"], [Path("/a"), Path("/b")], []),
+                                   (["--dep-host", "gitlab.com", "--dep-host", "git.example.org"], [],
+                                    ["gitlab.com", "git.example.org"])]:
             try:
                 _run_cli(root, "serve", "--port", "0", *extra)
             except Stop:
                 pass
             assert seen.pop("dep_roots") == want, extra
+            assert seen.pop("dep_hosts") == hosts, extra
     finally:
         api.Server = real
     shutil.rmtree(root, ignore_errors=True)

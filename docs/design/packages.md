@@ -758,7 +758,20 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   call, and a local URL (`file://`, an absolute path, `~`) in a manifest is refused unless the requirer's own URL is
   local, so a remote package cannot read a private repository on the machine into the project. A remote host is not
   restricted yet: until phase 3's `--dep-host`, an add, update or lock over HTTP fetches from any host a manifest
-  it reaches names, as it does from any host the request names.
+  it reaches names, as it does from any host the request names. *Implemented (phase 3):* `serve --dep-host HOST`
+  (repeatable). Over HTTP, `deps._source` lets a remote URL through only when its host (`gitsrc.remote_host`: the
+  host of an `https`, `http`, `ssh` or `git` URL or of `user@host:path`, lower case, without user or port) is one of
+  `allowed_hosts`. Those are the hosts of the indexes `$UNDINE_HOME/config.toml` configures, with the default index
+  (whose host goes when a mirror replaces it), then `--dep-host`. A project's own `indexes` adds none, since a clone
+  brings it. The check covers the request's URL and every one that project.json, a manifest, an index (a project's
+  own, or one an index line names) or an index line names, before git runs. The URL then goes to git as a
+  `gitsrc.HttpRemote`, and `gitsrc.fetch` does not use the all-refs fallback for it: it says to run the operation
+  once from the command line, which keeps the commit. A URL the person confirmed in a dialog is phase 4, with the
+  confirmation token for dependency fetches. The size limit applies to every fetch, from the CLI too
+  (`gitsrc._fetch_git`, also for an index's copy): git keeps what it receives as one pack (`fetch.unpackLimit=1`),
+  whose size (index-pack's `tmp_pack_*`, then the new packs) is read every 0.1 s while git runs and again when it
+  ends. Past `UNDINE_FETCH_MAX` git and its index-pack are stopped (their process group) and the kept repository is
+  removed under its exclusive lock, so no part of the fetch stays (`FetchTooBig`).
 - Index lines are checked (schema, name rules, URL schemes, hash format) before use; a tree is installed only after it
   matches the lock or the index.
 - **Fetches a person confirms.** *Implemented (phase 1), for PDKs only:* a PDK fetch over HTTP needs the
@@ -1073,9 +1086,11 @@ Done (store/index.py, the index parts of store/deps.py and store/resolve.py, und
 The default index repository, [`kadomoto-lab/undine-index`](https://github.com/kadomoto-lab/undine-index), exists
 (created on 2026-11-20, `config.json` only, no package yet).
 
-Still to build in phase 3: the remote-host policy
-and the fetch size limit for packages from an index; the library browser's Packages section and its HTTP endpoints;
-`pkg licenses`, `pkg vendor` (and the tapeout export running it) and `pkg sync --from-vendor`.
+The remote-host policy (`serve --dep-host`) and the fetch size limit checked while git runs are built (see
+[Security](#security), Remote hosts).
+
+Still to build in phase 3: the library browser's Packages section and its HTTP endpoints; `pkg licenses`,
+`pkg vendor` (and the tapeout export running it) and `pkg sync --from-vendor`.
 
 ## Decisions
 

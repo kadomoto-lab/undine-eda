@@ -740,7 +740,19 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   呼び出しよりも前に通ります。manifest の中のローカルの URL(`file://`、絶対パス、`~`)は、要求元自身の URL がローカルでなければ
   拒否します。リモートのパッケージが、マシンの上の private なリポジトリをプロジェクトに読み込めないようにするためです。リモートの
   ホストはまだ制限しません。段階 3 の `--dep-host` までは、HTTP からの追加、更新、固定は、たどった manifest が書くどのホストからも
-  取得します。リクエストが書くどのホストからも取得するのと同じです。
+  取得します。リクエストが書くどのホストからも取得するのと同じです。*実装済み(段階 3):* `serve --dep-host HOST`(何度でも
+  指定できる)。HTTP では、`deps._source` はリモートの URL を、そのホスト(`gitsrc.remote_host`: `https`、`http`、`ssh`、`git` の
+  URL か `user@host:path` のホストを、ユーザーとポートを除いて小文字にしたもの)が `allowed_hosts` のどれかのときだけ通します。
+  それは `$UNDINE_HOME/config.toml` が設定する index のホストと既定の index のホスト(ミラーで置き換えると外れます)、次に
+  `--dep-host` です。プロジェクト自身の `indexes` はホストを足しません。clone と一緒に来るものだからです。この確認は、リクエストの
+  URL と、project.json、manifest、index(プロジェクト自身のものも、index の行が書くものも)、index の行が書くすべての URL に、
+  git を動かす前に行います。URL はその後 `gitsrc.HttpRemote` として git に渡り、`gitsrc.fetch` はこれには全 ref を取る代わりの
+  方法を使いません。その操作を一度コマンドラインで実行するように言います。そうすればコミットがストアに残ります。人がダイアログで
+  確かめた URL は、依存の取得の確認のトークンと一緒に段階 4 で扱います。大きさの上限は、CLI からのものも含めてすべての取得に
+  かかります(`gitsrc._fetch_git`。index の写しにも)。git は受け取ったものを 1 つの pack として残し(`fetch.unpackLimit=1`)、
+  その大きさ(index-pack の `tmp_pack_*`、次に新しい pack)を、git の実行中は 0.1 秒ごとに、終わったときにももう一度読みます。
+  `UNDINE_FETCH_MAX` を超えると、git とその index-pack を(プロセスグループごと)止め、残したリポジトリをその排他ロックの下で
+  消します。取得したものは何も残りません(`FetchTooBig`)。
 - index の行は使う前に確かめます(スキーマ、名前の規則、URL のスキーム、ハッシュの形式)。木は、lock か index と一致して
   はじめて install します。
 - **人が確かめる取得。** *実装済み(段階 1)、PDK についてだけ:* HTTP からの PDK の取得には、1 回だけ使える確認のトークンが要り、
@@ -1041,9 +1053,11 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 既定の index のリポジトリ [`kadomoto-lab/undine-index`](https://github.com/kadomoto-lab/undine-index) はできています(2026-11-20 に
 作成。`config.json` だけで、パッケージはまだありません)。
 
-段階 3 でこれから作るもの: index のパッケージに対するリモートの
-ホストの方針と取得の大きさの上限。ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント。`pkg licenses`、`pkg vendor`
-(とそれを実行するテープアウトの書き出し)、`pkg sync --from-vendor`。
+リモートのホストの方針(`serve --dep-host`)と、git の実行中に確かめる取得の大きさの上限はできています([セキュリティ](#security)
+のリモートのホストを参照)。
+
+段階 3 でこれから作るもの: ライブラリブラウザのパッケージ欄とその HTTP のエンドポイント。`pkg licenses`、`pkg vendor`(とそれを
+実行するテープアウトの書き出し)、`pkg sync --from-vendor`。
 
 <a id="decisions"></a>
 <a id="open-questions"></a>

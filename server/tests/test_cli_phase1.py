@@ -328,7 +328,8 @@ def test_serve_gives_the_server_the_pdk_roots_it_scanned(tmp_path, monkeypatch):
     class Stop(Exception):
         pass
 
-    def fake_server(root, pdks, import_roots, llm_policy=None, mcp=False, dep_roots=None, pdk_roots=None):
+    def fake_server(root, pdks, import_roots, llm_policy=None, mcp=False, dep_roots=None, pdk_roots=None,
+                    dep_hosts=None):
         seen["pdk_roots"] = pdk_roots
         raise Stop
     monkeypatch.setattr(api, "Server", fake_server)

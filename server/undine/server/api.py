@@ -154,7 +154,8 @@ def _real(p: Path) -> Path:
 
 class Server:
     def __init__(self, root: Path, pdks: dict[str, Pdk], import_roots: list[Path], llm_policy: str | None = None,
-                 mcp: bool = False, dep_roots: list[Path] | None = None, pdk_roots: list[Path] | None = None):
+                 mcp: bool = False, dep_roots: list[Path] | None = None, pdk_roots: list[Path] | None = None,
+                 dep_hosts: list[str] | None = None):
         self.store = ProjectStore(root, pdks)
         self.gateway = llm.Gateway(root, llm_policy)
         self.mcp_enabled = mcp and self.gateway.policy != "none"
@@ -164,6 +165,8 @@ class Server:
         # where a library dependency's local repository (file://, /..., ~/...) may be for a request (--dep-root; none
         # by default): a browser must not read every repository on this disk (deps._source)
         self.dep_roots = [p.expanduser().resolve() for p in dep_roots or []]
+        # the remote hosts a request may fetch from besides those of the configured indexes (--dep-host; deps._source)
+        self.dep_hosts = [h.strip().lower() for h in dep_hosts or [] if h.strip()]
         # where PDKs are found again (rescan_pdks) and where `pdk fetch` installs (pdkops.fetch_plan): those `pdks` came
         # from (`--pdk-root`, else $PDK_ROOT, ~/.ciel, ~/.volare)
         self.pdk_roots = list(pdk_roots) if pdk_roots is not None else default_pdk_roots()
@@ -2049,7 +2052,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """Adds a library dependency (a git repository at a rev), installs it read-only and locks its commit."""
         try:
             r = deps.add(_no_preview(project), req.name, req.git, req.rev, req.subdir, guard=srv.lock,
-                         local_roots=srv.dep_roots, package=req.package)
+                         local_roots=srv.dep_roots, package=req.package, hosts=srv.dep_hosts)
             _deps_changed(project)           # packages it reached may have moved under names already open
             return r
         except Exception as e:
@@ -2061,7 +2064,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         does not pin what project.json names (`lib lock` resolves it) and, offline, one whose trees are not stored."""
         try:
             out = deps.sync(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots,
-                            offline=req.offline if req else None)
+                            offline=req.offline if req else None, hosts=srv.dep_hosts)
             _deps_changed(project)
             return {"libraries": out}
         except Exception as e:
@@ -2072,7 +2075,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """Resolves the dependencies undine.lock does not pin as project.json names them (fetching them, under the
         --dep-root rule as add), and records the tool versions in use now. Returns the status and `resolved`."""
         try:
-            r = deps.relock(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots)
+            r = deps.relock(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
             _deps_changed(project)
             return {**deps.status(srv.project(project)), "resolved": r["resolved"]}
         except Exception as e:
@@ -2082,7 +2085,8 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
     def deps_update(project: str, name: str, req: DepUpdate):
         """Moves a dependency to `rev` (default: its rev again); returns the changed files and the cells using them."""
         try:
-            r = deps.update(_no_preview(project), name, req.rev, guard=srv.lock, local_roots=srv.dep_roots)
+            r = deps.update(_no_preview(project), name, req.rev, guard=srv.lock, local_roots=srv.dep_roots,
+                            hosts=srv.dep_hosts)
             _deps_changed(project)
             return r
         except Exception as e:

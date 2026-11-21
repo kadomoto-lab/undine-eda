@@ -347,7 +347,8 @@ class Index:
         return self._commit() if (self.repo / "HEAD").is_file() else None
 
     def update(self) -> str:
-        """Fetches the index's HEAD into the local copy; returns its commit. The index must say format 1."""
+        """Fetches the index's HEAD into the local copy; returns its commit. The index must say format 1. A fetch past
+        UNDINE_FETCH_MAX is stopped and the local copy removed (gitsrc._fetch_git)."""
         src = self.source or gitsrc._plain(self.url)
         with _lock(self.repo, shared=False):
             if not (self.repo / "HEAD").is_file():
@@ -361,7 +362,7 @@ class Index:
                     raise
             gitsrc._clear_stale_locks(self.repo)
             try:
-                gitsrc._git(self.repo, "fetch", "-q", "--no-tags", "--end-of-options", src, "HEAD")
+                gitsrc._fetch_git(self.repo, self.url, "--no-tags", "--end-of-options", src, "HEAD")
                 got = gitsrc._git(self.repo, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
             except gitsrc.GitSourceError as e:
                 raise IndexReadError(f"index {self.url}: {e}") from None

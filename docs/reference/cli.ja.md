@@ -5,7 +5,7 @@
 
 | コマンド | |
 |---|---|
-| `python -m undine serve [--host 127.0.0.1] [--port 8700] [--llm-policy ...] [--mcp] [--import-root DIR] [--dep-root DIR] [--stop-jobs]` | サーバーを起動。`--import-root`(複数指定可、既定はホーム)は、UI が GDS / OASIS を取り込める場所を制限します。`--dep-root`(複数指定可、既定はなし)は、ブラウザと HTTP API がローカルのリポジトリ(`file://`、`/path`、`~/path`)から[ライブラリの依存関係](../guide/libraries.ja.md)を追加、更新、同期できるディレクトリを指定します。指定しなければローカルのリポジトリはすべて拒否します(`lib` コマンドはどれでも受け付けます)。再起動しても作業は失われません([サーバーの再起動](#restarting-the-server)): シミュレーションは走り続け、次のサーバーが引き継ぎます。`--stop-jobs` を付けると、このサーバーが止まるときにシミュレーションも止めます |
+| `python -m undine serve [--host 127.0.0.1] [--port 8700] [--llm-policy ...] [--mcp] [--import-root DIR] [--dep-root DIR] [--dep-host HOST] [--stop-jobs]` | サーバーを起動。`--import-root`(複数指定可、既定はホーム)は、UI が GDS / OASIS を取り込める場所を制限します。`--dep-root`(複数指定可、既定はなし)は、ブラウザと HTTP API がローカルのリポジトリ(`file://`、`/path`、`~/path`)から[ライブラリの依存関係](../guide/libraries.ja.md)を追加、更新、同期できるディレクトリを指定します。指定しなければローカルのリポジトリはすべて拒否します(`lib` コマンドはどれでも受け付けます)。`--dep-host`(複数指定可)は、ブラウザと HTTP API が依存関係やインデックスを取得してよいリモートのホストを足します。指定しなければ、このマシンが設定するインデックスのホスト(既定のインデックスの `github.com` と、`$UNDINE_HOME/config.toml` にあるもの)からだけ取得します。`lib` と `pkg` のコマンドはどのホストからも取得します。再起動しても作業は失われません([サーバーの再起動](#restarting-the-server)): シミュレーションは走り続け、次のサーバーが引き継ぎます。`--stop-jobs` を付けると、このサーバーが止まるときにシミュレーションも止めます |
 | `python -m undine new PROJECT [--pdk sky130A]` | PDK に固定したプロジェクトを作成(名前だけなら、Undine が PCell を動かせる版を選ぶ。テストした版が先)。undine.lock も作る(`created undine.lock (format 1)`) |
 | `python -m undine set-pdk PROJECT PDK` | プロジェクトを別の PDK バージョンに固定し直す。例: `sky130A@8afc8346a57f`(`pdk_history` と undine.lock に記録。undine.lock がなければ作る。プロジェクトがすでに持つバージョンを指定すると `already ...` と表示し、undine.lock の固定がないか別のものであるときだけ書く。[プロジェクトを別の PDK バージョンへ移す](../guide/pdks.ja.md#moving-a-project-to-another-pdk-version)を参照)。format 2 の lock は format 2 のままで、新しい PDK の固定(commit 全体と木のハッシュ。PDK を読んで作るので、初めてなら数秒かかる)を得る。すでに固定している PDK なら、固定はそのまま。固定済みの[パッケージ](../guide/libraries.ja.md#pdk-compatibility)が新しい PDK を受け入れないときは、何も変えずに拒否する: `error: the PDK ... is not accepted by N locked packages:` に続いて、パッケージごとにその経路と理由を 1 行ずつ(終了コード 1)。ストアにもインストールにもない固定済みのパッケージは `run lib sync first` として拒否する。プロジェクトがすでに指定している PDK なら拒否しない |
 | `python -m undine import PROJECT LIB FILE`(`.gds` または `.oas`) | レイアウトを取り込む(ライブラリがなければ作成) |
@@ -139,7 +139,7 @@ ngspice はそれが起動したものと一緒に終了させます。1 つの�
 | `UNDINE_STORE_LINK` | `link` | `copy`: 依存関係をストアへのハードリンクではなく読み取り専用のコピーで入れる |
 | `UNDINE_OFFLINE` | オフ | `1`: `lib sync` と HTTP API の sync は取得しない(`lib sync --offline` と同じ) |
 | `UNDINE_CIEL` | Undine の Python の隣の `ciel`、なければ `PATH` | `pdk fetch` が動かす ciel(ファイルでないパスなら、どれも動かさない) |
-| `UNDINE_FETCH_MAX` | `1073741824`(1 GiB) | 1 つの依存関係のファイルの合計の上限(バイト。ファイルは 100 000 個まで) |
+| `UNDINE_FETCH_MAX` | `1073741824`(1 GiB) | 1 つの依存関係のファイルの合計の上限(バイト。ファイルは 100 000 個まで)。依存関係やインデックスの 1 回の取得で受け取る量の上限でもある |
 | `UNDINE_URL`、`UNDINE_UI_URL`、`UNDINE_OPEN` | `http://127.0.0.1:8700`、サーバー自身、既定のブラウザ | `mcp-stdio`: 使う(または起動する)サーバー、レビューを開く場所、それを開くコマンド(`{url}` が置き換わる) |
 | `UNDINE_SSH`、`UNDINE_MCP_TOKEN` | なし、`<プロジェクトのルート>/mcp-token` から読む | `mcp-stdio`: Undine が動くホスト(`--ssh` と同じ)、読む代わりに使うトークン |
 | `UNDINE_RESTART_WAIT_S` | `120` | `undine call`、Python クライアント、`mcp-stdio`: サーバーの再起動中に断られた呼び出し(接続拒否、プロキシの 503)を送り直し続ける秒数([サーバーの再起動](#restarting-the-server)) |

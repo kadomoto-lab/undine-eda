@@ -213,9 +213,12 @@ def _write(files: dict, at: Callable[[str, str], Path], d: Path) -> int:
     """Copies the files into `d` as plain files (0o755 for mode 100755, else 0o644); returns the bytes written."""
     cas._check_files(files)
     cas._check_installable(files)
+    base = os.path.realpath(d)
     total = 0
     for rel, (mode, hex) in sorted(files.items()):
-        dst = d / rel
+        dst = Path(os.path.normpath(os.path.join(base, rel)))
+        if not str(dst).startswith(base + os.sep):          # _check_files refuses such a path already
+            raise VendorError(f"{rel}: leaves the vendored directory; nothing was written")
         dst.parent.mkdir(parents=True, exist_ok=True)
         with open(at(rel, hex), "rb") as fi, open(dst, "xb") as fo:
             shutil.copyfileobj(fi, fo, cas._CHUNK)

@@ -1,6 +1,7 @@
 """Phase 4 of docs/design/packages.md: project.json and undine.lock merge entry by entry (vcs/depmerge.py), in the git
 merge driver and in a changeset's adopt, and the adopt refuses a merged lock that no longer pins what the merged
-project.json asks (changeset.py, _dependency_conflicts)."""
+project.json asks (changeset.py, _dependency_conflicts), then installs it from the store (test_pkg_changesets.py has
+the dependency operations that make such changesets)."""
 import json
 import shutil
 import sys
@@ -122,6 +123,13 @@ def _project_files(work: Path, libs: dict, entries: dict) -> None:
     (work / deps.LOCK).write_text(json.dumps(lk, indent=2, sort_keys=True) + "\n")
 
 
+def _stored_tree(cell: str) -> str:
+    """A tree recorded in the test's store with its objects: the adopt, which installs from the store only (and refuses
+    an entry the store lacks), installs it."""
+    from undine.store import cas
+    return cas.write_tree({f"{cell}.sym": ("100644", cas.put_bytes(f"v {{}}\n* {cell}\n".encode()))})
+
+
 def _base_lock(srv) -> None:
     p = srv.project("p").path
     (p / deps.LOCK).write_text(json.dumps({"format": 2, "pdk": None, "tools": {}, "libraries": {}}, indent=2,
@@ -137,16 +145,18 @@ def test_two_changesets_adding_different_dependencies_adopt_in_either_order(_sto
     a = cs.create("p", "add amp", "r", "agent:t")
     b = cs.create("p", "add bias", "r", "agent:t")
     _project_files(srv.project(a["preview"]).path, {"amp": {"git": "https://example.org/amp.git", "rev": "v1"}},
-                   {"amp": entry(C1, git="https://example.org/amp.git")})
+                   {"amp": entry(C1, git="https://example.org/amp.git", tree=_stored_tree("amp"))})
     _project_files(srv.project(b["preview"]).path, {"bias": {"git": "https://example.org/bias.git", "rev": "v1"}},
-                   {"bias": entry(C2, git="https://example.org/bias.git")})
+                   {"bias": entry(C2, git="https://example.org/bias.git", tree=_stored_tree("bias"))})
     order = (a, b) if first == "a" else (b, a)
     for m in order:
-        cs.apply("p", m["id"], "user")
+        assert not cs.apply("p", m["id"], "user")["applied"].get("deps_warning")
     p = srv.project("p").path
     assert set(json.loads((p / "project.json").read_text())["libraries"]) >= {"amp", "bias"}
     got = json.loads((p / deps.LOCK).read_text())["libraries"]
     assert got["amp"]["commit"] == C1 and got["bias"]["commit"] == C2
+    for n in ("amp", "bias"):                                # installed after each adopt, from the store
+        assert (deps.dep_dir(p, n) / f"{n}.sym").read_text() == f"v {{}}\n* {n}\n"
 
 
 @pytest_git
@@ -159,7 +169,7 @@ def test_conflicting_requirements_are_refused_at_adopt(_store):
     a = cs.create("p", "ip v2", "r", "agent:t")
     b = cs.create("p", "ip v3", "r", "agent:t")
     _project_files(srv.project(a["preview"]).path, {"ip": {"git": "https://example.org/ip.git", "rev": "v2"}},
-                   {"ip": entry(C2, rev="v2")})
+                   {"ip": entry(C2, rev="v2", tree=_stored_tree("ip"))})
     _project_files(srv.project(b["preview"]).path, {"ip": {"git": "https://example.org/ip.git", "rev": "v3"}},
                    {"ip": entry(C3, rev="v3")})
     cs.apply("p", a["id"], "user")

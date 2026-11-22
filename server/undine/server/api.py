@@ -1005,6 +1005,14 @@ class Server:
                 self.logs[p] = OpLog(p, hooks, floor)
             return self.logs[p]
 
+    def deps_changed(self, project: str) -> None:
+        """After an operation on the dependencies of `project` (a changeset's working copy, `<project>~<id>`, too):
+        the cached layouts of its dependencies (transitive ones too) are stale, as the operation may have moved them."""
+        with self.lock:
+            for k in [k for k in self.dbs if k[0] == project]:
+                if self.dbs[k].lib.origin == "dep":
+                    del self.dbs[k]
+
     def editor(self, project: str, lib: str, cell: str, view: str) -> SchEditor:
         if view == "intent":
             return self.intent_editor(project, lib, cell)
@@ -1458,6 +1466,33 @@ class DepSync(BaseModel):
     offline: bool | None = None          # None: UNDINE_OFFLINE as the server has it (deps.sync)
 
 
+class ChangesetDep(BaseModel):
+    """A dependency operation in a changeset's working copy (Changesets.dep_op): the fields of NewDep (add) or
+    DepUpdate (update), or only the name (remove)."""
+    action: str                          # add | update | remove
+    name: str
+    git: str | None = None
+    rev: str | None = None
+    subdir: str | None = None
+    package: str | None = None
+    version: str | None = None
+    index: str | None = None
+    reason: str = ""
+
+
+class ChangesetPdk(BaseModel):
+    pdk: str
+    reason: str = ""
+
+
+class DepChangeset(ChangesetDep):
+    """The browser's own Add, Update, Remove and Set PDK: the operation in a small changeset of its own, adopted at
+    once (action "pdk" with `pdk`; `name` unused then)."""
+    name: str = ""
+    pdk: str | None = None
+    title: str | None = None             # the changeset's title (default: "Add <name>", "Set the PDK to <pdk>" ...)
+
+
 class Confirm(BaseModel):
     """What the person confirmed in a dialog (fetchjobs.Confirmations): kind 'pdk', a PDK fetch (the fields after
     `name`), or kind 'trust', trusting the dependency installed under local name `name`."""
@@ -1898,12 +1933,6 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             raise ValueError("library dependencies are changed in the project, not in a changeset preview")
         return srv.project(project)
 
-    def _deps_changed(project: str):
-        with srv.lock:                       # cached layouts of the dependencies (transitive ones too) are stale now
-            for k in [k for k in srv.dbs if k[0] == project]:
-                if srv.dbs[k].lib.origin == "dep":
-                    del srv.dbs[k]
-
     @app.post("/api/p/{project}/pdk")
     def set_pdk(project: str, req: SetPdk):
         """Pins the project to another PDK version (e.g. from an unsupported one to the one Undine is tested with)."""
@@ -2134,7 +2163,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             r = deps.add(_no_preview(project), req.name, req.git, req.rev, req.subdir, guard=srv.lock,
                          local_roots=srv.dep_roots, package=req.package, version=req.version, index=req.index,
                          hosts=srv.dep_hosts)
-            _deps_changed(project)           # packages it reached may have moved under names already open
+            srv.deps_changed(project)           # packages it reached may have moved under names already open
             return r
         except Exception as e:
             raise _err(e)
@@ -2146,7 +2175,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         try:
             out = deps.sync(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots,
                             offline=req.offline if req else None, hosts=srv.dep_hosts)
-            _deps_changed(project)
+            srv.deps_changed(project)
             return {"libraries": out}
         except Exception as e:
             raise _err(e)
@@ -2157,7 +2186,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         --dep-root rule as add), and records the tool versions in use now. Returns the status and `resolved`."""
         try:
             r = deps.relock(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
-            _deps_changed(project)
+            srv.deps_changed(project)
             return {**deps.status(srv.project(project)), "resolved": r["resolved"]}
         except Exception as e:
             raise _err(e)
@@ -2168,7 +2197,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         try:
             r = deps.update(_no_preview(project), name, req.rev, guard=srv.lock, local_roots=srv.dep_roots,
                             version=req.version, hosts=srv.dep_hosts)
-            _deps_changed(project)
+            srv.deps_changed(project)
             return r
         except Exception as e:
             raise _err(e)
@@ -2179,10 +2208,83 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         removed_packages, kept} (kept: names other packages still place)."""
         try:
             r = deps.remove(_no_preview(project), name, guard=srv.lock)
-            _deps_changed(project)
+            srv.deps_changed(project)
             return {"ok": True, **r}
         except Exception as e:
             raise _err(e)
+
+    @app.post("/api/p/{project}/deps/changeset")
+    def deps_changeset(project: str, req: DepChangeset, x_undine_actor: str = Header("user")):
+        """The browser's own Add, Update, Remove and Set PDK (docs/design/packages.md, Changesets and evidence): a
+        small changeset opened (a project in no git repository is made one first, as any changeset open does), the
+        operation run in its working copy (Changesets.dep_op, pdk_set), then adopted, which installs it in the project
+        from the store. Returns {changeset, status: "applied", result: what the direct route returns (/deps,
+        /deps/{name}/update, /deps/{name}/remove, /pdk), deps?: the install's rows, deps_warning?, deps_dropped?,
+        deps_pending? (another operation held the dependencies: `lib sync` installs them), git_setup, first_commit,
+        first_commit_note (as the changeset's open answers them)}. What the request alone shows wrong (no git nor
+        package, an unknown PDK, a name that is no dependency) is refused before anything is opened, so a refusal
+        never makes the project a git repository. An operation refused: its error, the changeset discarded. An
+        adopt refused (a conflict with the project): its error (409 merge_conflict ...) with "changeset" in the
+        body, the changeset left open for review. On a preview (`<project>~<id>`) the operation goes into that changeset, not adopted: status "open"."""
+        if req.action not in ("add", "update", "remove", "pdk"):
+            raise _err(ValueError(f"unknown action {req.action!r} (add, update, remove, pdk)"))
+        actor = x_undine_actor
+
+        def run(real: str, cid: str):
+            if req.action == "pdk":
+                r = changesets.pdk_set(real, cid, req.pdk, actor, req.reason)
+                return {"from": r["old"], "to": r["new"], "created": r["created"]}
+            return changesets.dep_op(real, cid, req.action, _dep_args(req), actor, req.reason,
+                                     local_roots=srv.dep_roots, hosts=srv.dep_hosts)["result"]
+
+        def check(prj) -> None:
+            """What the request alone shows wrong, refused before a changeset is opened: opening one may make the
+            project a git repository (git-setup), which a refusal cannot take back."""
+            if req.action == "pdk":
+                if not req.pdk:
+                    raise ValueError("give the PDK (pdk)")
+                if pick_pdk(srv.pdks, req.pdk) is None:
+                    raise KeyError(f"no PDK {req.pdk}")
+                return
+            if not req.name:
+                raise ValueError("give the dependency's name")
+            if req.action == "add":
+                if not req.git and not req.package:
+                    raise ValueError("give `git` (a repository) or `package` (a package from an index)")
+                check_name(req.name)
+                deps._not_taken(prj, req.name)
+            else:
+                deps._dep_spec(prj, req.name)        # a dependency of project.json (NotDirect, DepError)
+        try:
+            real = changesets._real_of(project)
+            check(srv.project(project))
+            if "~" in project:
+                cid = project.split("~")[1]
+                return {"changeset": cid, "status": "open", "result": run(real, cid)}
+            title = req.title or (f"Set the PDK to {req.pdk}" if req.action == "pdk" else
+                                  f"{req.action.capitalize()} {req.name}")
+            meta = changesets.create(real, title, req.reason, actor)
+        except Exception as e:
+            raise _err(e)
+        cid = meta["id"]
+        try:
+            result = run(real, cid)
+        except Exception as e:
+            try:
+                changesets.discard(real, cid, actor)
+            except Exception as e2:              # left open: the list shows it
+                print(f"undine: cannot discard {real}/{cid} after its operation failed: {e2}", file=sys.stderr)
+            raise _err(e)
+        try:
+            applied = changesets.apply(real, cid, actor).get("applied") or {}
+        except Exception as e:                   # kept open for review (MergeConflict: its files and conflicts)
+            err = _err(e)
+            err.extra = {**(getattr(err, "extra", None) or {}), "changeset": cid}
+            raise err
+        return {"changeset": cid, "status": "applied", "result": result,
+                **{k: meta.get(k) for k in ("git_setup", "first_commit", "first_commit_note")},
+                **{k: applied[k] for k in ("deps", "deps_warning", "deps_dropped", "deps_pending")
+                   if applied.get(k) is not None}}
 
     # ------------------------------------------------- git: the project's history (vcs/history.py)
 
@@ -3468,6 +3570,32 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """Back to the state right after gseq `to` (0: as opened); recorded, all or nothing."""
         try:
             return Changesets(srv).restore(_real(project), cid, req.to, x_undine_actor)
+        except Exception as e:
+            raise _err(e)
+
+    def _dep_args(req: ChangesetDep) -> dict:
+        return {k: getattr(req, k) for k in ("name", "git", "rev", "subdir", "package", "version", "index")}
+
+    @app.post("/api/p/{project}/changesets/{cid}/deps")
+    def changeset_dep(project: str, cid: str, req: ChangesetDep, x_undine_actor: str = Header("user")):
+        """A dependency operation in the changeset's working copy (Changesets.dep_op): `action` add (as POST /deps),
+        update (as /deps/{name}/update) or remove, recorded in its project log; the changeset's baseline is refused
+        (403). Returns {changeset, op: {gseq, opid} (null: nothing changed), result: what the /deps route returns,
+        status: the working copy's deps status}; refusals as the /deps routes' (409 resolution_refused, busy ...)."""
+        try:
+            out = changesets.dep_op(changesets._real_of(project), cid, req.action, _dep_args(req), x_undine_actor,
+                                    req.reason, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
+            meta = changesets._record(changesets._real_of(project), cid)
+            return {**out, "status": deps.status(srv.project(meta["preview"]))}
+        except Exception as e:
+            raise _err(e)
+
+    @app.post("/api/p/{project}/changesets/{cid}/pdk")
+    def changeset_pdk(project: str, cid: str, req: ChangesetPdk, x_undine_actor: str = Header("user")):
+        """Pins the changeset's working copy to another PDK (Changesets.pdk_set), recorded in its project log:
+        {changeset, op, old, new, created}; 409 pdk_incompatible as POST /pdk."""
+        try:
+            return changesets.pdk_set(changesets._real_of(project), cid, req.pdk, x_undine_actor, req.reason)
         except Exception as e:
             raise _err(e)
 

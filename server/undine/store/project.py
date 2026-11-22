@@ -258,16 +258,10 @@ class Project:
         if bad:
             raise compat.IncompatiblePdk(new.id, bad)
 
-    def set_pdk(self, spec: str) -> PdkMove:
-        """Pins the project to another PDK version: project.json's pdk (the requirement) and undine.lock's (the pin),
-        always both, so they never disagree after it. A project without a lock gets one, recording the tool versions
-        now, as `lib lock` would. A format 1 lock gets the id; a format 2 lock keeps its format and gets the new PDK's
-        pin (full commit and part hashes, pin.pin_object), its tools left as they are. Returns (old id, new id), with
-        .created telling whether it made the lock. Layout cells generated from the old PDK's PCells stay until
-        regenerated (the schematic-driven layout panel lists them as out of date, since generated cell names depend on
-        the generator). Refused (compat.IncompatiblePdk, nothing changed) when a locked package's [pdk] does not
-        accept the new PDK; checked before hashing and again on the lock as it is under the project lock. Setting the
-        PDK the project already names is never refused."""
+    def prepare_pdk(self, spec: str) -> tuple:
+        """set_pdk's slow part, run before any lock (a changeset holds its own while it commits, _DepGuard): the PDK
+        picked (KeyError: none), refused when a locked package does not accept it, the tools asked for their versions
+        when there is no lock to keep them, a format 2 pin hashed. Returns what set_pdk takes as `prepared`."""
         new = pick_pdk(self.pdks, spec)
         if new is None:
             raise KeyError(f"no PDK {spec}")
@@ -278,6 +272,19 @@ class Project:
             self._refuse_incompatible(seen, new)   # before seconds of hashing
         env = None if seen is not None else deps.environment(new)
         pinned = pin.pin_object(new) if seen is not None and deps.lock_format(seen) == 2 else None
+        return new, env, pinned
+
+    def set_pdk(self, spec: str, prepared: tuple | None = None) -> PdkMove:
+        """Pins the project to another PDK version: project.json's pdk (the requirement) and undine.lock's (the pin),
+        always both, so they never disagree after it. A project without a lock gets one, recording the tool versions
+        now, as `lib lock` would. A format 1 lock gets the id; a format 2 lock keeps its format and gets the new PDK's
+        pin (full commit and part hashes, pin.pin_object), its tools left as they are. Returns (old id, new id), with
+        .created telling whether it made the lock. Layout cells generated from the old PDK's PCells stay until
+        regenerated (the schematic-driven layout panel lists them as out of date, since generated cell names depend on
+        the generator). Refused (compat.IncompatiblePdk, nothing changed) when a locked package's [pdk] does not
+        accept the new PDK; checked before hashing and again on the lock as it is under the project lock. Setting the
+        PDK the project already names is never refused. `prepared`: prepare_pdk(spec), run before (default: now)."""
+        new, env, pinned = prepared if prepared is not None else self.prepare_pdk(spec)
         with self.editing():
             old = self.meta.get("pdk")
             lock = deps.read_lock(self.path)       # one this Undine cannot write: refused before project.json changes

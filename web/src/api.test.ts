@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, type ChangesetConflictFile } from "./api";
+import { api, ApiError, keptChangesetOf, type ChangesetConflictFile } from "./api";
 import { apiErrorText, resolveText, setLocale, t } from "./i18n";
 
 const answer = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
@@ -120,5 +120,27 @@ describe("errors of the server", () => {
     await api.changesetDiff("p", "cs 1");
     await api.changesetDiff("p", "cs1", "l", "amp");
     expect(fetch.mock.calls.map((c) => (c as unknown[])[0])).toEqual(["/api/p/p/changesets/cs%201/diff", "/api/p/p/changesets/cs1/diff?lib=l&cell=amp"]);
+  });
+});
+
+describe("the browser's own dependency operations", () => {
+  it("posts each to the one-click route, and names the changeset an adopt refused left open", async () => {
+    const fetch = answer(200, { changeset: "cs-000001", status: "applied", result: { name: "ip", commit: "c", cells: [] } });
+    vi.stubGlobal("fetch", fetch);
+    const out = await api.addDepInChangeset("p", "ip", "/src/ip", "", "lib");
+    expect(out.result.name).toBe("ip");
+    await api.removeDepInChangeset("p", "ip");
+    await api.setPdkInChangeset("p", "sky130A@bbb");
+    const sent = fetch.mock.calls.map((c) => [(c as unknown[])[0], JSON.parse(((c as unknown[])[1] as RequestInit).body as string)]);
+    expect(sent).toEqual([
+      ["/api/p/p/deps/changeset", { action: "add", name: "ip", git: "/src/ip", rev: null, subdir: "lib" }],
+      ["/api/p/p/deps/changeset", { action: "remove", name: "ip" }],
+      ["/api/p/p/deps/changeset", { action: "pdk", pdk: "sky130A@bbb" }],
+    ]);
+    vi.stubGlobal("fetch", answer(409, { detail: "cannot apply cs-000002: ...", code: "merge_conflict", files: [],
+      changeset: "cs-000002", params: { changeset: "cs-000002" } }));
+    const e = await api.updateDepInChangeset("p", "ip", "v2").catch((x: unknown) => x);
+    expect(keptChangesetOf(e)).toBe("cs-000002");
+    expect(keptChangesetOf(new ApiError(409, "busy", "busy", {}))).toBeNull();
   });
 });

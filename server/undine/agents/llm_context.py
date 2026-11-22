@@ -359,6 +359,13 @@ def _eff(e: dict, names: dict[str, str] | None = None) -> str:
             (f" (its {e['_held']})" if e.get("_held") else "")
     if e["k"] == "l":
         return f"new library {e.get('lib', '')}"
+    if e["k"] == "d":                        # a dependency operation (changeset.py, the project log)
+        if e.get("pdk"):
+            return f"PDK {e['pdk'][0]} → {e['pdk'][1]}"
+        if not e.get("name"):
+            return "dependencies as they were (project.json, undine.lock)"
+        verb = {"add": "added", "del": "removed"}.get(e["do"], "updated")
+        return f"{verb} dependency {e['name']}"
     if e["k"] == "o":
         return "port order " + " → ".join(", ".join(p) for p in e["changes"]["ports"])
     what = {"i": "instance", "w": "wire", "n": "net label", "t": "text"}.get(e["k"], e["k"])

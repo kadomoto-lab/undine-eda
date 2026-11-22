@@ -2,10 +2,10 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, type ChangesetInfo, type GitDiff } from "../api";
+import { api, ApiError, type ChangeOp, type ChangesetInfo, type GitDiff } from "../api";
 import { DialogHost } from "../dialog";
 import { msg, setLocale, t } from "../i18n";
-import { ChangesPanel } from "./ChangesPanel";
+import { ChangesPanel, summaryLine } from "./ChangesPanel";
 
 // A changeset on git (docs/design/changeset-branches.md): the review names its branch, shows its files from the base
 // to the working copy, says what adopting did to the user's branch, shows a merge conflict file by file (nothing
@@ -843,5 +843,14 @@ describe("the decision", () => {
     const closed = { ...git, ref: "refs/undine/changesets/p/cs1" };
     await open({ ...cs, status: "applied", git: closed, applied: { t: "2026-10-28T11:00:00Z", by: "user", commit: "d".repeat(40), uncommitted: false } });
     expect(follows(screen.getByRole("button", { name: t("review:revert") }), screen.getByText(t("review:checks"), { selector: ".section" }))).toBe(true);
+  });
+});
+
+describe("the operation log's summary", () => {
+  it("counts the project log's dependency operations instead of saying they had no effect", () => {
+    const op = (effects: ChangeOp["effects"]): ChangeOp => ({ seq: 1, op: "dep_add", cell: null, view: "", actor: "user", reason: null, t: "", effects });
+    expect(summaryLine([op([{ k: "d", do: "add", name: "ip" }]), op([{ k: "d", do: "mod", name: null, pdk: ["a", "b"] }])]))
+      .toBe(t("review:summary.dependencies", { count: 2 }));
+    expect(summaryLine([op([])])).toBe(t("review:summary.none"));
   });
 });

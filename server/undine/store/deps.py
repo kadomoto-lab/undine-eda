@@ -122,6 +122,12 @@ class NeedsFormat2(DepError):
     key. `lib lock PROJECT --format 2` converts the lock and resolves in one write."""
 
 
+class DepsBusy(DepError):
+    """Another operation holds the project's dependency lock (.undine/deps.lock), and the caller asked not to wait for
+    it (`wait=False`): a changeset's restore, which holds the changesets' lock that a dependency operation in that
+    changeset waits for at its commit."""
+
+
 # ------------------------------------------------------------------ files
 
 
@@ -313,19 +319,23 @@ def write_lock(project_path: Path, lock: dict) -> None:
 
 
 @contextlib.contextmanager
-def _flock(path: Path, create: bool):
+def _flock(path: Path, create: bool, wait: bool = True):
     with open(path, "a" if create else "r") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)                 # threads too: each open() is a lock of its own
+        try:                                          # threads too: each open() is a lock of its own
+            fcntl.flock(f, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DepsBusy(f"another operation on the dependencies of {path.parent.parent} is running: try again "
+                           "when it has finished") from None
         try:
             yield
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def _lock_file(project_path: Path, name: str):
+def _lock_file(project_path: Path, name: str, wait: bool = True):
     d = project_path / ".undine"                      # not versioned, and not copied into a changeset's worktree
     d.mkdir(exist_ok=True)
-    return _flock(d / name, create=True)
+    return _flock(d / name, create=True, wait=wait)
 
 
 def meta_lock(project_path: Path):
@@ -336,12 +346,19 @@ def meta_lock(project_path: Path):
     return _lock_file(project_path, "project.lock")
 
 
-def _deps_lock(project_path: Path):
+def _deps_lock(project_path: Path, wait: bool = True):
     """One operation on a project's dependencies at a time (they share the staging directories): an flock on
     .undine/deps.lock. Held while fetching; nothing else waits for it. .undine is checked first (_deps_root), so the
-    lock file is never made through a link."""
+    lock file is never made through a link. `wait` False: DepsBusy when another operation holds it."""
     _deps_root(project_path)
-    return _lock_file(project_path, "deps.lock")
+    return _lock_file(project_path, "deps.lock", wait)
+
+
+def deps_idle(project_path: Path) -> None:
+    """DepsBusy when an operation holds the project's dependency lock now (a take that does not wait, let go at
+    once): what a caller that must not wait for it checks before it changes anything."""
+    with _deps_lock(project_path, wait=False):
+        pass
 
 
 def _reread(prj) -> None:
@@ -2090,6 +2107,28 @@ def merged_problems(prj, meta: dict, lock: dict | None) -> list[str]:
     return list(why.values())
 
 
+def not_stored(prj, before: dict | None, after: dict | None) -> list[str]:
+    """The entries of lock `after` (libraries and packages) new or changed from lock `before` whose files are neither
+    in the store nor installed in the project as locked: what an offline sync could not install from them. The
+    adopt of a changeset refuses those (changeset.py, _dependency_conflicts), as nothing is fetched at adopt.
+    Reads only."""
+    out = []
+    for table in ("libraries", "packages"):
+        was = (before or {}).get(table) if isinstance((before or {}).get(table), dict) else {}
+        now = (after or {}).get(table) if isinstance((after or {}).get(table), dict) else {}
+        for key, e in now.items():
+            if not isinstance(e, dict) or was.get(key) == e:
+                continue
+            kind, value = entry_hash(e)
+            if isinstance(value, str) and _stored(kind, value) is not None:
+                continue
+            names = [key, *(n for n in e.get("names") or [] if isinstance(n, str))]
+            if any(_plain_name(n) and _current(prj.path, n, e) for n in names):
+                continue
+            out.append(_named(key, e))
+    return out
+
+
 def _frozen(prj, specs: dict[str, dict], lock: dict | None) -> None:
     """Sync installs what the lock pins and resolves nothing: a lock that does not pin what project.json names, or
     whose graph cannot be installed as it is (a package it needs and does not lock, a local name claimed twice or
@@ -2187,7 +2226,7 @@ def _row(name: str, action: str, commit, entry: dict | None) -> dict:
 
 
 def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool | None = None,
-         hosts=()) -> list[dict]:
+         hosts=(), wait: bool = True) -> list[dict]:
     """Installs every dependency exactly as locked: each of project.json's git dependencies and every package their lock
     entries reach (`packages`, through `deps`), under each of its local names. Frozen: a dependency of project.json that
     the lock does not pin as named (not locked, or another git / rev / subdir / package), or whose locked graph cannot
@@ -2203,11 +2242,11 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
     one installed from the store or as locked reads none, so it is not checked. An install that matches its lock entry
     but is not in the store is imported into it. Returns one row per name ({name, action, commit}, `package` for a
     package), and `warning` on a package the locked PDK does not fit: it is installed all the same (status reports
-    it)."""
+    it). `wait` False: DepsBusy, nothing done, when another operation holds the project's dependency lock."""
     if offline is None:
         offline = os.environ.get("UNDINE_OFFLINE") == "1"
     command = f"lib sync {prj.name}"
-    with _deps_lock(prj.path):
+    with _deps_lock(prj.path, wait):
         _reread(prj)
         lock = read_lock(prj.path)
         specs = _git_specs(prj)

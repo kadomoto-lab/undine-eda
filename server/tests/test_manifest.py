@@ -2,6 +2,7 @@
 store or a directory. Every refusal names its key path and says what to do."""
 import importlib.util
 import os
+import re
 import sys
 import types
 
@@ -79,8 +80,9 @@ def test_the_design_example_parses():
     }
     assert m.exports == ("bandgap", "ldo", "comparator")
     assert "rtl/**" in m.include
-    assert m.later["checks"]["drc"]["deck"] == "sky130A_mr.drc"
-    assert m.later["renames"] == {"1.2.0": {"comp": "comparator"}}
+    assert m.checks == manifest.Checks(True, "sky130A_mr.drc", {"feol": True, "beol": True, "density": False},
+                                       (manifest.Waiver("unit_cap", ("m1.2",), "abutment cell: clean once arrayed"),))
+    assert m.renames == {Version(1, 2, 0): {"comp": "comparator"}}
 
 
 def test_git_and_sibling_requirements():
@@ -94,7 +96,7 @@ common = { subdir = "common", version = "=0.2.0" }
     assert sar == GitDep("sar", "sar", "https://example.org/sar.git", "v1.3.1", None, Req.parse("^1.3"))
     assert (bias.package, bias.subdir, bias.version) == ("bias_gen", "lib/bias", None)
     assert (common.git, common.rev, common.subdir, str(common.version)) == (None, None, "common", "=0.2.0")
-    assert m.pdk is None and m.exports is None and m.include is None and m.later == {}
+    assert m.pdk is None and m.exports is None and m.include is None and m.checks is None and m.renames == {}
 
 
 def test_a_minimal_manifest_has_defaults():
@@ -271,3 +273,136 @@ def test_parse_falls_back_to_tomli_on_python_3_10(monkeypatch):
     assert mod.parse(DESIGN.encode(), "analog_ip").name == "analog_ip"
     with pytest.raises(mod.ManifestError, match="not valid TOML"):
         mod.parse(b"[package\n", "ip")
+
+
+# ------------------------------------------------------------------ phase 5: [checks], [renames], render, SPDX
+
+
+@pytest.mark.parametrize("text, parts", [
+    (MINIMAL + "[checks]\ndeck = 1\n", ["checks.deck: unknown key", "drc, waive"]),
+    (MINIMAL + '[checks]\ndrc = "x"\n', ["checks.drc: not a table"]),
+    (MINIMAL + '[checks]\ndrc = { dek = "a.drc" }\n', ["checks.drc.dek: unknown key", "deck, options"]),
+    (MINIMAL + '[checks]\ndrc = { deck = "../a.drc" }\n', ["checks.drc.deck: '../a.drc' is not a deck name",
+                                                            "without a directory"]),
+    (MINIMAL + '[checks]\ndrc = { deck = 3 }\n', ["checks.drc.deck: 3 is not a string"]),
+    (MINIMAL + '[checks]\ndrc = { options = 1 }\n', ["checks.drc.options: not a table"]),
+    (MINIMAL + '[checks]\ndrc = { options = { feol = [1] } }\n', ["checks.drc.options.feol: [1] is not an option"]),
+    (MINIMAL + '[checks]\nwaive = { cell = "a" }\n', ["checks.waive: not a list"]),
+    (MINIMAL + '[checks]\nwaive = ["a"]\n', ["checks.waive[0]: not a table"]),
+    (MINIMAL + '[checks]\nwaive = [{ rules = ["m1.2"], reason = "r" }]\n', ["checks.waive[0].cell: missing"]),
+    (MINIMAL + '[checks]\nwaive = [{ cell = "../a", rules = ["m1.2"], reason = "r" }]\n',
+     ["checks.waive[0].cell: '../a' is not a cell name"]),
+    (MINIMAL + '[checks]\nwaive = [{ cell = "a", rules = [], reason = "r" }]\n',
+     ["checks.waive[0].rules: missing, empty"]),
+    (MINIMAL + '[checks]\nwaive = [{ cell = "a", rules = ["m1.2"], reason = "r" }, { cell = "b", rules = ["x"] }]\n',
+     ["checks.waive[1].reason: missing or empty", "pkg check and the review show it"]),
+    (MINIMAL + '[checks]\nwaive = [{ cell = "a", rules = ["m1.2"], reason = "  " }]\n',
+     ["checks.waive[0].reason: missing or empty"]),
+    (MINIMAL + '[checks]\nwaive = [{ cell = "a", rules = ["m1.2"], reason = "r", why = "x" }]\n',
+     ["checks.waive[0].why: unknown key", "cell, rules, reason"]),
+    (MINIMAL + '[renames]\n"1.2" = { a = "b" }\n', ['renames."1.2": \'1.2\' is not semver']),
+    (MINIMAL + '[renames]\n"0.2.0" = { a = "b" }\n', ['renames."0.2.0": after this version (0.1.0)']),
+    (MINIMAL + '[renames]\n"0.1.0" = "b"\n', ['renames."0.1.0": not a table']),
+    (MINIMAL + '[renames]\n"0.1.0" = { a = "a" }\n', ['renames."0.1.0".a: renamed to itself']),
+    (MINIMAL + '[renames]\n"0.1.0" = { a = "c", b = "c" }\n', ['renames."0.1.0".b: a second cell renamed to c']),
+    (MINIMAL + '[renames]\n"0.1.0" = { a = "../c" }\n', ['renames."0.1.0".a: \'../c\' is not a cell name']),
+    (MINIMAL + '[renames]\n"0.1.0" = { a = "c" }\n"0.1.0+b" = { d = "e" }\n',
+     ['renames."0.1.0+b": version 0.1.0+b is listed twice']),
+])
+def test_checks_and_renames_are_typed_and_each_refusal_names_its_key_path(text, parts):
+    refused(text, *parts)
+
+
+def test_checks_and_renames_parse_to_their_types():
+    m = P(MINIMAL.replace("0.1.0", "1.3.0") + '''
+[checks]
+drc = { options = { feol = true, size = 2, ratio = 0.5, mode = "deep" } }
+waive = [{ cell = "unit_cap", rules = ["m1.2", "m1.2", "li.3"], reason = "abutment cell" }]
+[renames]
+"1.0.0" = { comp = "comparator" }
+"1.3.0" = { old = "new", x = "y" }
+''')
+    assert m.checks.drc and m.checks.deck is None
+    assert m.checks.options == {"feol": True, "size": 2, "ratio": 0.5, "mode": "deep"}
+    assert m.checks.waive == (manifest.Waiver("unit_cap", ("m1.2", "li.3"), "abutment cell"),)
+    assert m.renames == {Version(1, 0, 0): {"comp": "comparator"}, Version(1, 3, 0): {"old": "new", "x": "y"}}
+    assert P(MINIMAL + "[checks]\n").checks == manifest.Checks()
+
+
+def test_a_waiver_without_a_reason_or_for_a_cell_not_in_the_package_is_refused():
+    refused(MINIMAL + '[checks]\nwaive = [{ cell = "inv", rules = ["m1.2"] }]\n', "checks.waive[0].reason: missing")
+    m = P(MINIMAL + '[files]\ninclude = ["*.sch", "*.oas"]\n'
+                    '[checks]\nwaive = [{ cell = "unit_cap", rules = ["m1.2"], reason = "abutment cell" }]\n')
+    with pytest.raises(ManifestError, match=r"ip: undine-package.toml: checks.waive\[0\].cell: unit_cap is not a cell "
+                                            r"of the package"):
+        check_files(m, ["inv.sch", "unit_cap.sym", MANIFEST], "ip")      # its .sym is not included
+    check_files(m, ["inv.sch", "unit_cap.oas", MANIFEST], "ip")
+
+
+def test_render_round_trips_the_design_example():
+    m = P(DESIGN)
+    text = manifest.render(m)
+    assert P(text) == m
+    assert manifest.render(P(text)) == text
+    assert text.startswith('[package]\nname = "analog_ip"\nversion = "1.2.0"\n')
+    assert "\n[checks]\n" in text and '\n[renames]\n"1.2.0" = { comp = "comparator" }\n' in text
+
+
+def test_render_round_trips_git_requirements_odd_strings_and_notes():
+    m = P(MINIMAL + '''
+[dependencies]
+sar = { git = "https://example.org/sar.git", rev = "v1.3.1", version = ">=1.3, <1.5" }
+bias = { git = "git@example.org:me/bias.git", rev = "main", subdir = "lib/bias", package = "bias_gen" }
+common = { subdir = "common" }
+any = "*"
+[exports]
+cells = []
+[files]
+include = []
+[checks]
+drc = {}
+''')
+    m.description = 'quote " backslash \\ tab \t newline \n del \x7f bell \x07 é'
+    m.authors = ("A <a@x>", "B")
+    text = manifest.render(m, ["git dependency xyz: a published package", "depends only on index packages"])
+    back = P(text)
+    assert back == m and back.description == m.description
+    assert "# git dependency xyz: a published package\n# depends only on index packages\n" in text
+    bare = P(MINIMAL)
+    assert manifest.render(bare) == MINIMAL
+    assert "[dependencies]\n# note\n" in manifest.render(bare, ["note"])
+
+
+@pytest.mark.parametrize("expr, normal", [
+    ("MIT", "MIT"), ("Apache-2.0", "Apache-2.0"), ("GPL-2.0+", "GPL-2.0+"), ("GPL-2.0-or-later", "GPL-2.0-or-later"),
+    ("LicenseRef-acme-1.0", "LicenseRef-acme-1.0"),
+    ("DocumentRef-spdx-tool-1.2:LicenseRef-MIT-Style-2", "DocumentRef-spdx-tool-1.2:LicenseRef-MIT-Style-2"),
+    ("GPL-2.0-only WITH Classpath-exception-2.0", "GPL-2.0-only WITH Classpath-exception-2.0"),
+    ("MIT OR Apache-2.0", "MIT OR Apache-2.0"),
+    ("(MIT OR Apache-2.0) AND CC-BY-4.0", "(MIT OR Apache-2.0) AND CC-BY-4.0"),
+    ("MIT AND BSD-3-Clause OR Apache-2.0", "(MIT AND BSD-3-Clause) OR Apache-2.0"),     # the precedence, spelt out
+    ("((MIT))", "MIT"), ("  MIT   OR  ISC ", "MIT OR ISC"), ("NotARealLicence-9", "NotARealLicence-9"),
+])
+def test_spdx_expressions_syntax_only(expr, normal):
+    from undine.store import spdx
+    e = spdx.parse(expr)
+    assert str(e) == normal and spdx.problem(expr) is None
+    assert spdx.parse(str(e)) == e
+    assert spdx.ids(spdx.parse("(MIT OR Apache-2.0) AND MIT")) == ["MIT", "Apache-2.0"]
+    and_first = spdx.parse("A AND B OR C")                   # AND binds tighter than OR
+    assert and_first.op == "OR" and and_first.left.op == "AND"
+
+
+@pytest.mark.parametrize("expr, msg", [
+    ("", "no licence"), ("   ", "no licence"), (None, "no licence"), ("MIT and Apache-2.0", "upper case, AND"),
+    ("MIT OR", "a licence identifier expected at the end"), ("(MIT", "a closing ) expected"),
+    ("MIT)", "AND, OR or the end expected at ')'"), ("MIT Apache-2.0", "AND, OR or the end expected"),
+    ("MIT WITH", "an exception identifier expected after WITH"), ("LicenseRef-x+", "not a LicenseRef"),
+    ("MIT/Apache-2.0", "at '/'"), ("OR MIT", "a licence identifier expected at 'OR'"), ("x" * 2000, "more than"),
+    ("MIT ++", "AND, OR or the end expected at '+'"),
+])
+def test_spdx_refusals_say_where(expr, msg):
+    from undine.store import spdx
+    with pytest.raises(spdx.SpdxError, match=re.escape(msg)):
+        spdx.parse(expr)
+    assert spdx.problem(expr)

@@ -1256,22 +1256,6 @@ Still to build in phase 4: the review of a dependency change (the lock diff, lic
 agent's *needs fetch* and the person's fetch with the confirmation token and the notice, agent tools, and
 `dep_update`'s refresh of layout copies.
 
-### Phase 6 status
-
-Built: `profile.toml` and its reader, the registry of formulas and stack generators, the three built-in profile
-packages, `pdkprofile.py` serving them with its Python profiles removed, Undine's table of `verified` and `magic_drc`,
-and the tested commits read from the profiles by `pick_pdk`, the PCell code's hint, `pixi run pdk`, `setup.sh` and two
-commands, `pdk tested FAMILY [--all]` and `pdk enable FAMILY [COMMIT]` (see [PDK profiles as
-packages](#pdk-profiles-as-packages)). Tests: `test_profile_data.py` (the loaded profiles equal the golden data from
-the Python ones, per process and per variant, types included, and so does everything `pdkprofile` serves: deck `-rd`
-values, Magic and Netgen files, the family rule, the MIM formula; each refusal names its key path; Undine's table for a
-tested and an untested profile version; the tested commits, the two commands, `pixi.toml` and `setup.sh` naming no
-commit, wafer.space's GF180 commit among the tested ones).
-
-Still to build in phase 6: profile packages in the index and the lock's `profile` key (choosing a version, `sync`,
-`vendor`), expected tree hashes in `[[pdk]]` and `verified_by` (the PDK state *verified*), compatibility tags read from
-the profile, the profile fields a job uses in its inputs (with phase 4's evidence), and PDK licences from the profile.
-
 ### Phase 5 status
 
 Built so far (store/manifest.py, store/spdx.py, store/index.py, store/pkgsource.py, store/checkreport.py,
@@ -1335,6 +1319,22 @@ Differences from the text above, and additions:
   libraries cannot be told), with a hint to install it.
 - `parse_line` is stricter about `check`; that is safe while the default index lists no package.
 - `pkg init` writes `commits = [built_with]`, not a compatibility tag: tags come with PDK profiles (phase 6).
+
+### Phase 6 status
+
+Built: `profile.toml` and its reader, the registry of formulas and stack generators, the three built-in profile
+packages, `pdkprofile.py` serving them with its Python profiles removed, Undine's table of `verified` and `magic_drc`,
+and the tested commits read from the profiles by `pick_pdk`, the PCell code's hint, `pixi run pdk`, `setup.sh` and two
+commands, `pdk tested FAMILY [--all]` and `pdk enable FAMILY [COMMIT]` (see [PDK profiles as
+packages](#pdk-profiles-as-packages)). Tests: `test_profile_data.py` (the loaded profiles equal the golden data from
+the Python ones, per process and per variant, types included, and so does everything `pdkprofile` serves: deck `-rd`
+values, Magic and Netgen files, the family rule, the MIM formula; each refusal names its key path; Undine's table for a
+tested and an untested profile version; the tested commits, the two commands, `pixi.toml` and `setup.sh` naming no
+commit, wafer.space's GF180 commit among the tested ones).
+
+Still to build in phase 6: profile packages in the index and the lock's `profile` key (choosing a version, `sync`,
+`vendor`), expected tree hashes in `[[pdk]]` and `verified_by` (the PDK state *verified*), compatibility tags read from
+the profile, the profile fields a job uses in its inputs (with phase 4's evidence), and PDK licences from the profile.
 
 ## Decisions
 

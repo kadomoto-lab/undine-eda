@@ -1212,23 +1212,6 @@ store/changeset.py の evidence のマニフェスト。[changeset と evidence]
 段階 4 でこれから作るもの: 依存の変更のレビュー(lock の差分、ライセンス、大きさ、コードブロックと RTL)、エージェントの
 *needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、`dep_update` のレイアウトのコピーの更新。
 
-<a id="phase-6-status"></a>
-### 段階 6 の状況
-
-できたもの: `profile.toml` とその読み込み、式とスタックの生成関数の登録、3 つの組み込みのプロファイルのパッケージ、それを
-返す `pdkprofile.py`(Python のプロファイルは消しました)、`verified` と `magic_drc` の Undine の表、そして動作確認した
-commit をプロファイルから読む `pick_pdk`、PCell のコードのヒント、`pixi run pdk`、`setup.sh` と 2 つのコマンド
-`pdk tested FAMILY [--all]`、`pdk enable FAMILY [COMMIT]`([パッケージとしての PDK プロファイル](#pdk-profiles-as-packages)を
-参照)。テスト: `test_profile_data.py`(読み込んだプロファイルが、Python のものから作った golden のデータと、プロセスごと・
-variant ごとに型も含めて等しく、`pdkprofile` が返すもの全体(deck の `-rd` の値、Magic と Netgen のファイル、family の規則、
-MIM の式)も等しい。拒否はどれもキーのパスを示す。動作確認したプロファイルのバージョンとしていないバージョンについての
-Undine の表。動作確認した commit、2 つのコマンド、commit を書かない `pixi.toml` と `setup.sh`、動作確認した commit に
-wafer.space の GF180 の commit が入っていること)。
-
-段階 6 でこれから作るもの: index のプロファイルのパッケージと lock の `profile` キー(バージョンの選択、`sync`、`vendor`)、
-`[[pdk]]` の期待する木のハッシュと `verified_by`(PDK の状態 *verified*)、プロファイルから読む互換性タグ、ジョブが使う
-プロファイルの欄をその入力に入れること(段階 4 の evidence と一緒に)、プロファイルからの PDK のライセンス。
-
 <a id="phase-5-status"></a>
 ### 段階 5 の状況
 
@@ -1292,6 +1275,23 @@ index もすべて手元のもの。GitHub に触れるテストはありませ�
 
 <a id="decisions"></a>
 <a id="open-questions"></a>
+
+<a id="phase-6-status"></a>
+### 段階 6 の状況
+
+できたもの: `profile.toml` とその読み込み、式とスタックの生成関数の登録、3 つの組み込みのプロファイルのパッケージ、それを
+返す `pdkprofile.py`(Python のプロファイルは消しました)、`verified` と `magic_drc` の Undine の表、そして動作確認した
+commit をプロファイルから読む `pick_pdk`、PCell のコードのヒント、`pixi run pdk`、`setup.sh` と 2 つのコマンド
+`pdk tested FAMILY [--all]`、`pdk enable FAMILY [COMMIT]`([パッケージとしての PDK プロファイル](#pdk-profiles-as-packages)を
+参照)。テスト: `test_profile_data.py`(読み込んだプロファイルが、Python のものから作った golden のデータと、プロセスごと・
+variant ごとに型も含めて等しく、`pdkprofile` が返すもの全体(deck の `-rd` の値、Magic と Netgen のファイル、family の規則、
+MIM の式)も等しい。拒否はどれもキーのパスを示す。動作確認したプロファイルのバージョンとしていないバージョンについての
+Undine の表。動作確認した commit、2 つのコマンド、commit を書かない `pixi.toml` と `setup.sh`、動作確認した commit に
+wafer.space の GF180 の commit が入っていること)。
+
+段階 6 でこれから作るもの: index のプロファイルのパッケージと lock の `profile` キー(バージョンの選択、`sync`、`vendor`)、
+`[[pdk]]` の期待する木のハッシュと `verified_by`(PDK の状態 *verified*)、プロファイルから読む互換性タグ、ジョブが使う
+プロファイルの欄をその入力に入れること(段階 4 の evidence と一緒に)、プロファイルからの PDK のライセンス。
 
 ## 決定事項
 

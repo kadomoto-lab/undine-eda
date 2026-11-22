@@ -604,6 +604,19 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   files the netlist includes (`.lib` / `.include` targets and OSDI files, by hash) and the profile fields the job uses
   (deck options, deck variables, model paths). A changed README or an unrelated cell in a package, or a layer colour
   in a profile, makes nothing outdated.
+  *Implemented (phase 4, store/provenance.py):* inside `key`, a simulation's inputs gain `models` (every file its
+  netlist reads through `.lib` / `.include`, transitively, a `.lib` line by its section's files, and the OSDI files,
+  as `{path, sha}` of the original files, not the reduced copies; `modellib.files_read`; the hashes cached by path,
+  time and size) and `profile` (`model_lib`, `model_includes`, `osdi`, `corners`); KLayout DRC and LVS gain `profile`
+  (`drc_options` of the deck or `lvs_options`, and `deck_vars` of the PDK). Outside `key`, every job's status has
+  `about`: `packages` (`{name, package, version, tree | sha, index}` of each lock entry one of whose installs holds a
+  file the job read: its netlist's schematics and symbols, its model files, its layout's library), `pdk` (`{id,
+  commit, family, variant, tree}`, the tree being the lock's pin) and `profile` (`{family, source: "built-in",
+  undine}`; profile packages are phase 6). `recompute` gives `models` and `profile` only to a job that recorded them,
+  so a job from before stays fresh rather than unknown; `diff` says "model file X changed" and "profile field Y: a →
+  b". A changeset's evidence manifest lists each side's `packages` and `pdk` from its archived `undine.lock`, and each
+  job row carries the job's `about` ([Job provenance](../reference/data.md#job-provenance)). Magic DRC, Netgen LVS
+  and extraction record no profile fields (their setup files are not profile fields).
 
 ## UI, CLI, HTTP, agent tools
 
@@ -1131,9 +1144,15 @@ Tests: `test_depmerge.py` (two changesets adding different dependencies adopt in
 requirements refused; a merged pair that leaves the lock stale refused with the reason; a `git merge` of two branches
 through the driver).
 
+Built: evidence with package and PDK information, and model-file hashes (store/provenance.py, `modellib.files_read`,
+the evidence manifest in store/changeset.py; see [Changesets and evidence](#changesets-and-evidence)). Tests:
+`test_pkg_evidence.py` (an update that changes one cell outdates only the results that use it; a README change
+outdates nothing; a model file a package's code block includes outdates the simulation with the same netlist text;
+profile fields in the key; `about` outside it; a job from before stays fresh; the manifest lists packages and PDK).
+
 Still to build in phase 4: dependency operations in changesets (`dep_add` / `dep_update` / `dep_remove` / `pdk_set`
 in the working copy, installed after the adopt), their review, an agent's *needs fetch* and the person's fetch with
-the confirmation token and the notice, agent tools, and evidence with package and PDK information.
+the confirmation token and the notice, and agent tools.
 
 ## Decisions
 

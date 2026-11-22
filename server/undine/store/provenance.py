@@ -10,9 +10,14 @@ inputs in status.json; when it finishes, the SHA-256 of every file it wrote:
       "pdk":     "sky130A@8afc8346a57f",
       "deck":    {"kind": "drc", "name": "sky130A_mr.drc", "sha": "..."},          (KLayout decks only)
       "tools":   {"klayout": "KLayout 0.30.12"},
-      "options": {...}                                                          (deck switches, analysis, ...)
-    },
+      "options": {...},                                                         (deck switches, analysis, ...)
+      "models":  [{"path": "/.../sky130.lib.spice", "sha": "..."}, ...],         (simulations only)
+      "profile": {"drc_options": {...}, "deck_vars": {...}}                     (KLayout DRC; LVS: lvs_options,
+    },                                                                            deck_vars; simulations: model_lib ...)
     "key":   "<hash of inputs>",          equal keys = the same run; a finished job with the key can be reused
+    "about": {"packages": [{"name", "package", "version", "tree" | "sha", "index"}],      information only, not in
+              "pdk": {"id", "commit", "family", "variant", "tree"},                        the key (`about`)
+              "profile": {"family", "source": "built-in", "undine"}},
     "files": {"result.lyrdb": "<sha256>", "input.gds": "...", ...}
     "stamps": {"result.lyrdb": [size, mtime_ns, inode], ...}     each file as it was hashed (`stamp`)
 
@@ -27,8 +32,20 @@ Design entries:
            extraction `job` named, None once that job is outdated; without a job, of the newest up-to-date extraction
            of that mode, None once none is (the layout changed)
 
+Models and profile (docs/design/packages.md, Changesets and evidence): a simulation records every file its netlist
+reads through .lib / .include, transitively, and the OSDI files ngspice loads, by hash (`model_entries`; the original
+files, not the reduced copies ngspice gets), so a model file a package's code block includes outdates the run even
+when the netlist text is the same. A run records the fields of the PDK profile it uses (`profile_fields`): deck
+options and deck variables for KLayout DRC and LVS; the model library, its includes, the OSDI models and the corners
+for a simulation. A layer colour or anything else of the profile does not count.
+
+`about` says what the run used, for the evidence: each package (lock entry) whose files it read, the PDK pin, the
+profile. It is outside the key: the same files from another package version are the same run, and a README or an
+unrelated cell of a package outdates nothing.
+
 `recompute` builds the same inputs from the design as it is now; `diff` lists what changed. A job is outdated when
-its design, PDK, deck or tool versions differ from now; jobs from before this record have no inputs (unknown).
+its design, PDK, deck, tool versions, model files or profile fields differ from now; jobs from before this record have
+no inputs (unknown), and jobs from before models and profile were recorded are compared without them.
 """
 from __future__ import annotations
 
@@ -108,31 +125,129 @@ def layout_entry(db, lib: str, cell: str) -> dict:
     return {"view": "layout", "lib": lib, "cell": cell, "sha": LAYOUT_SHAS.get(db, cell)}
 
 
-_DECK_SHAS: dict[tuple[str, int], str] = {}
+_FILE_SHAS: dict[tuple[str, int, int], str] = {}       # (path, mtime_ns, size) -> sha: decks, model files
+_FILE_SHAS_LOCK = threading.Lock()
+
+
+def cached_sha(p: Path) -> str | None:
+    """file_sha of a file, read again only when its time or size changed (the sky130 model library is 7 MB in 170
+    files, read by every freshness check of a simulation); None when it cannot be read."""
+    try:
+        st = p.stat()
+        k = (str(p), st.st_mtime_ns, st.st_size)
+        with _FILE_SHAS_LOCK:
+            hit = _FILE_SHAS.get(k)
+        if hit is None:
+            hit = file_sha(p)
+            with _FILE_SHAS_LOCK:
+                _FILE_SHAS[k] = hit
+        return hit
+    except OSError:
+        return None
 
 
 def deck_entry(pdk, kind: str, name: str) -> dict:
-    p = pdk.decks_dir / kind / name
-    try:
-        k = (str(p), p.stat().st_mtime_ns)
-        sha = _DECK_SHAS.get(k) or _DECK_SHAS.setdefault(k, file_sha(p))
-    except OSError:
-        sha = None
-    return {"kind": kind, "name": name, "sha": sha}
+    return {"kind": kind, "name": name, "sha": cached_sha(pdk.decks_dir / kind / name)}
 
 
-def inputs(design: list[dict], pdk, tool_names: list[str], deck: dict | None = None, options: dict | None = None) -> dict:
+def model_entries(paths) -> list[dict]:
+    """[{"path", "sha"}] of the files a simulation reads besides its netlist (modellib.files_read, the OSDI files),
+    by path; sha None for a file that cannot be read."""
+    return [{"path": p, "sha": cached_sha(Path(p))} for p in sorted({str(p) for p in paths})]
+
+
+def _plain(v):
+    return json.loads(json.dumps(v))                     # tuples as lists: as status.json gives them back
+
+
+DRC_PROFILE = ("drc_options", "deck_vars")
+LVS_PROFILE = ("lvs_options", "deck_vars")
+SIM_PROFILE = ("model_lib", "model_includes", "osdi", "corners")
+
+
+def profile_fields(pdk, fields, deck: str | None = None) -> dict:
+    """The fields of the PDK's profile a run uses, as they are now: drc_options (the defaults of DRC deck `deck`),
+    lvs_options, deck_vars (this PDK's), model_lib, model_includes, osdi, corners. None for each without a PDK."""
+    p = pdk.profile if pdk else None
+    get = {"drc_options": lambda: p.deck_defaults(deck or ""), "lvs_options": lambda: dict(p.lvs_options),
+           "deck_vars": lambda: dict(p.deck_vars.get(pdk.name, {})), "model_lib": lambda: p.model_lib,
+           "model_includes": lambda: list(p.model_includes), "osdi": lambda: list(p.osdi),
+           "corners": lambda: list(p.corners)}
+    return _plain({f: (get[f]() if p is not None and f in get else None) for f in fields})
+
+
+def inputs(design: list[dict], pdk, tool_names: list[str], deck: dict | None = None, options: dict | None = None,
+           models: list[dict] | None = None, profile: dict | None = None) -> dict:
+    """A job's inputs (the module's docstring); `models` and `profile` only for the jobs that record them, so that
+    the key of any other job stays what it was."""
     return {"design": design, "pdk": pdk.id if pdk else None, "deck": deck,
-            "tools": {n: tools.version(n) for n in tool_names}, "options": options or {}}
+            "tools": {n: tools.version(n) for n in tool_names}, "options": options or {},
+            **({"models": models} if models is not None else {}),
+            **({"profile": profile} if profile is not None else {})}
 
 
 def key(inp: dict) -> str:
     return text_sha(json.dumps(inp, sort_keys=True, separators=(",", ":")))[:24]
 
 
-def meta(inp: dict) -> dict:
-    """What goes into a new job's status.json."""
-    return {"inputs": inp, "key": key(inp)}
+def meta(inp: dict, about: dict | None = None) -> dict:
+    """What goes into a new job's status.json: the inputs, their key and, outside the key, `about`."""
+    return {"inputs": inp, "key": key(inp), **({"about": about} if about is not None else {})}
+
+
+# ------------------------------------------------------------------ what a run used, for the evidence (not in the key)
+
+
+def lock_packages(lock: dict | None) -> list[dict]:
+    """The lock's entries (format 1 or 2) as [{"name": its first local name, "names", "package", "version", "tree" |
+    "sha", "index"}], by name."""
+    from undine.store import deps, resolve
+    g = resolve.lock_graph(lock)
+    out = []
+    for id, e in g.entries.items():
+        kind, h = deps.entry_hash(e)
+        names = g.names_of(id)
+        out.append({"name": names[0], "names": names, "package": e.get("package"), "version": e.get("version"),
+                    kind: h, "index": e.get("index")})
+    return sorted(out, key=lambda r: r["name"])
+
+
+def read_lock(prj_path: Path) -> dict | None:
+    """The project's undine.lock; None when there is none or this Undine refuses it (nothing to tell then)."""
+    from undine.store import deps
+    try:
+        return deps.read_lock(Path(prj_path))
+    except Exception:
+        return None
+
+
+def pdk_about(pdk, lock: dict | None) -> dict | None:
+    """{"id", "commit", "family", "variant", "tree"} of a PDK; the tree is the lock's pin of it (format 2), else
+    None."""
+    if pdk is None:
+        return None
+    pin = (lock or {}).get("pdk")
+    tree = pin.get("tree") if isinstance(pin, dict) and pin.get("id") == pdk.id else None
+    return {"id": pdk.id, "commit": pdk.commit, "family": pdk.family, "variant": pdk.variant, "tree": tree}
+
+
+def about(prj, read=()) -> dict:
+    """What a run of project `prj` used, outside its key: {"packages": the lock entries one of whose installs holds a
+    file in `read` (the files the run read: a netlist's schematics and symbols, its model files, a layout library's
+    folder), "pdk": pdk_about, "profile": {"family", "source": "built-in", "undine": Undine's version}}. Profile
+    packages come in phase 6: until then every profile is Undine's own."""
+    from undine.store import deps
+    lock = read_lock(prj.path)
+    read = [Path(p) for p in read]
+    packages = []
+    for row in lock_packages(lock):
+        dirs = [deps.dep_dir(Path(prj.path), n).resolve() for n in row["names"]]
+        if any(p.is_relative_to(d) for p in read for d in dirs):
+            packages.append({k: v for k, v in row.items() if k != "names"})
+    pdk = prj.pdk
+    return {"packages": packages, "pdk": pdk_about(pdk, lock),
+            "profile": {"family": pdk.profile.family if pdk else None, "source": "built-in",
+                        "undine": tools.undine_version()}}
 
 
 def stamp(st: os.stat_result) -> list[int]:
@@ -182,9 +297,16 @@ def recompute(srv, project: str, inp: dict) -> dict:
             e["sha"] = None
         design.append(e)
     d = inp.get("deck")
-    return {"design": design, "pdk": prj.pdk.id if prj.pdk else None,
-            "deck": deck_entry(prj.pdk, d["kind"], d["name"]) if d and prj.pdk else d,
-            "tools": {n: tools.version(n) for n in inp.get("tools", {})}, "options": inp.get("options", {})}
+    out = {"design": design, "pdk": prj.pdk.id if prj.pdk else None,
+           "deck": deck_entry(prj.pdk, d["kind"], d["name"]) if d and prj.pdk else d,
+           "tools": {n: tools.version(n) for n in inp.get("tools", {})}, "options": inp.get("options", {})}
+    # only what the job recorded: a job from before models and profile were recorded stays comparable (not unknown).
+    # The same model files are hashed again: a netlist that reads others has another text, so its own entry changes
+    if "models" in inp:
+        out["models"] = model_entries(m["path"] for m in inp["models"] or [])
+    if "profile" in inp:
+        out["profile"] = profile_fields(prj.pdk, list(inp["profile"] or {}), (d or {}).get("name"))
+    return out
 
 
 def _name(e: dict) -> str:
@@ -224,6 +346,21 @@ def diff(old: dict, new: dict) -> list[str]:
     for k in sorted(set(oo) | set(no)):
         if oo.get(k) != no.get(k):
             out.append(f"option {k}: {oo.get(k, 'default')} → {no.get(k, 'default')}")
+    if "models" in old and "models" in new:           # one without was recorded before models were: not a change
+        om = {m["path"]: m.get("sha") for m in old["models"] or []}
+        nm = {m["path"]: m.get("sha") for m in new["models"] or []}
+        for p in sorted(set(om) | set(nm)):
+            if p not in nm:
+                out.append(f"model file {p} no longer read")
+            elif p not in om:
+                out.append(f"model file {p} now read")
+            elif om[p] != nm[p]:
+                out.append(f"model file {p} {'is gone' if nm[p] is None else 'changed'}")
+    if "profile" in old and "profile" in new:
+        op, np_ = old["profile"] or {}, new["profile"] or {}
+        for k in sorted(set(op) | set(np_)):
+            if op.get(k) != np_.get(k):
+                out.append(f"profile field {k}: {op.get(k)} → {np_.get(k)}")
     return out
 
 

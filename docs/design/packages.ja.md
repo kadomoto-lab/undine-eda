@@ -595,6 +595,19 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   ネットリストが読み込むモデルのファイル(`.lib` / `.include` の対象と OSDI のファイル、ハッシュで)と、ジョブが使うプロファイルの
   欄(deck のオプション、deck の変数、モデルのパス)です。パッケージの README や関係のないセルの変更、プロファイルのレイヤーの色の
   変更では、何も古くなりません。
+  *実装済み(段階 4、store/provenance.py):* `key` の中では、シミュレーションの入力に `models`(ネットリストが `.lib` / `.include`
+  で読むすべてのファイル。たどった先も含み、`.lib` の行はそのセクションのファイルで、OSDI のファイルも加え、縮小したコピーではなく
+  元のファイルの `{path, sha}` として。`modellib.files_read`。ハッシュはパス、時刻、大きさでキャッシュします)と `profile`
+  (`model_lib`、`model_includes`、`osdi`、`corners`)が加わります。KLayout の DRC と LVS には `profile`(deck の `drc_options`
+  か `lvs_options` と、その PDK の `deck_vars`)が加わります。`key` の外では、どのジョブの status にも `about` があります。
+  `packages`(ジョブが読んだファイル、つまりネットリストの回路図とシンボル、モデルのファイル、レイアウトのライブラリを install に
+  持つ lock のエントリそれぞれの `{name, package, version, tree | sha, index}`)、`pdk`(`{id, commit, family, variant, tree}`。
+  tree は lock の固定)、`profile`(`{family, source: "built-in", undine}`。プロファイルのパッケージは段階 6)です。`recompute` は
+  `models` と `profile` を記録したジョブにだけそれらを作るので、それより前のジョブは不明ではなく最新のままです。`diff` は
+  「model file X changed」と「profile field Y: a → b」を返します。changeset の evidence のマニフェストは、保存した `undine.lock`
+  からそれぞれの側の `packages` と `pdk` を並べ、各ジョブの行はそのジョブの `about` を持ちます
+  ([ジョブの来歴](../reference/data.md#job-provenance))。Magic の DRC、Netgen の LVS、寄生抽出はプロファイルの欄を記録しません
+  (それらの設定ファイルはプロファイルの欄ではないため)。
 
 <a id="ui-cli-http-agent-tools"></a>
 
@@ -1098,9 +1111,14 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 `test_depmerge.py`(別々の依存を加えた 2 つの changeset がどちらの順でも採用できる。衝突する要求を拒否する。lock を古いままにする
 マージを理由付きで拒否する。2 つのブランチの `git merge` がドライバを通る)。
 
+できたもの: パッケージと PDK の情報とモデルのファイルのハッシュを持つ evidence(store/provenance.py、`modellib.files_read`、
+store/changeset.py の evidence のマニフェスト。[changeset と evidence](#changesets-and-evidence)を参照)。テスト:
+`test_pkg_evidence.py`(1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない。
+パッケージのコードブロックが include するモデルのファイルが変わると、ネットリストの文面が同じでもシミュレーションが古くなる。
+プロファイルの欄は key の中、`about` は外。それより前のジョブは最新のまま。マニフェストがパッケージと PDK を並べる)。
+
 段階 4 でこれから作るもの: changeset での依存の操作(作業コピーでの `dep_add` / `dep_update` / `dep_remove` / `pdk_set` と、
-採用の後の install)、そのレビュー、エージェントの *needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、
-パッケージと PDK の情報を持つ evidence。
+採用の後の install)、そのレビュー、エージェントの *needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール。
 
 <a id="decisions"></a>
 <a id="open-questions"></a>

@@ -334,8 +334,9 @@ def test_undine_output_is_never_listed(api, monkeypatch):
 
 
 def test_a_conflict_in_project_json_leaves_the_history_readable(api):
-    """project.json has no merge driver: both branches adding a library or editing its description leave it with
-    conflict markers. The project's git routes still answer (HEAD's libraries), so the conflict can be seen."""
+    """Both branches editing project.json's description: Undine's driver merges it entry by entry (vcs/depmerge.py),
+    keeps ours and leaves the file conflicted. Merged without the driver (a clone not set up), the file has conflict
+    markers and is no JSON: the project's git routes still answer (HEAD's libraries), so the conflict can be seen."""
     setup(api)
     commit(api.d, "base")
     main = git(api.d, "symbolic-ref", "--short", "HEAD")
@@ -352,6 +353,13 @@ def test_a_conflict_in_project_json_leaves_the_history_readable(api):
     write(api.d, "libs/l/inv.sch", edit(INV, "W=2", "W=4"))
     commit(api.d, "main")
     git(api.d, "merge", "-q", "--no-edit", "side", ok=False)
+    merged = json.loads((api.d / "project.json").read_text())             # the driver's: ours, still JSON
+    assert merged["description"] == "main"
+    assert get(api, "/api/p/p/git")["conflicted"] == ["project.json"]
+    marked = (api.d / "project.json").read_text().replace('"description": "main"',
+                                                         '<<<<<<< ours\n  "description": "main"\n=======\n'
+                                                         '  "description": "side"\n>>>>>>> side')
+    write(api.d, "project.json", marked)                                   # as a merge without the driver leaves it
     assert "<<<<<<<" in (api.d / "project.json").read_text()
     st = get(api, "/api/p/p/git")
     assert st["operation"] == "merge" and st["conflicted"] == ["project.json"]

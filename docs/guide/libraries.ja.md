@@ -290,7 +290,13 @@ include = ["*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "rtl/**
   `.sch`、`.oas` のどれかを持つ必要があります。
 - **`[files]`**: `include` はパッケージを構成するファイルを並べます。[include のファイル集合と lock](#the-include-file-set-and-the-lock)
   を参照してください。ないときは、ディレクトリのすべてのファイルです。
-- **`[checks]`** と **`[renames]`** はテーブルとして受け付けますが、まだ使いません(後で公開のために使います)。
+- **`[checks]`**: `pkg check` がパッケージのセルに DRC をどう実行するか。`drc = { deck = "sky130A_mr.drc", options = {
+  density = false } }`(PDK の deck をファイル名で。オプションは true、false、数、文字列)と、`waive = [{ cell = "unit_cap",
+  rules = ["m1.2"], reason = "abutment cell: clean once arrayed" }]`。免除はそのセル自身の DRC の実行にだけ効き、規則を
+  1 つ以上と理由が要り、パッケージのファイルにあるセルを名指しします。
+- **`[renames]`**: 改名したバージョンごとの、古いセル名から新しいセル名への対応: `"1.2.0" = { comp = "comparator" }`。
+  バージョンはパッケージ自身のもの以下で、1 つのバージョンで 2 つの古い名前が 1 つの新しい名前を取ることはできません。更新は
+  これを使って、改名を改名として報告するようになります([ライブラリを公開する](#publishing-a-library)を参照)。
 - ほかのテーブルやキーは、その名前と既知のものを示して拒否します。`revision =` のような書き間違いが、黙って別の意味になるのを
   防ぐためです。
 
@@ -498,6 +504,41 @@ pixi run python -m undine pkg sync demo --from-vendor tapeout/tt-sky130-analog/t
 
 vendor したディレクトリは、どのファイルもストアに入れる前に、それぞれハッシュして `undine.lock` と比べます。手で変えた、
 加えた、消したファイルがあれば拒否し、何も読み込みません。そのあと lock をオフラインでインストールします。
+
+<a id="publishing-a-library"></a>
+### ライブラリを公開する
+
+プロジェクトのライブラリは、マニフェストを持ち、リリースのタグを付けた git のリポジトリにあり、`pkg check` に通れば、
+ほかの人が追加できるパッケージになります。公開は作っている途中です([設計](../design/packages.ja.md#phase-5-status)の段階 5)。
+今使えるのはコマンドラインの次のものです:
+
+```sh
+pixi run python -m undine pkg init demo/analog_ip --license Apache-2.0    # undine-package.toml を書く
+(cd ~/undine-projects/demo && git add libs/analog_ip && git commit -m "analog_ip 0.1.0" && git tag v0.1.0)
+pixi run python -m undine pkg check demo/analog_ip --no-run   # PDK の要らない検証
+pixi run python -m undine pkg pack demo/analog_ip             # インデックスの行を表示する
+```
+
+ライブラリは `PROJECT/LIBRARY`(`--root` の下)か、そのディレクトリで指定します。
+
+- **`pkg init`** は、ライブラリとそのプロジェクトからマニフェストの下書きを作ります。シンボルのあるセルが `[exports]` に、
+  プロジェクトの PDK が `[pdk]` に(`built_with` はそのコミット)、回路図が置くインデックスの依存関係が `[dependencies]` に
+  なり、`repository` は git の remote `origin` です。推測した値をそれぞれ表示するので、読んで確かめ、足りないと言われたものを
+  加えてください(公開にはライセンスが要ります)。
+- **タグ**は `v<version>`、リポジトリに複数のパッケージがあれば `<name>-v<version>` です。`pkg pack` と `pkg check` は、
+  パッケージのディレクトリにコミットしていない変更も追跡していないファイルもなく(リポジトリのほかの部分は見ません)、HEAD が
+  そのタグにあることを求めます。`pkg check` は、`repository` の URL がそのコミットでタグを渡すかどうかも尋ねるので、先に
+  タグを push してください(`--offline` ならこれを省き、警告を出します)。
+- **`pkg check --no-run`** は `<project>/.undine/check/<name>-<version>/undine-check.json` を書きます。実行したコミットと木、
+  ファイルのサイズ(50 MB を超えるものも Git LFS のポインタもないこと)、ライセンス(SPDX の式)、依存関係(インデックスの
+  ものだけで、解決できること)、PDK(`built_with` がプロジェクトの PDK であること)、回路図が置くライブラリ(パッケージ自身、
+  宣言した依存関係、PDK のライブラリ)、そしてすべてのコードブロックと RTL ファイルで、利用する側のプロジェクトで
+  [信頼の規則](#trusting-a-dependencys-code)が拒否するものには印を付けます。DRC、LVS、シンボルとネットリストの検証、スペックは
+  まだ実行しないので、報告はまだ通りません。
+- **`pkg pack`** は、`pkg publish` がインデックスに加える行を、利用する側が計算するのと同じ木のハッシュとともに表示します。
+
+`pkg publish` と `pkg yank`(尋ねたうえで、インデックスにブランチとプルリクエストを作る)、`pkg check` での DRC、LVS、
+スペックの実行、前のバージョンに対する semver の報告は後で作ります。まだ何も公開されず、ブラウザにそのためのボタンもありません。
 
 ## undine.lock
 

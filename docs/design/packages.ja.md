@@ -130,6 +130,13 @@ waive = [{ cell = "unit_cap", rules = ["m1.2"], reason = "abutment cell: clean o
 `[renames]` は表として受け付けますが、まだ使いません。index がまだないので、`[dependencies]` は git の形を取ります。上の index の形は
 解析しますが、解決のときに拒否します。[段階 2 の状況](#phase-2-status)を参照してください。
 
+*実装済み(段階 5):* `[checks]` と `[renames]` に型を付けました(`manifest.Checks`、`Waiver`、`Manifest.renames`)。どの拒否も
+キーのパスを示します。`drc` は `deck`(ディレクトリを含まない deck のファイル名)と `options`(それぞれ true、false、数、
+文字列)を取ります。免除にはセル、1 つ以上の規則、空でない理由が要り、そのセルは include の集合の最上位のセルでなければ
+なりません。`[renames]` のキーは `[package].version` 以下のバージョンで、古い名前も新しい名前もセル名です。名前を自分自身に
+改名することも、1 つのバージョンで 2 つの古い名前を 1 つの新しい名前にすることもできません。`manifest.render` は manifest を
+TOML に書き戻し、それを解析すると同じ manifest になります。[段階 5 の状況](#phase-5-status)を参照してください。
+
 <a id="index"></a>
 
 ## index
@@ -179,6 +186,12 @@ pr/of/profile_sky130.jsonl
 tree で、署名はありません(署名は[後で](#decisions))。あるバージョンの commit と tree は変わりません。**yank** は `yanked: true` に
 することで、これも PR で行います。解決では飛ばし、すでに固定している lock はそのまま使え、`status` が警告します。`check` は、
 公開する人の検証の報告へのリンクとその SHA-256 です([公開](#publishing)を参照)。
+
+*実装済み(段階 5):* `index.line_text` は行を上のとおりに書きます。詰めた JSON で、UTF-8 はそのまま、キーは例の順
+(`description` は `license` の後)、値のないキーは省き、`deps` と `yanked` は常に書きます。`parse_line` で読み戻すと同じ行に
+なります。`check` はちょうど `{url, sha256}` でなければなりません。ユーザー名もパスワードも含まない https の URL と、64 文字の
+小文字の 16 進です。`index.yank_rewrite` は、1 つのバージョンの行をその場で書き換えて yank した(またはしていない)印を付け、
+ファイルのほかのバイトはそのまま残します。
 
 **既定の index** は `undine` です。GitHub の kadomoto-lab の organisation に置くリポジトリ
 `https://github.com/kadomoto-lab/undine-index.git` です(2026-11-20 に作成。まだパッケージはありません)。URL は
@@ -484,6 +497,10 @@ index 側の CI(Undine がワークフローのファイルを用意する)は�
 です。index の CI での DRC と LVS は、CI に PDK(sky130 で variant ごとに 1.1 GB)が要るので、後で行います
 ([決定事項](#decisions)の 9)。
 
+*実装済み(段階 5、ここまで):* `pkg init`、`pkg pack`、`pkg check --no-run`(store/pkgsource.py、store/checkreport.py)。
+`pkg check --no-run` は PDK の要らない検証で報告を書きます。実行はまだしないので、報告は通りません。
+[段階 5 の状況](#phase-5-status)を参照してください。
+
 <a id="cells-across-versions"></a>
 
 ## バージョンをまたいだセル
@@ -558,6 +575,11 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 *実装済み(段階 3):* パッケージのライセンスは manifest の `license`、なければ手元の index の写しの行から取ります(読むだけで
 取得しない)。素の git 依存には記録がなく、最上位の `LICENSE`、`COPYING`、`NOTICE`、`COPYRIGHT` のファイルを示します。
 プロファイルのパッケージができるまでは、PDK のライセンスは store/vendor.py の表です(sky130、gf180mcu、ihp-sg13: Apache-2.0)。
+
+*実装済み(段階 5):* store/spdx.py は SPDX の式を構文だけで確かめます(SPDX 2.3 の Annex D: 識別子、`+`、大文字の `WITH`、
+`AND`、`OR`、括弧、`LicenseRef-` と `DocumentRef-`)。ライセンスの一覧は同梱しないので、新しい識別子に Undine のリリースは
+要らず、綴りの誤りはレビューする人が見ます。`pkg init --license` と `pkg check` がこれを使い、manifest の解析は使わないので、
+前に解析できた manifest は今も解析できます。
 
 <a id="changesets-and-evidence"></a>
 
@@ -826,7 +848,7 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 | 2. manifest と解決 | `undine-package.toml`。manifest からの推移的な依存(まだ git の URL)。プロジェクト全体で共通のローカル名と、それぞれの下への install。セル名が重ならないこと。PDK の互換性。コードブロックと RTL についての信頼の規則 | ダイヤモンドを一度だけ入れる。両立しない要求が両方の経路を示す。`comparator` を持つ 2 つのパッケージを、両方を示して拒否する。ローカルな別名で解決でき、Xschem のネットリスタのバックエンドでも解決できる。2 つのライブラリが 1 つのローカル名に別々のパッケージを当てれば拒否する。互換でない PDK を拒否する。`.control` か絶対パスの `.include` を持つ依存のセルを、信頼するまで拒否する | **済み**。[段階 2 の状況](#phase-2-status)を参照 |
 | 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **済み**、[段階 3 の状況](#phase-3-status)を参照 |
 | 4. changeset とエージェント | changeset での依存の操作、依存の変更のレビュー(コードブロックと RTL の一覧)、確認のトークン、取得の後の通知、DATA の規則つきのエージェントのツール、git のマージドライバでの `project.json` と `undine.lock` のマージの規則(`merge.md` も直す)、`key` の外のパッケージと PDK の情報と、`key` の中のモデルのファイルとプロファイルの欄を含む evidence | changeset で追加、採用、元に戻す。エージェントの追加は *取得が必要* を記録し、取得せず、人の取得の後に続けられる。トークンを返すツールはない。別々のパッケージを追加する 2 つの changeset を、どちらの順でも採用できる。両立しない要求は採用のときに拒否する。1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない | **進行中**、[段階 4 の状況](#phase-4-status)を参照 |
-| 5. 公開 | `pkg init / check / pack / publish / yank`、`[checks]`、検証の報告と、index の行と PR からのそのリンク、semver の報告、報告に入るスペックの結果、`[renames]`、セル単位の更新の報告、レイアウトのコピーの更新、index の CI のワークフロー(DRC / LVS なし) | この木について通った報告がなければ publish は拒否し、PR の本文は報告をその SHA-256 とともにリンクする。SHA-256、commit、木が行と違う報告を index の CI が拒否する。改名したセルが改名として報告され、参照が書き換わる。ピンを消したりレイアウトのピンを動かしたりするとメジャーバージョンが要る。免除した規則は `check` に通り、示される。リポジトリが渡さない木の publish を拒否する。2 つのパッケージを持つリポジトリでのタグ `<name>-v<version>`。更新の後、コピーしたセルが changeset の中で新しくなり、その LVS が古くなる。編集したコピーは置き換えず、示す | **予定** |
+| 5. 公開 | `pkg init / check / pack / publish / yank`、`[checks]`、検証の報告と、index の行と PR からのそのリンク、semver の報告、報告に入るスペックの結果、`[renames]`、セル単位の更新の報告、レイアウトのコピーの更新、index の CI のワークフロー(DRC / LVS なし) | この木について通った報告がなければ publish は拒否し、PR の本文は報告をその SHA-256 とともにリンクする。SHA-256、commit、木が行と違う報告を index の CI が拒否する。改名したセルが改名として報告され、参照が書き換わる。ピンを消したりレイアウトのピンを動かしたりするとメジャーバージョンが要る。免除した規則は `check` に通り、示される。リポジトリが渡さない木の publish を拒否する。2 つのパッケージを持つリポジトリでのタグ `<name>-v<version>`。更新の後、コピーしたセルが changeset の中で新しくなり、その LVS が古くなる。編集したコピーは置き換えず、示す | **進行中**、[段階 5 の状況](#phase-5-status)を参照 |
 | 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、レイヤーの色を変えても古くならない | **予定** |
 
 <a id="phase-0-status"></a>
@@ -1109,6 +1131,64 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 採用の後の install)、そのレビュー、エージェントの *needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、
 パッケージと PDK の情報を持つ evidence。
 
+<a id="phase-5-status"></a>
+### 段階 5 の状況
+
+ここまでにできたもの(store/manifest.py、store/spdx.py、store/index.py、store/pkgsource.py、store/checkreport.py、
+store/trust.py、undine/pkgcli.py。テストは `test_manifest.py`、`test_pkg_index.py`、`test_pkg_publish.py` で、リポジトリも
+index もすべて手元のもの。GitHub に触れるテストはありません):
+
+- **`[checks]` と `[renames]`** の型と **`manifest.render`**([パッケージ](#packages)を参照)。**SPDX** は構文だけ
+  ([ライセンス](#licences)を参照)。
+- **index の行**: `line_text`、厳しくした `check`、`yank_rewrite`([index](#index)を参照)。
+- **パッケージの出どころ**(store/pkgsource.py)。`LIBRARY` はプロジェクトのライブラリのディレクトリ(`project.json` まで上に
+  たどってプロジェクトを見つける)か、`--root` の下の `PROJECT/LIBRARY` です。依存や PDK のライブラリは拒否します。タグは
+  `v<version>`、HEAD に `undine-package.toml` が 2 つ以上あれば `<name>-v<version>` です。`at_tag` は、パッケージの
+  サブディレクトリに追跡しているものの変更も追跡していないファイルもなく(リポジトリのほかの部分は見ない)、HEAD がタグ
+  (注釈つきのタグでもよい)にあることを求めます。`served` はタグの commit をリポジトリの URL から読みます(`git ls-remote`)。
+  `tree` は include の集合を、利用する側の取得と同じように git の blob からストアに読み込み、ファイルのバイト数を合計します。
+- **`pkg init LIBRARY [--name] [--version] [--license] [--repository] [--force]`** は manifest を書きます。ライブラリの名前、
+  バージョン 0.1.0、シンボルのあるセルを公開、例の include の一覧、プロジェクトの PDK からの `[pdk]`(family と variant。
+  `commits` と `built_with` はその完全な commit で、入っている PDK から、なければ lock の形式 2 の固定から取る)、ライブラリの
+  回路図が置くプロジェクトの index の依存を `^<固定したバージョン>` で(略称は URL にして書く)、`repository` は git の remote
+  `origin` から。置かれている git 依存やプロジェクトのライブラリは、理由を添えたコメントとして書きます。推測した値をそれぞれ
+  表示し、足りないもの(ライセンス、repository、完全な PDK の commit)を警告します。すでにある manifest は `--force` のときだけ
+  置き換えます。
+- **`pkg pack LIBRARY [--index I] [--check FILE --check-url URL]`** は index の行を表示します。`git` は manifest の
+  repository、`subdir`、タグの commit、手元のリポジトリからハッシュした木、`pdk`、`deps`(要求の `index` は、行自身の index で
+  なければ URL として)、`exports`、`license`、`size`、`description`、そして `--check` と `--check-url` を両方与えたときだけ
+  `check`。git 依存と、`repository` のない manifest は拒否します。
+- **検証の報告**(store/checkreport.py、形式 1。フィールドはモジュールの docstring にある)と、それを
+  `<project>/.undine/check/<name>-<version>/undine-check.json` に書く **`pkg check LIBRARY --no-run [--index I] [--offline]
+  [--out FILE] [--json]`**。問題になるもの: リポジトリの URL がその commit でタグを渡さない(`--offline` では確かめず、警告に
+  する)。`UNDINE_PKG_FILE_MAX`(既定 50 MB)を超えるファイル。LFS のポインタなど、木が拒否するファイル(そのとき木は null)。
+  ライセンスがない、または SPDX の式でない。git 依存。パッケージの `built_with` について index から解決できない依存
+  (`--offline` でなければ先に index を取得する)。`built_with` がない、またはプロジェクトの PDK の commit と variant でない。
+  パッケージ自身でも、宣言した依存でも、PDK のライブラリでも `devices` でもない、置かれているライブラリ(パッケージを別の
+  名前にしたときのライブラリ自身の名前も)。警告になるもの: 依存の内部のセルを置いている。ライブラリの部分のないシンボルを
+  置いている。信頼の規則が拒否するコードブロックと RTL。`trust.listing` は、すべてのコードブロック(`.control` のブロックと
+  その中のコマンド。`shell` や `pre_osdi` もそこに出る。`*#` の行、`.include` / `.lib` と XSPICE のファイルのパス、
+  `tcleval`)とすべての RTL ファイルを、拒否されるかどうかにかかわらず一覧にします。一時ディレクトリに install した include の
+  木について実行するので、公開するファイルだけを調べます。セルごとのシンボル、ネットリスト、DRC(deck、オプション、理由つきの
+  免除)、LVS(回路図とレイアウトの両方があるセル)、スペックの項目は `not_run` です。`runs.state` が `not_run` であること
+  自体が問題なので、`--no-run` の報告は決して通りません(終了コード 1)。リポジトリ、プロジェクト、ホームディレクトリの
+  パスを含む文字列は `<repository>`、`<project>`、`~` として書きます。`checkreport.verify` は、publish と index の CI の
+  ために、違う SHA-256、知らない形式や種類、行と違う名前、バージョン、commit、木、通らない報告を拒否します。
+
+段階 5 でこれから作るもの: `pkg check` でのシンボルとネットリストの検証、免除つきの DRC と LVS の実行(KLayout で、ジョブの
+ルートを持たないサーバーを使う)、スペックの結果と semver の報告、`pkg publish` と `pkg yank`、index の CI(`pkg index check`
+とそのワークフローのファイル)、`[renames]` を使うセル単位の更新の報告、`dep_update` でのレイアウトのコピーの更新(段階 4 の
+後)。
+
+上の本文との違いと、加えたもの:
+
+- `--no-run` のない `pkg check` は、実行ができるまで拒否します。
+- タグの上できれいでないパッケージについて、`pkg check` は報告を書きません。報告は 1 つの commit と木を示すものです。
+- 宣言していない置かれたライブラリは、プロジェクトの PDK が入っていないとき(そのときは PDK のライブラリが分からない)も
+  問題にし、PDK を入れるよう促します。
+- `parse_line` は `check` について厳しくなりました。既定の index にパッケージがない今は、それで困ることはありません。
+- `pkg init` は互換性タグではなく `commits = [built_with]` を書きます。タグは PDK プロファイルとともに来ます(段階 6)。
+
 <a id="decisions"></a>
 <a id="open-questions"></a>
 
@@ -1142,6 +1222,33 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 13. **時間がたってからの入手: 選択肢 (b)。** `pkg vendor` が固定した内容を、`pkg licenses` と一緒にテープアウトのバンドルに
     書きます([取得とストア](#fetch-and-store))。テープアウトの evidence が、公開する人がリポジトリを保ち続けることに頼らなくなり、
     写しのためのサービスを運用する必要もありません。
+
+2026-11-22 に、段階 5 についてユーザーと決めました:
+
+14. **`pkg publish` と `pkg yank` の外への書き込みは、どれも先に尋ねる。** 書き込み(`gh release upload`、index の clone からの
+    ブランチの `git push`、`gh pr create`、index に push できない人のための fork)は、それぞれ正確なコマンドを示し、端末では
+    y/N で尋ねます。端末がなければ `--yes` のないかぎり拒否し、`--dry-run` は何も実行しません。環境変数もエージェントのツールも
+    確認の代わりになりません。index の持ち主は fork を作らず、ブランチを index に直接 push します。人のリポジトリへの書き込みは、
+    その人が決めることです。
+15. **index の CI のワークフローのファイルは Undine が同梱し、`kadomoto-lab/undine-index` にはユーザーが加える。** その
+    リポジトリへの commit はユーザーのものです。
+16. **公開するセルのスペックが満たされない、または測られていないときは、`pkg check` を通さない。** アナログの IP では
+    スペックが約束そのものです。
+17. **本物の GitHub に触れるテストはなく、最初の本当の公開はユーザー自身が実行する。** テストは手元のリポジトリと index、
+    偽の `gh` を使います。
+18. **SPDX の式は構文だけで確かめ、ライセンスの一覧は持たない。** Undine はサードパーティの参照データを同梱せず、新しい
+    識別子にリリースは要りません。
+19. **シンボルのピンを加えたらマイナーバージョンが要る。** 新しいセルがパッケージのインターフェースに加わるのと同じく、
+    セルのインターフェースに加わるもので、利用する側の既存のインスタンスではつながらないまま残ります。
+20. **免除は、免除したセル自身の DRC の実行にだけ効く。** それを置くセルはすべて検証されるので、突き合わせのセルの免除が
+    配列の中の誤りを隠しません。
+21. **`pkg check` が実行するのは KLayout の DRC と LVS だけ。** GF180 と IHP には、Undine に Magic や Netgen の deck が
+    ありません。
+22. **`undine-check.json` は `<project>/.undine/check/` の下に書く。** パッケージのディレクトリの外なので、それが示す木を
+    汚しません。
+23. **作業ツリーがきれいかどうかは、パッケージのサブディレクトリだけで確かめる。** リポジトリのほかの部分(プロジェクトの
+    ほかのライブラリ、`project.json`)はパッケージの木に入りません。
+24. **段階 5 では、公開のための HTTP のルートも UI も作らない。** 公開はコマンドラインで、人が実行するものです。
 
 <a id="later"></a>
 

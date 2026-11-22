@@ -296,7 +296,13 @@ include = ["*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "rtl/**
   `.sym`, `.sch` or `.oas` among the package's files.
 - **`[files]`**: `include` lists the files the package consists of; see
   [The include file set and the lock](#the-include-file-set-and-the-lock). Without it, every file of the directory.
-- **`[checks]`** and **`[renames]`** are accepted as tables and not used yet (they are for publishing, later).
+- **`[checks]`**: how `pkg check` runs DRC on the package's cells. `drc = { deck = "sky130A_mr.drc", options = {
+  density = false } }` (a deck of the PDK by file name; the options are true, false, numbers or strings), and `waive
+  = [{ cell = "unit_cap", rules = ["m1.2"], reason = "abutment cell: clean once arrayed" }]`: a waiver applies to
+  that cell's own DRC run only, needs at least one rule and a reason, and names a cell among the package's files.
+- **`[renames]`**: old cell name to new, per version that renamed it: `"1.2.0" = { comp = "comparator" }`. The version
+  is at most the package's own; no two old names take one new name in one version. Updates will use it to report a
+  rename as a rename (see [Publishing a library](#publishing-a-library)).
 - Any other table or key is refused, naming it and the known ones: a typo such as `revision =` would otherwise mean
   something else silently.
 
@@ -504,6 +510,41 @@ pixi run python -m undine pkg sync demo --from-vendor tapeout/tt-sky130-analog/t
 
 Each vendored directory is hashed and compared with `undine.lock` before any of its files enters the store. A file
 changed, added or removed by hand is refused, and nothing is imported. The lock is then installed offline.
+
+### Publishing a library
+
+A library of your project becomes a package others can add once it has a manifest, sits in a git repository with a
+release tag, and passes `pkg check`. Publishing is being built (phase 5 of the
+[design](../design/packages.md#phase-5-status)); what works so far is on the command line:
+
+```sh
+pixi run python -m undine pkg init demo/analog_ip --license Apache-2.0    # writes undine-package.toml
+(cd ~/undine-projects/demo && git add libs/analog_ip && git commit -m "analog_ip 0.1.0" && git tag v0.1.0)
+pixi run python -m undine pkg check demo/analog_ip --no-run   # the checks that need no PDK
+pixi run python -m undine pkg pack demo/analog_ip             # prints the index line
+```
+
+The library is named as `PROJECT/LIBRARY` (under `--root`) or by its directory.
+
+- **`pkg init`** drafts the manifest from the library and its project: the cells with a symbol become `[exports]`,
+  the project's PDK becomes `[pdk]` (`built_with` is its commit), the index dependencies the schematics place become
+  `[dependencies]`, and `repository` is the git remote `origin`. It prints each value it guessed; read them, and add
+  what it says is missing (a licence is required to publish).
+- **The tag** is `v<version>`, or `<name>-v<version>` when the repository holds more than one package. `pkg pack` and
+  `pkg check` want the package's directory without uncommitted or untracked changes (the rest of the repository is
+  not looked at) and HEAD at that tag. `pkg check` also asks the `repository` URL whether it serves the tag at that
+  commit, so push the tag first (`--offline` skips this, with a warning).
+- **`pkg check --no-run`** writes `<project>/.undine/check/<name>-<version>/undine-check.json`: the commit and tree
+  it ran on, file sizes (none over 50 MB, no Git LFS pointer), the licence (an SPDX expression), the dependencies
+  (only from an index, and resolvable), the PDK (`built_with` is the project's PDK), the libraries the schematics
+  place (the package itself, a declared dependency or a PDK library), and every code block and RTL file, marked where
+  the [trust rule](#trusting-a-dependencys-code) would refuse it in a consumer's project. DRC, LVS, the symbol and
+  netlist checks and the specs are not run yet, so the report does not pass yet.
+- **`pkg pack`** prints the line `pkg publish` will add to the index, with the tree hash a consumer will compute.
+
+`pkg publish` and `pkg yank` (a branch and a pull request in the index, after asking), running DRC, LVS and the specs
+in `pkg check`, and the semver report against the previous version come later; nothing is published yet, and there
+is no button for it in the browser.
 
 ## undine.lock
 

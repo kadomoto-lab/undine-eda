@@ -30,7 +30,10 @@ and RTL used only once a person trusts it; see [Libraries and dependencies](guid
   adopt, and an adopt whose merged lock no longer pins what `project.json` asks is refused
   ([merge.md](design/merge.md)).
 - [ ] **Phase 5: publishing.** Commands to check, pack and publish a package, with its check report linked from the
-  index, and a report of what changed between two versions down to each cell.
+  index, and a report of what changed between two versions down to each cell. Done so far: the manifest's `[checks]`
+  (DRC deck, options, waivers with a reason) and `[renames]`, `pkg init` (a manifest drafted from a library),
+  `pkg pack` (the index line of a tagged release) and `pkg check --no-run` (the check report's checks that need no
+  PDK) ([Publishing a library](guide/libraries.md#publishing-a-library)).
 - [ ] **Phase 6: PDK profiles.** Each PDK family's process knowledge as a data package that names the PDK versions it
   supports.
 

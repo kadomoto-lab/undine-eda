@@ -190,6 +190,9 @@ def test_agent_continues_after_persons_fetch(tmp_path, remotes, nofetch, monkeyp
     assert out["event"] == "changeset" and out["status"] == "open", out
     [n] = out["notices"]
     assert n["kind"] == "fetched" and n["op_id"] == op_id and n["name"] == "amp" and "installed" in n["text"]
+    # what to do comes first, the URLs fetched last (a cut trims only those)
+    assert n["text"].startswith("dependency amp (dep_add) is installed") and "list_symbols lib=amp" in n["text"]
+    assert n["text"].index("run_checks") < n["text"].index(line["git"])
     # installed in the working copy, recorded as the agent's operation the person fetched
     work = srv.project(f"p~{cid}")
     assert (deps.dep_dir(work.path, "amp") / "amp_cell.sym").is_file()
@@ -929,5 +932,135 @@ def test_notices_are_given_once_the_agent_has_them(tmp_path, remotes, monkeypatc
     ta.SCRIPT[:] = [{"content": "ok"}]
     agent.run(srv, "p", srv.project("p").path, conv, [], "more?", "agent:assistant", {}, owner="turn:c", turn="c")
     assert "for the assistant" not in json.dumps(ta.SEEN[0]["messages"][-1])
+    httpd.shutdown()
+    shutil.rmtree(root, ignore_errors=True)
+
+
+# ------------------------------------------------------------------ the fourth review's findings (c959920)
+
+
+def test_a_refusal_told_again_once_something_else_happened_to_the_op(tmp_path, remotes, nofetch):
+    """1: the dedup of a resolution refused looks at the operation's latest notice only: the same refusal after the
+    operation was installed and restored away is told again."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    a1 = _propose(me)["op_id"]
+    a2 = _propose(me, name="amp2", package="amp")["op_id"]
+    p1, p2 = _pending(c, cid)
+    to = p2["gseq"]
+
+    def failed() -> list[dict]:
+        return [n for n in cs._record("p", cid)["notices"] if n["op_id"] == a2 and n["kind"] == "fetch_failed"]
+    assert _person_fetch(c, p1["plan"])["state"] == "done"
+    assert _confirm(c, p2["plan"]).json()["code"] == "resolution_refused"
+    assert _confirm(c, p2["plan"]).json()["code"] == "resolution_refused"
+    assert len(failed()) == 1                                   # not once per click
+    _call(me, "restore_changeset", {"to": to})
+    [q2] = [x for x in _pending(c, cid) if x["op_id"] == a2]
+    assert _person_fetch(c, q2["plan"])["state"] == "done"     # amp2 installed: its latest notice is "fetched"
+    _call(me, "restore_changeset", {"to": to})
+    [q1] = [x for x in _pending(c, cid) if x["op_id"] == a1]
+    assert _person_fetch(c, q1["plan"])["state"] == "done"
+    [q2] = [x for x in _pending(c, cid) if x["op_id"] == a2]
+    assert _confirm(c, q2["plan"]).json()["code"] == "resolution_refused"
+    assert len(failed()) == 2 and failed()[0]["sha"] == failed()[1]["sha"]
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_second_batch_step_of_a_changeset_is_refused(tmp_path):
+    """2: two overlapping batch steps would put back over each other and clear the running mark: the second is busy."""
+    root, srv, cs = tc.setup()
+    me = _agent(srv)
+    cid = _open(me)
+    seen: dict = {}
+
+    def outer():
+        with pytest.raises(changesetmod.Busy):
+            cs.batch("p", cid, lambda: [])
+        seen["running"] = cid in srv.batching                   # the first step is still marked running
+        return []
+    cs.batch("p", cid, outer)
+    assert seen["running"] and cid not in srv.batching
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_take_notices_keeps_trying_while_notices_remain(tmp_path, monkeypatch):
+    """3: however many times another call of the reader marks first, the notices left are given, not []."""
+    root, srv, cs = tc.setup()
+    me = _agent(srv)
+    cid = _open(me)
+    cs.add_notice("p", cid, {"kind": "fetched", "op_id": "dep-1", "name": "amp", "text": "one"})
+    real = changesetmod.Changesets.mark_notices
+    lost = {"n": 0}
+
+    def contended(self, *a, **k):
+        if lost["n"] < 8:                                       # eight conflicts in a row
+            lost["n"] += 1
+            return False
+        return real(self, *a, **k)
+    monkeypatch.setattr(changesetmod.Changesets, "mark_notices", contended)
+    assert [n["text"] for n in cs.take_notices("p", cid, me.owner)] == ["one"]
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_notice_full_of_escapes_is_kept_whole_in_a_small_answer(tmp_path):
+    """4a: control characters are taken out and the cap counts the JSON escapes, so the one notice an answer of 1000
+    characters is forced to give is never cut after it was marked."""
+    root, srv, cs = tc.setup()
+    me = _agent(srv)
+    cid = _open(me)
+    cs.add_notice("p", cid, {"kind": "fetch_failed", "op_id": "dep-1", "name": "amp",
+                             "text": "\x01\x02" * 300 + '"\\' * 600})
+    text, err = T.call(me, "wait_for", {"events": ["changeset"], "timeout_s": 1}, limit=1000)
+    assert not err and len(text) <= 1000, len(text)
+    out = json.loads(text)
+    assert "_truncated" not in out and len(out["notices"]) == 1
+    t = out["notices"][0]["text"]
+    assert not any(ord(ch) < 32 for ch in t) and len(json.dumps(t, ensure_ascii=False)) - 2 <= changesetmod.NOTICE_TEXT
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_assistant_gives_notices_only_by_a_turn_that_ended_with_its_answer(tmp_path, monkeypatch):
+    """4b: a turn the person stops, or one at the step limit, gives no notice: the next turn shows it again."""
+    from http.server import HTTPServer
+    from undine.agents import llm
+    import test_agent as ta
+    root, srv, cs = tc.setup()
+    me = _agent(srv)
+    cid = _open(me)
+    srv.leases.release(cid, me.owner)
+    cs.add_notice("p", cid, {"kind": "fetched", "op_id": "dep-1", "name": "amp", "text": "for the assistant"})
+    httpd = HTTPServer(("127.0.0.1", 0), ta.Fake)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    srv.gateway = llm.Gateway(root, "server")
+    srv.gateway.switch("server", "m", f"http://127.0.0.1:{httpd.server_port}/v1")
+    conv = {"id": "chat-s", "connection": {"kind": "server", "model": "m"}, "messages": [], "changeset": cid}
+    prj = srv.project("p").path
+
+    def turn(name: str, **kw) -> str:
+        ta.SEEN.clear()
+        res = agent.run(srv, "p", prj, conv, [], "go on", "agent:assistant", {}, owner=f"turn:{name}", turn=name, **kw)
+        srv.leases.release(cid, f"turn:{name}")
+        return res["stop"], json.dumps(ta.SEEN[0]["messages"][-1])
+    calls = {"n": 0}
+
+    def stop_after_one() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 1
+    ta.SCRIPT[:] = [{"content": None, "tool_calls": [ta.call("get_changeset")]}]
+    stop, first = turn("a", should_stop=stop_after_one)
+    assert stop == "stopped" and "for the assistant" in first
+    monkeypatch.setattr(agent, "MAX_STEPS", 1)
+    ta.SCRIPT[:] = [{"content": None, "tool_calls": [ta.call("get_changeset")]}]
+    stop, first = turn("b")
+    assert stop == "step_limit" and "for the assistant" in first
+    monkeypatch.setattr(agent, "MAX_STEPS", 14)
+    ta.SCRIPT[:] = [{"content": "ok"}]
+    stop, first = turn("c")
+    assert "for the assistant" in first                         # given now, by a turn that answered
+    ta.SCRIPT[:] = [{"content": "ok"}]
+    stop, first = turn("d")
+    assert "for the assistant" not in first
     httpd.shutdown()
     shutil.rmtree(root, ignore_errors=True)

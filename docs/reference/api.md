@@ -195,8 +195,8 @@ nothing written or installed), and `GET /api/p/{project}/changesets/{id}` lists 
 whose `request` carries `changeset` and `op_id`. The record's `notices: [{at, kind, op_id, name, text}]` are what the
 agent's `wait_for(event='changeset')` returns, each once per agent (also those that came before the call;
 `notices_given` counts them per reader); a notice with `closes: true` dropped its operation, which a `dep_drop` record
-of the project log (`drops`) records, so a restore past it brings the operation back. Only a refusal of the operation
-itself drops it (the name taken, not a dependency); a failure that passes (git, the network, the store, a
+of the project log (`drops`) records, so a restore past it brings the operation back. Only an operation that can no
+longer apply is dropped (the name taken, not a dependency); a failure that passes (git, the network, the store, a
 configuration) fails and leaves it pending, and so does a resolution refused (409 `resolution_refused`, with a
 `fetch_failed` notice that does not close it, once per distinct text). While an agent's batch step of the changeset
 runs, the fetch job and a drop are busy (409 `busy`). A
@@ -207,7 +207,7 @@ fetched `cancelled`).
 | Call | |
 |---|---|
 | `POST /api/confirmations` `{kind: "dependency", project, changeset, op_id, fetches}` | the person's Fetch in the review. The operation's own arguments are used (the record's, not the body's); the plan is made again, and when it differs from `fetches` (the index refreshed since, say) the answer is 409 `needs_fetch` with the new plan for the dialog to show; a plan with nothing left to fetch (the store has it now) is taken as it is. The token is bound as above, and to the operation's id and a hash of its record. 409 `not_pending` when the operation no longer waits (restored away, installed, the changeset closed) |
-| `POST /api/p/{project}/deps/fetch` `{token}` | as above; refused with 409 `not_pending` (the token used up) when the operation was cancelled since the confirmation. The job replays the operation in the changeset's working copy, records it installed (`replays: op_id`, `fetched_by`, the agent's actor and reason kept), appends a notice of kind `fetched` to the changeset, and returns `{changeset, op, result, state: "installed", op_id, notice, status}`. The agent's own write lease does not stop it; another writer's is retried for about three seconds, then the job fails with `code: "busy"` (what it fetched stays in the store: the next Fetch only installs). A refusal of the operation itself (a resolution) also leaves a notice of kind `fetch_failed`. A fetch that shows more to fetch fails with `needs_fetch` and the next plan, as above |
+| `POST /api/p/{project}/deps/fetch` `{token}` | as above; refused with 409 `not_pending` (the token used up) when the operation was cancelled since the confirmation. The job replays the operation in the changeset's working copy, records it installed (`replays: op_id`, `fetched_by`, the agent's actor and reason kept), appends a notice of kind `fetched` to the changeset, and returns `{changeset, op, result, state: "installed", op_id, notice, status}`. The agent's own write lease does not stop it; another writer's is retried for about three seconds, then the job fails with `code: "busy"` (what it fetched stays in the store: the next Fetch only installs). An operation that can no longer apply is dropped with a `fetch_failed` notice that closes it; a resolution refused fails the job with `resolution_refused` and leaves it pending, with a `fetch_failed` notice that does not close it. A fetch that shows more to fetch fails with `needs_fetch` and the next plan, as above |
 
 ## PDK fetch
 

@@ -714,7 +714,8 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   `not_pending` from then on. A failure that passes (git or the network, the store, a configuration, a busy lock)
   fails the job or the confirmation and leaves the operation pending for the next Fetch. So does a resolution refused
   (409 `resolution_refused`: over HTTP an index's local copy is read as it is, and a refresh may let it resolve),
-  with a `fetch_failed` notice that does not close it, once per distinct text. A person's replay or drop is busy while
+  with a `fetch_failed` notice that does not close it, unless the operation's latest notice says the same. A second
+  batch step of a changeset while one runs is refused (busy). A person's replay or drop is busy while
   an agent's batch step of the changeset runs (the step is marked running under the changesets' lock before its
   snapshot, and the replay commits under that lock), so a step that is put back never takes back an install or a drop
   whose notice the agent was given; the replay retries briefly, then 409 `busy`, what it fetched kept in the store. The outcomes are read from
@@ -725,10 +726,12 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   lease owner, or of the built-in assistant's conversation), marked given only once the agent has it:
   `wait_for(event='changeset')` returns at once those not given yet, also those that came before the call, at most
   five and only as many as its answer holds uncut at the caller's result budget (a notice's text is kept to 400
-  characters; `more_notices` says how many more); the marking is atomic (two waits of one agent never give the same
+  characters as JSON, control characters taken out; `more_notices` says how many more; `undine call` fits what it
+  prints on the client, so a notice its `--max-chars` cuts was given all the same, and `get_dependency_status` lists
+  every notice); the marking is atomic (two waits of one agent never give the same
   notice); `get_dependency_status` lists them all and gives none (`notices_not_given`); the assistant's turn shows
   them first in its changeset state (the cap is on the operations' lines only), marked given only when the turn ends
-  normally after a model call, and its end-of-turn snapshot gives none, so a notice that came mid-turn, or one of a
+  with the model's final answer (not one stopped, at the step limit or failed), and its end-of-turn snapshot gives none, so a notice that came mid-turn, or one of a
   turn that failed, is reported at the next turn. A batch put back keeps the notices and `notices_given` as they
   are.
 - **Evidence** already hashes `project.json` and `undine.lock`. Job inputs additionally record, outside `key` (for

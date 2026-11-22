@@ -44,8 +44,8 @@ def _since(ctx: T.ToolCtx, seen: dict, give: bool = True) -> tuple[str, dict]:
     """What happened in the changeset after what the agent has seen (`seen`: {"gseq": n}), read from the log records,
     so undos and checkpoint restores are reported too, not only the operations still in effect. `give`: the state is
     for the model, so the notices it has not been given yet are in it (a few: Changesets.peek_notices), and
-    "notices_upto" in the answer, which run() marks given only when the turn ends normally after a model call (a
-    failed turn repeats them at the next one); the end-of-turn snapshot gives none, so a notice that came mid-turn is
+    "notices_upto" in the answer, which run() marks given only when the turn ends with the model's final answer (a
+    turn that fails, is stopped or reaches the step limit repeats them at the next one); the end-of-turn snapshot gives none, so a notice that came mid-turn is
     reported at the next turn. The notices come before the operations' lines, which alone are capped."""
     tl = ctx.cs.timeline(ctx.project, ctx.changeset)
     title = ctx.cs._load(ctx.project, ctx.changeset)["title"]
@@ -109,7 +109,6 @@ def run(srv, project: str, project_path: Path, conv: dict, history: list[dict], 
             break
         out = gw.complete_tools(project_path, "agent", SYSTEM_PROPOSE, messages, T.specs(pictures=False), conv["id"], conv["connection"],
                                 summary, step)
-        answered = True                  # the model had the changeset state (and its notices) in a prompt
         for k in usage:
             usage[k] += (out.get("usage") or {}).get(k) or 0
         stop = out["stop"]
@@ -119,6 +118,7 @@ def run(srv, project: str, project_path: Path, conv: dict, history: list[dict], 
             emit({"type": "text", "text": text})
         uses = [b for b in out["blocks"] if b["type"] == "tool_use"]
         if not uses:
+            answered = True              # the model's final answer: it had the changeset state and its notices
             break
         results = []
         for u in uses:
@@ -148,7 +148,9 @@ def run(srv, project: str, project_path: Path, conv: dict, history: list[dict], 
     if stop == "stopped":
         reply = (reply + "\n\n(stopped by the user; the changes made so far are kept in the changeset)").strip()
     conv["changeset"] = ctx.changeset
-    if notices_upto is not None and answered:      # a turn that ended normally: its notices are given
+    # given only by a turn that ended with the model's answer: a stopped turn, one at the step limit or one that
+    # failed repeats them at the next one
+    if notices_upto is not None and answered and stop not in ("stopped", "step_limit"):
         ctx.cs.mark_notices(ctx.project, notices_cs, ctx.reader_key, notices_upto)
     if ctx.changeset:
         # what is in the changeset now: the next turn reports only later changes; notices only once given

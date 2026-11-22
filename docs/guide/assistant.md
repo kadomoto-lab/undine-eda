@@ -666,7 +666,10 @@ The shell prints less than it receives because an agent reads the output from it
 in every client (MCP, `undine call`, Python), unlike MCP notifications, which most clients do not act on.
 
 - `changeset`: the person applies or discards the agent's changeset, or a notice comes (a dependency the agent
-  proposed, fetched by a person): the answer's `notices` are the new ones.
+  proposed, fetched by a person): the answer's `notices` are the ones the agent has not had, also those that came
+  before the call, at most five per answer and as many as its answer holds (`more_notices`: how many more; wait
+  again). `undine call` fits its printed output on the client (`--max-chars`): a notice it cuts there was given all
+  the same, and `get_dependency_status` lists every notice.
 - `selection`: they select something in Undine, for example to point at what to look at next.
 - `job:<id>`: a job ends, such as a LibreLane run.
 - `design:<lib>/<cell>`: the cell changes in the real design.

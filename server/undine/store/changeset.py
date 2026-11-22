@@ -258,8 +258,23 @@ NOTICE_TEXT = 400             # characters of a notice's text at most (a refusal
 
 
 def _cut(text: str) -> str:
-    """A notice's text as kept: at most NOTICE_TEXT characters."""
-    return text if len(text) <= NOTICE_TEXT else text[:NOTICE_TEXT - 1] + "…"
+    """A notice's text as kept: control characters made spaces, then at most NOTICE_TEXT characters once encoded as
+    JSON (escapes count), so an answer that fits a notice never cuts it."""
+    t = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", text).strip()
+    if len(json.dumps(t, ensure_ascii=False)) - 2 <= NOTICE_TEXT:
+        return t
+    lo, hi = 0, len(t)                                 # the longest start that fits with the ellipsis
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(json.dumps(t[:mid] + "…", ensure_ascii=False)) - 2 <= NOTICE_TEXT:
+            lo = mid
+        else:
+            hi = mid - 1
+    return t[:lo] + "…"
+
+
+def _text_sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def _never_fetched(changes: list[dict]) -> list[dict]:
@@ -2441,8 +2456,9 @@ class Changesets:
         operation's agent still holding the write lease does not stop it (the record's owner hash matches the
         lease's owner: the fetch acts as that owner); another writer's lease is retried for `retry_s`
         (REPLAY_RETRY_S), then Busy: what was fetched stays in the store, so a second Fetch only installs.
-        NotPending: restored away, installed, or the changeset closed. A refusal of the operation itself (a
-        resolution) is a notice of kind "fetch_failed" too."""
+        NotPending: restored away, installed, or the changeset closed. An operation that can no longer apply
+        (inapplicable) is dropped (drop_pending); a resolution refused leaves it pending with a notice that does not
+        close it (resolution_failed)."""
         project = self._real_of(project)
         p = self.pending_op(project, cid, op_id, sha)
         le = self.srv.leases.get(cid)
@@ -2465,8 +2481,9 @@ class Changesets:
                                        "without fetching") from e
                         time.sleep(0.25)
         except Exception as e:
-            # only a refusal of the operation itself drops it; a failure that passes (the network, the store, a
-            # configuration, busy) fails the job and leaves it pending for the next Fetch
+            # only an operation that can no longer apply (inapplicable) is dropped; a resolution refused, and a
+            # failure that passes (the network, the store, a configuration, busy), fail the job and leave it pending
+            # for the next Fetch
             if inapplicable(e):
                 try:
                     self.drop_pending(project, cid, op_id, p["name"], f"{actor}'s fetch for the dependency "
@@ -2480,15 +2497,14 @@ class Changesets:
             raise
         notice = self.add_notice(project, cid, {
             "kind": "fetched", "op_id": op_id, "name": p["name"],
-            "text": f"{actor} fetched {_needs_text(p['needs'])}, and the dependency {p['name']} ({p['op']}) is "
-                    f"installed in the working copy: its cells can be placed now (list_symbols lib={p['name']}); "
-                    "run_checks after placing them"})
+            "text": f"dependency {p['name']} ({p['op']}) is installed in your working copy: place its cells "
+                    f"(list_symbols lib={p['name']}), then run_checks. {actor} fetched {_needs_text(p['needs'])}"})
         return {**out, "state": "installed", "op_id": op_id, "notice": notice}
 
     def drop_pending(self, project: str, cid: str, op_id: str, name: str | None, text: str,
                      actor: str = "user") -> dict:
-        """Takes a pending operation that can no longer apply (inapplicable: a refusal of the operation itself at a
-        person's confirmation or fetch, not a failure that passes) out of the pending ones. Under the changesets' lock
+        """Takes a pending operation that can no longer apply (inapplicable: the name taken, not a dependency, a name
+        packages place; found at a person's confirmation or fetch) out of the pending ones. Under the changesets' lock
         and the server's, checked to be still pending (NotPending: installed, replaced or restored away meanwhile, and
         nothing is written), it appends a dep_drop record to the working copy's project log ({op: "dep_drop", drops:
         op_id, effects: [{k: "d", do: "mod", name, state: "dropped", op_id}]}; no file changes, so a restore past the
@@ -2512,8 +2528,8 @@ class Changesets:
     def peek_notices(self, project: str, cid: str, reader: str, limit: int = NOTICES_GIVEN) -> tuple[list[dict], int]:
         """(the first `limit` notices `reader` (an agent's lease owner, or the built-in assistant's conversation) has
         not been given yet, the count to mark given once they reached it: mark_notices). Nothing is marked: a caller
-        marks them only once the agent has them (the assistant: its first model call answered; wait_for: what its
-        answer holds), so a failed turn or a cut answer loses none."""
+        marks them only once the agent has them (the assistant: its turn ended with the model's answer; wait_for: what
+        its answer holds uncut, take_notices), so a failed turn or a cut answer loses none."""
         meta = self._record(self._real_of(project), cid)
         notices = meta.get("notices") or []
         given = (meta.get("notices_given") or {}).get(_owner_hash(reader) or "-", 0)
@@ -2541,8 +2557,9 @@ class Changesets:
         """The notices `reader` has not been given yet, at most `limit`, and of those the first that `fits(notices)`
         accepts (the caller's answer budget; at least one), marked given atomically: under the changesets' lock the
         count must still be the one peeked, else it peeks again (two calls of one reader never give the same notice).
-        With none new, the changesets' lock is not taken (a wait_for during a long apply)."""
-        for _ in range(5):
+        With none new, the changesets' lock is not taken (a wait_for during a long apply). A conflict means another
+        call of the reader advanced the count: it peeks again, for as long as notices remain."""
+        while True:
             new, upto = self.peek_notices(project, cid, reader, limit)
             if not new:
                 return []
@@ -2552,29 +2569,31 @@ class Changesets:
                 k -= 1
             if self.mark_notices(project, cid, reader, given + k, expect=given):
                 return new[:k]
-        return []
 
     @_serialized
     def resolution_failed(self, project: str, cid: str, op_id: str, name: str | None, text: str) -> dict | None:
         """A pending operation that did not resolve at a person's confirmation or fetch (a stale index copy, a
         conflict another fetch may lift): it stays pending, and the agent gets a notice of kind "fetch_failed" that
-        does not close it, once per distinct text (the same refusal at every click is not repeated). Returns the
-        notice added, None when it was there already."""
+        does not close it, unless the operation's latest notice says the same (by a hash of the whole text: the same
+        refusal at every click is not repeated, the same refusal after something else happened to it is). Returns the
+        notice added, None when its latest one says it already."""
         real = self._real_of(project)
-        cut = _cut(text)
-        if any(n.get("op_id") == op_id and n.get("kind") == "fetch_failed" and n.get("text") == cut
-               for n in self._record(real, cid).get("notices") or []):
+        latest = next((n for n in reversed(self._record(real, cid).get("notices") or []) if n.get("op_id") == op_id),
+                      None)
+        if latest is not None and latest.get("kind") == "fetch_failed" and latest.get("sha") == _text_sha(text):
             return None
         return self.add_notice(real, cid, {"kind": "fetch_failed", "op_id": op_id, "name": name, "text": text})
 
     @_serialized
     def add_notice(self, project: str, cid: str, notice: dict) -> dict:
         """Appends `notice` ({kind: "fetched" | "fetch_failed", op_id, name, text, closes?}) to the changeset's
-        record ("notices", each with its time "at"; the text cut to NOTICE_TEXT characters): what an agent's
-        wait_for(event='changeset') returns. Returns the notice."""
+        record ("notices", each with its time "at", its text without control characters and at most NOTICE_TEXT
+        characters as JSON, "sha" the whole text's hash): what an agent's wait_for(event='changeset') returns. Returns
+        the notice."""
         real = self._real_of(project)
         meta = self._record(real, cid)
-        n = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **notice, "text": _cut(str(notice.get("text") or ""))}
+        full = str(notice.get("text") or "")
+        n = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **notice, "text": _cut(full), "sha": _text_sha(full)}
         meta["notices"] = [*(meta.get("notices") or []), n]
         self._save(real, meta)
         return n
@@ -2611,6 +2630,8 @@ class Changesets:
         # operation, or its drop, commits under that lock and refuses a running step (busy), so it either is in the
         # snapshot or waits for the step to end; it never commits inside a step that the put-back would take back
         with self.srv.changeset_lock:
+            if cid in self.srv.batching:                 # two steps would put back over each other
+                raise Busy(f"another batch step of {cid} is running: send this one when it has finished")
             self.srv.batching[cid] = before
         try:
             wroot, snap, names = self._snapshot(meta, ".batch-")

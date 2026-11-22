@@ -2313,8 +2313,8 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                                              f"person's fetch: {e}")
             if not changesetmod.inapplicable(e):
                 raise                            # a failure that passes: the operation stays pending
-            # the operation itself can no longer apply (the dependency is there already, or gone, or does not
-            # resolve): dropped (checked under the lock: NotPending if installed meanwhile), the agent told, and 409
+            # the operation can no longer apply (inapplicable: the dependency is there already, or gone): dropped
+            # (checked under the lock: NotPending if installed meanwhile), the agent told, and 409
             # not_pending from now on rather than the same refusal at every click
             changesets.drop_pending(real, cid, req.op_id, p["name"],
                                     f"the dependency operation {p['op']} {p['name']} can no longer apply, so it was "

@@ -189,7 +189,7 @@ MCP のツール、`undine call` のコマンド、Python のクライアント�
 `request` に `changeset` と `op_id` があります。記録の `notices: [{at, kind, op_id, name, text}]` は、エージェントの
 `wait_for(event='changeset')` が返すもので、各エージェントに 1 回ずつ渡します(呼ぶ前に来たものも。`notices_given` が読み手
 ごとに数える)。`closes: true` の通知はその操作を取り下げたもので、プロジェクトログの `dep_drop` の記録(`drops`)がそれを記録する
-ので、それより前への復元は操作を戻します。取り下げるのは操作そのものの拒否だけで、過ぎ去る失敗(git、ネットワーク、ストア、
+ので、それより前への復元は操作を戻します。取り下げるのはもう適用できない操作(名前が取られた、依存ではない)だけで、過ぎ去る失敗(git、ネットワーク、ストア、
 設定)は失敗させ、操作は待ちのまま残ります。解決の拒否も同じで(409 の `resolution_refused`)、操作を閉じない `fetch_failed`
 の通知を違う文面ごとに 1 回加えます。エージェントの batch のステップがその changeset で動いている間、取得のジョブと取り下げは
 busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作を置き換えます(その記録の
@@ -199,7 +199,7 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
 | 呼び出し | |
 |---|---|
 | `POST /api/confirmations` `{kind: "dependency", project, changeset, op_id, fetches}` | レビューでの人の Fetch。操作そのものの引数を使う(本文のものではなく記録のもの)。計画は作り直し、`fetches` と違えば(その後インデックスを取得し直したなど)、ダイアログが見せる新しい計画を付けて 409 の `needs_fetch`。取得するものが残っていない計画(ストアにもうある)はそのまま受け付ける。トークンは上と同じく結び付き、さらに操作の id とその記録のハッシュに結び付く。操作がもう待っていなければ(復元で取り消した、インストールした、changeset が閉じた)409 の `not_pending` |
-| `POST /api/p/{project}/deps/fetch` `{token}` | 上と同じ。確認の後に操作が取り消されていれば 409 の `not_pending`(トークンは使い切る)。ジョブは changeset の作業コピーで操作をやり直し、インストール済みと記録し(`replays: op_id`、`fetched_by`。エージェントの actor と理由はそのまま)、changeset に種類 `fetched` の通知を加え、`{changeset, op, result, state: "installed", op_id, notice, status}` を返す。エージェント自身の書き込みのリースでは止まらない。ほかの書き手のリースならおよそ 3 秒やり直し、それでも駄目ならジョブは `code: "busy"` で失敗する(取得したものはストアに残り、次の Fetch はインストールだけをする)。操作そのものの拒否(解決)では、種類 `fetch_failed` の通知も残る。さらに取得の要るものが見つかれば、上と同じく `needs_fetch` と次の計画で失敗する |
+| `POST /api/p/{project}/deps/fetch` `{token}` | 上と同じ。確認の後に操作が取り消されていれば 409 の `not_pending`(トークンは使い切る)。ジョブは changeset の作業コピーで操作をやり直し、インストール済みと記録し(`replays: op_id`、`fetched_by`。エージェントの actor と理由はそのまま)、changeset に種類 `fetched` の通知を加え、`{changeset, op, result, state: "installed", op_id, notice, status}` を返す。エージェント自身の書き込みのリースでは止まらない。ほかの書き手のリースならおよそ 3 秒やり直し、それでも駄目ならジョブは `code: "busy"` で失敗する(取得したものはストアに残り、次の Fetch はインストールだけをする)。もう適用できない操作は、それを閉じる `fetch_failed` の通知とともに取り下げる。解決の拒否ではジョブは `resolution_refused` で失敗し、操作は待ちのまま、閉じない `fetch_failed` の通知が残る。さらに取得の要るものが見つかれば、上と同じく `needs_fetch` と次の計画で失敗する |
 
 <a id="pdk-fetch"></a>
 ## PDK の取得

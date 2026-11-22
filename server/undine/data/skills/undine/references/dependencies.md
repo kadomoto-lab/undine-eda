@@ -42,7 +42,8 @@ After a `needs_fetch`, tell the user what you proposed and why, then wait instea
 came before you started waiting) when a person's fetch installed it, or when it could no longer apply
 (`fetch_failed` with `closes`: it was dropped; propose again if it is still needed). Each notice is given to you once, at most
 five per answer and as many as your answer holds (`more_notices`: call `wait_for` again); a `fetch_failed` notice
-without `closes` means it did not resolve this time and still waits; `get_dependency_status` lists them all (`notices`) without
+without `closes` means it did not resolve this time and still waits. `undine call` fits what it prints on the client
+(`--max-chars`): a notice cut there was given all the same; `get_dependency_status` lists them all (`notices`) without
 giving them. A new proposal on a dependency that already has one waiting
 replaces it. Then place the cells and run the checks. A fetch that shows more to fetch (a git library naming another)
 is a second round for the person; you wait again.

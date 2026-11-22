@@ -19,6 +19,7 @@ _REF = re.compile(rf"^(?:DocumentRef-{_ID}:)?LicenseRef-{_ID}$")
 _IDSTRING = re.compile(rf"^{_ID}$")
 OPERATORS = ("AND", "OR", "WITH")
 MAX_LEN = 1024
+MAX_DEPTH = 32                            # nested parentheses: far above a real expression, below Python's recursion
 
 
 class SpdxError(ValueError):
@@ -114,13 +115,19 @@ def parse(text) -> Expr:
             exc = take()
         return License(t, plus, exc)
 
+    depth = [0]
+
     def atom() -> Expr:
         if peek() == "(":
+            depth[0] += 1
+            if depth[0] > MAX_DEPTH:
+                raise fail(f"parentheses nested deeper than {MAX_DEPTH}")
             take()
             e = disjunction()
             if peek() != ")":
                 raise fail("a closing ) expected")
             take()
+            depth[0] -= 1
             return e
         return simple()
 

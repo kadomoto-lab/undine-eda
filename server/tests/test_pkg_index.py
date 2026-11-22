@@ -247,6 +247,33 @@ def test_yank_rewrites_the_one_line_and_never_appends():
         ix.yank_rewrite(f"{a}\n{a}\n".encode(), "analog_ip", "1.2.0")
 
 
+def test_a_description_with_unicode_line_breaks_keeps_the_file_readable():
+    odd = "one two three\x85four"
+    line = ix.parse_line(json.dumps({**FULL, "description": odd}), "x")
+    text = ix.line_text(line)
+    assert " " not in text and "\x85" not in text and "\\u2028" in text and "\\u0085" in text
+    other = json.dumps({**GOOD, "vers": "1.3.0", "description": odd}, ensure_ascii=False)    # raw, by hand
+    data = f"{text}\n{other}\n".encode()
+    assert [x.description for x in ix.parse_file(data, "analog_ip", "f")] == [odd, odd]
+    once = ix.yank_rewrite(data, "analog_ip", "1.3.0")
+    assert once.count(b"\n") == 2 and once.startswith(text.encode() + b"\n")
+    assert [x.yanked for x in ix.parse_file(once, "analog_ip", "f")] == [True, False]
+    assert ix.parse_file(once, "analog_ip", "f")[0].description == odd
+
+
+def test_yank_refuses_a_file_that_is_not_utf8_and_splits_lines_as_parse_file_does():
+    a = json.dumps({**GOOD, "description": "x"})
+    bad = (a.replace('"x"', '"\xff"').encode("latin-1") + b"\n")
+    assert ix.parse_file(bad, "analog_ip", "f")                     # read with replacement characters
+    with pytest.raises(ix.IndexReadError, match="not UTF-8"):
+        ix.yank_rewrite(bad, "analog_ip", "1.2.0")
+    for sep in ("\x0b", "\x0c", "\x1c", "\x1e"):                   # str.splitlines would split there; JSON refuses it
+        with pytest.raises(ix.IndexReadError, match="not JSON"):
+            ix.parse_file(f"{a}{sep}{a}\n".encode(), "analog_ip", "f")
+        with pytest.raises(ix.IndexReadError, match="not JSON"):
+            ix.yank_rewrite(f"{a}{sep}{a}\n".encode(), "analog_ip", "1.2.0")
+
+
 def test_nicknames_come_from_the_machine_and_the_project(tmp_path):
     assert ix.url_of(None) == ix.DEFAULT_URL
     (Path(ix.home()) / "config.toml").parent.mkdir(parents=True, exist_ok=True)

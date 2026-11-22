@@ -125,7 +125,7 @@ def run(args: argparse.Namespace, store) -> int:
         if args.pkg_cmd == "index":
             return _index(args, store)
         if args.pkg_cmd in ("init", "pack", "check"):           # a library, its project found from it
-            src = pkgsource.locate(args.library, store)
+            src = pkgsource.locate(args.library, store, read_manifest=args.pkg_cmd != "init")
             return {"init": _init, "pack": _pack, "check": _check}[args.pkg_cmd](src, args)
         if args.pkg_cmd in ("search", "info"):
             meta = store.get(args.project).meta if args.project else {}
@@ -497,6 +497,7 @@ def _pack(src, args) -> int:
     import hashlib
 
     from undine.store import index as ix
+    from undine.store import manifest as mf
     from undine.store import pkgsource
     if bool(args.check) != bool(args.check_url):
         raise pkgsource.PackageSourceError("--check FILE and --check-url URL go together: the line links the "
@@ -510,6 +511,7 @@ def _pack(src, args) -> int:
     tag, commit = pkgsource.at_tag(src)
     url = ix.url_of(args.index, src.prj.meta)
     t = pkgsource.tree(str(src.top), commit, src.subdir, tag)
+    mf.check_files(src.manifest, list(t.files), src.where, strict=True)     # a waiver for a cell it lacks
     print(ix.line_text(pkgsource.line_for(src, commit, t, url, check)))
     return 0
 

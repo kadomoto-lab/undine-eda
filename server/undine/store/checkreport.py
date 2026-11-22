@@ -12,7 +12,8 @@ the index CI verifies it there.
                                  version, commit or tree than the line's, a format this Undine does not know, a report
                                  that does not pass
 
-Format 1, every path relative to the package (the report is published: no absolute path, no user name):
+Format 1, every path relative to the package (the report is published: no absolute path, no user name, no URL
+user or password; build() replaces them, see _path_subs and public_url):
 
     {"format": 1, "kind": "undine-check", "created": "2026-11-22T10:00:00Z",
      "package": {name, version, repository, subdir, tag, commit, tree},
@@ -42,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -243,6 +245,11 @@ def static(r: _Report, src, tag: str, commit: str, *, index_url: str, offline: b
         tree = pkgsource.tree(str(src.top), commit, src.subdir, tag)
     except (gitsrc.GitSourceError, mf.ManifestError, cas.StoreError) as e:
         r.problem("files", str(e))
+    if tree is not None:
+        try:
+            mf.check_files(m, list(tree.files), src.where, strict=True)        # a waiver for a cell it lacks
+        except mf.ManifestError as e:
+            r.problem("checks", str(e))
     out["tree"] = tree
     limit = file_max()
     files = tree.files if tree else {}
@@ -318,17 +325,50 @@ def _cell_entry(cell: str, views: list[str], m: mf.Manifest) -> dict:
 # ------------------------------------------------------------------ the report
 
 
-def _scrub(obj, subs: list[tuple[str, str]]):
-    """Every string with the machine's paths (the repository, the project, the home directory) replaced by a
-    placeholder: the report is published."""
+_USERINFO = re.compile(r"(\b[A-Za-z][A-Za-z0-9+.-]*://)[^/\s@'\"]+@")
+_PATH_END = r"(?=$|[/\s'\"():,;\]}>])"          # a path ends at a separator, never inside a longer name
+
+
+def public_url(url, local: str = "<local index>"):
+    """A URL fit for the published report: user and password dropped (https://user:token@host/... -> https://host/...),
+    a local path (or file:// URL) replaced by `local`. Anything else as it is."""
+    if not isinstance(url, str):
+        return url
+    if url.startswith(("/", "~", ".", "file:")) or re.match(r"^[A-Za-z]:[\\/]", url):
+        return local
+    return _USERINFO.sub(r"\1", url)
+
+
+def _path_subs(src) -> list[tuple[re.Pattern, str]]:
+    """(pattern, placeholder) for the machine's paths a report must not hold: the repository, the project, Undine's
+    home and the user's home, each as an absolute path (as given and resolved), never a relative one, and matched
+    only as a whole path or a path's leading part, so a name that happens to equal a directory is left alone."""
+    from undine.home import home
+    out: dict[str, str] = {}
+    for p, label in ((src.top, "<repository>"), (src.prj.path, "<project>"), (home(), "<undine home>"),
+                     (Path.home(), "~")):
+        if not p:
+            continue
+        for q in (Path(p).absolute(), Path(p).resolve()):
+            s = str(q)
+            if q.is_absolute() and len(s) > 1 and s not in out:
+                out[s] = label
+    return [(re.compile(re.escape(s) + _PATH_END), label) for s, label in sorted(out.items(), key=lambda x: -len(x[0]))]
+
+
+def _scrub(obj, subs: list[tuple[re.Pattern, str]], exact: dict[str, str]):
+    """Every string with the machine's paths replaced by a placeholder, the raw URLs in `exact` by their public form,
+    and a user and password dropped from any URL: the report is published."""
     if isinstance(obj, str):
-        for a, b in subs:
+        for a, b in exact.items():
             obj = obj.replace(a, b)
-        return obj
+        for rx, b in subs:
+            obj = rx.sub(b, obj)
+        return _USERINFO.sub(r"\1", obj)
     if isinstance(obj, list):
-        return [_scrub(x, subs) for x in obj]
+        return [_scrub(x, subs, exact) for x in obj]
     if isinstance(obj, dict):
-        return {k: _scrub(v, subs) for k, v in obj.items()}
+        return {k: _scrub(v, subs, exact) for k, v in obj.items()}
     return obj
 
 
@@ -355,10 +395,14 @@ def build(src, tag: str, commit: str, *, index_url: str, offline: bool = False, 
                    "specs_changed": [], "passed": False},
         "code": s["code"], "warnings": r.warnings, "problems": r.problems, "passed": not r.problems,
     }
-    subs = [(str(p), label) for p, label in ((src.top, "<repository>"), (src.prj.path, "<project>"),
-                                              (Path.home(), "~")) if p and str(p) not in ("", "/")]
-    subs += [(str(Path(p).resolve()), label) for p, label in subs if str(Path(p).resolve()) != p]
-    return _scrub(report, sorted(subs, key=lambda x: -len(x[0])))
+    exact: dict[str, str] = {}                       # an index or git URL as written -> as published
+    for row in report["dependencies"]:
+        for key, local in (("index", "<local index>"), ("git", "<local repository>")):
+            raw = row.get(key)
+            if isinstance(raw, str) and (pub := public_url(raw, local)) != raw:
+                exact[raw] = row[key] = pub
+    exact = dict(sorted(exact.items(), key=lambda x: -len(x[0])))
+    return _scrub(report, _path_subs(src), exact)
 
 
 def dumps(report: dict) -> bytes:

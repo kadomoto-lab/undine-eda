@@ -455,22 +455,36 @@ def listing(d: Path, *, allowed: list[Path] | None = None, env: dict | None = No
         if not (p.name.endswith(_NETLIST) or p.suffix in (".sch", ".sym")):
             continue
         text = _read(p)
+        cell = _cell_of(p.name)
+
+        def unparsed(where: str, e: Exception) -> dict:          # what cannot be read cannot be passed
+            return {"cell": cell, "file": p.name, "where": where, "kind": "unparsed", "line": 0,
+                    "text": _short(f"cannot read {where}: {e}"), "refused": True, "why": _WHY["unparsed"]}
         try:
             values = _value_texts(p, text)
-        except Exception as e:                   # what cannot be read cannot be passed
+        except Exception as e:
             values = []
-            blocks.append({"cell": _cell_of(p.name), "file": p.name, "where": p.name, "kind": "unparsed", "line": 0,
-                           "text": _short(f"cannot read {p.name}: {e}"), "refused": True, "why": _WHY["unparsed"]})
+            blocks.append(unparsed(p.name, e))
         for where, value in values:
-            blocks += [{"cell": _cell_of(p.name), "file": p.name, "where": where, **b}
-                       for b in _blocks(value, allowed=allowed, env=env)]
+            try:
+                blocks += [{"cell": cell, "file": p.name, "where": where, **b}
+                           for b in _blocks(value, allowed=allowed, env=env)]
+            except Exception as e:               # a NUL in a path, say: Path() refuses it
+                blocks.append(unparsed(where, e))
         if p.suffix in (".sch", ".sym"):
-            blocks += [{"cell": _cell_of(p.name), "file": p.name, "where": p.name, "kind": "tcl", "line": f.line,
-                        "text": f.text, "refused": True, "why": _WHY["tcl"]} for f in tcl_findings(text)]
+            try:
+                blocks += [{"cell": cell, "file": p.name, "where": p.name, "kind": "tcl", "line": f.line,
+                            "text": f.text, "refused": True, "why": _WHY["tcl"]} for f in tcl_findings(text)]
+            except Exception as e:
+                blocks.append(unparsed(p.name, e))
     rtl = []
     for p in sorted(x for x in Path(d).rglob("*") if x.suffix in RTL_SUFFIXES and x.is_file()):
-        found = rtl_findings(_read(p))
-        rtl.append({"path": p.relative_to(d).as_posix(), "refused": bool(found),
+        rel = p.relative_to(d).as_posix()
+        try:
+            found = rtl_findings(_read(p))
+        except Exception as e:
+            found = [Finding("unparsed", 0, _short(f"cannot read {rel}: {e}"))]
+        rtl.append({"path": rel, "refused": bool(found),
                     "findings": [{"kind": f.kind, "line": f.line, "text": f.text, **({"path": f.path} if f.path
                                                                                        else {})} for f in found]})
     return {"blocks": blocks, "rtl": rtl}

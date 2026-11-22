@@ -350,13 +350,22 @@ def parse_line(text: str, where: str, index: str = "") -> Line:
                 yanked, desc if isinstance(desc, str) else None)
 
 
+def _lines(text: str) -> list[str]:
+    """A package file's lines: split at "\\n" only (a JSON string may hold U+2028, U+0085 and the like, at which
+    str.splitlines would split), a "\\r" before it dropped."""
+    out = text.split("\n")
+    if out and out[-1] == "":
+        out.pop()
+    return [x[:-1] if x.endswith("\r") else x for x in out]
+
+
 def parse_file(data: bytes, name: str, where: str, index: str = "") -> list[Line]:
     """The lines of one package file. Every version once (the first of two lines for one version stands: a yank is
     a rewrite of that line, never a second line); a line naming another package is refused."""
     if len(data) > MAX_FILE:
         raise IndexReadError(f"{where}: {len(data)} bytes, more than {MAX_FILE}")
     out: dict[Version, Line] = {}
-    for n, raw in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+    for n, raw in enumerate(_lines(data.decode("utf-8", errors="replace")), 1):
         if not raw.strip():
             continue
         line = parse_line(raw, f"{where}:{n}", index)
@@ -408,11 +417,17 @@ def line_dict(line: Line) -> dict:
     return {k: values[k] for k in _ORDER if values[k] is not None}
 
 
+def _escape_breaks(text: str) -> str:
+    """U+0085, U+2028 and U+2029 written as \\u escapes: JSON leaves them raw, and editors and other readers take
+    them for line breaks."""
+    return text.replace("\x85", "\\u0085").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
 def line_text(line: Line) -> str:
     """One canonical JSON line of a package file, without its newline: compact, UTF-8 as it is (no \\u escapes for
     letters), the keys in line_dict's order. parse_line reads it back to the same Line; refused (IndexReadError) when
     it would not, or when it is longer than a line may be."""
-    text = json.dumps(line_dict(line), ensure_ascii=False, separators=(",", ":"))
+    text = _escape_breaks(json.dumps(line_dict(line), ensure_ascii=False, separators=(",", ":")))
     back = parse_line(text, f"{line.label}: the line written", line.index)
     if back != line:
         raise IndexReadError(f"{line.label}: the line written does not read back as the same line")
@@ -428,9 +443,14 @@ def yank_rewrite(data: bytes, name: str, vers: Version | str, yanked: bool = Tru
     v = vers if isinstance(vers, Version) else Version.parse(vers)
     where = where or rel_path(name)
     parse_file(data, name, where)                            # a file that does not read is not rewritten
-    lines = data.decode("utf-8").splitlines(keepends=True)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise IndexReadError(f"{where}: not UTF-8 (byte {e.start}): a file that is not cannot be rewritten "
+                             "byte for byte") from None
+    lines = text.split("\n")                                 # as parse_file splits: at "\n" only
     for i, raw in enumerate(lines):
-        body = raw.rstrip("\r\n")
+        body = raw[:-1] if raw.endswith("\r") else raw
         if not body.strip():
             continue
         line = parse_line(body, f"{where}:{i + 1}")
@@ -440,8 +460,8 @@ def yank_rewrite(data: bytes, name: str, vers: Version | str, yanked: bool = Tru
             raise IndexReadError(f"{name} {v} is {'yanked' if yanked else 'not yanked'} already")
         d = json.loads(body)
         d["yanked"] = yanked
-        lines[i] = json.dumps(d, ensure_ascii=False, separators=(",", ":")) + raw[len(body):]
-        out = "".join(lines).encode("utf-8")
+        lines[i] = _escape_breaks(json.dumps(d, ensure_ascii=False, separators=(",", ":"))) + raw[len(body):]
+        out = "\n".join(lines).encode("utf-8")
         after = {x.vers: x for x in parse_file(out, name, where)}
         if after[v].yanked != yanked:
             raise IndexReadError(f"{where}: {name} {v}: the rewritten line does not say yanked {yanked}")

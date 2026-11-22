@@ -52,13 +52,13 @@ waive = [{{ cell = "unit_cap", rules = ["m1.2"], reason = "abutment cell: clean 
 MINIMAL = '[package]\nname = "ip"\nversion = "0.1.0"\n'
 
 
-def P(text, where="analog_ip"):
-    return parse(text.encode(), where)
+def P(text, where="analog_ip", strict=False):
+    return parse(text.encode(), where, strict)
 
 
-def refused(text, *parts):
+def refused(text, *parts, strict=False):
     with pytest.raises(ManifestError) as e:
-        P(text, where="app -> ip")
+        P(text, where="app -> ip", strict=strict)
     msg = str(e.value)
     assert msg.startswith(f"app -> ip: {MANIFEST}: "), msg
     for p in parts:
@@ -310,7 +310,35 @@ def test_parse_falls_back_to_tomli_on_python_3_10(monkeypatch):
      ['renames."0.1.0+b": version 0.1.0+b is listed twice']),
 ])
 def test_checks_and_renames_are_typed_and_each_refusal_names_its_key_path(text, parts):
-    refused(text, *parts)
+    refused(text, *parts, strict=True)
+    m = P(text)                                  # a consumer reads it as before phase 5: tables of any content
+    assert set(m.raw) <= {"checks", "renames"} and m.raw
+
+
+CONSUMER_OK = [
+    MINIMAL + '[checks]\nlvs = { deck = "x.lvs" }\n',
+    MINIMAL + '[checks]\ndrc = "x.drc"\n',
+    MINIMAL + '[checks]\nwaive = [{ cell = "inv", rules = ["m1.2"] }]\n',
+    MINIMAL + '[renames]\n"9.0.0" = { a = "b" }\n',
+    MINIMAL + '[renames]\nanything = 3\n',
+]
+
+
+@pytest.mark.parametrize("text", CONSUMER_OK)
+def test_checks_and_renames_that_parsed_before_phase_5_still_parse_for_a_consumer(text):
+    import tomllib
+    m = P(text)
+    assert m.name == "ip" and m.checks is None and m.renames == {}
+    assert m.raw == {k: v for k, v in tomllib.loads(text).items() if k in ("checks", "renames")}
+    refused(text, strict=True)
+    check_files(m, ["inv.sch", MANIFEST], "ip")                       # no waiver rule for a consumer either
+
+
+def test_a_valid_waiver_for_a_missing_cell_is_refused_only_when_publishing():
+    m = P(MINIMAL + '[checks]\nwaive = [{ cell = "gone", rules = ["m1.2"], reason = "r" }]\n')
+    check_files(m, ["inv.sch", MANIFEST], "ip")
+    with pytest.raises(ManifestError, match=r"checks.waive\[0\].cell: gone is not a cell of the package"):
+        check_files(m, ["inv.sch", MANIFEST], "ip", strict=True)
 
 
 def test_checks_and_renames_parse_to_their_types():
@@ -330,13 +358,14 @@ waive = [{ cell = "unit_cap", rules = ["m1.2", "m1.2", "li.3"], reason = "abutme
 
 
 def test_a_waiver_without_a_reason_or_for_a_cell_not_in_the_package_is_refused():
-    refused(MINIMAL + '[checks]\nwaive = [{ cell = "inv", rules = ["m1.2"] }]\n', "checks.waive[0].reason: missing")
+    refused(MINIMAL + '[checks]\nwaive = [{ cell = "inv", rules = ["m1.2"] }]\n', "checks.waive[0].reason: missing",
+            strict=True)
     m = P(MINIMAL + '[files]\ninclude = ["*.sch", "*.oas"]\n'
                     '[checks]\nwaive = [{ cell = "unit_cap", rules = ["m1.2"], reason = "abutment cell" }]\n')
     with pytest.raises(ManifestError, match=r"ip: undine-package.toml: checks.waive\[0\].cell: unit_cap is not a cell "
                                             r"of the package"):
-        check_files(m, ["inv.sch", "unit_cap.sym", MANIFEST], "ip")      # its .sym is not included
-    check_files(m, ["inv.sch", "unit_cap.oas", MANIFEST], "ip")
+        check_files(m, ["inv.sch", "unit_cap.sym", MANIFEST], "ip", strict=True)      # its .sym is not included
+    check_files(m, ["inv.sch", "unit_cap.oas", MANIFEST], "ip", strict=True)
 
 
 def test_render_round_trips_the_design_example():
@@ -399,6 +428,7 @@ def test_spdx_expressions_syntax_only(expr, normal):
     ("MIT)", "AND, OR or the end expected at ')'"), ("MIT Apache-2.0", "AND, OR or the end expected"),
     ("MIT WITH", "an exception identifier expected after WITH"), ("LicenseRef-x+", "not a LicenseRef"),
     ("MIT/Apache-2.0", "at '/'"), ("OR MIT", "a licence identifier expected at 'OR'"), ("x" * 2000, "more than"),
+    ("(" * 340 + "MIT" + ")" * 340, "parentheses nested deeper than 32"),        # not a RecursionError
     ("MIT ++", "AND, OR or the end expected at '+'"),
 ])
 def test_spdx_refusals_say_where(expr, msg):

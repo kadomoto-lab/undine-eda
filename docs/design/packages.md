@@ -136,8 +136,11 @@ yet, `[dependencies]` takes a git form, and the index forms above are parsed but
 refusal naming its key path: `drc` takes `deck` (a deck file name, no directory) and `options` (true, false, a number
 or a string each); a waiver needs a cell, at least one rule and a reason that is not empty, and its cell must be a
 top-level cell of the include set; a `[renames]` key is a version at most `[package].version`, its old and new names
-cell names, never one name to itself and never two old names to one new name in one version. `manifest.render`
-writes a manifest back as TOML that parses to the same manifest. See [Phase 5 status](#phase-5-status).
+cell names, never one name to itself and never two old names to one new name in one version. These rules are
+publishing's (`pkg init`, `pack`, `check`): a consumer (a fetch, `lib sync`, the lock, the library list) reads both
+tables as before, of any content, so a package published or locked earlier keeps installing; the typed fields are
+then empty when the tables break the rules. `manifest.render` writes a manifest back as TOML that parses to the same
+manifest. See [Phase 5 status](#phase-5-status).
 
 ## Index
 
@@ -1178,8 +1181,8 @@ repository and index local, none touching GitHub):
   walking up to its `project.json`, or `PROJECT/LIBRARY` under `--root`; a dependency's or a PDK's library is refused.
   The tag is `v<version>`, or `<name>-v<version>` when HEAD holds more than one `undine-package.toml`. `at_tag` wants
   no tracked or untracked change under the package's subdirectory (the rest of the repository is not looked at) and
-  HEAD at the tag (an annotated one too). `served` reads the tag's commit from the repository URL (`git ls-remote`).
-  `tree` reads the include set from git's blobs into the store, as a consumer's fetch does, and sums the files' bytes.
+  HEAD at the tag (an annotated one too), with the manifest committed there (an ignored one is in no `git status`).
+  `served` reads the tag's commit from the repository URL (`git ls-remote`). `tree` reads the include set from git's blobs into the store, as a consumer's fetch does, and sums the files' bytes.
 - **`pkg init LIBRARY [--name] [--version] [--license] [--repository] [--force]`** writes the manifest: the library's
   name, version 0.1.0, the cells with a symbol exported, the include list of the example, `[pdk]` from the project's
   PDK (its family and variant; `commits` and `built_with` its full commit, from the installed PDK, else the lock's
@@ -1205,8 +1208,11 @@ repository and index local, none touching GitHub):
   file, refused or not, run on the include tree installed into a temporary directory, so only published files are
   scanned. Per cell the symbol, netlist, DRC (deck, options, the waivers with their reasons), LVS (when the cell has
   both a schematic and a layout) and specs entries are `not_run`; `runs.state` `not_run` is itself a problem, so a
-  `--no-run` report never passes (exit code 1). Strings with the repository's, the project's or the home directory's
-  path are written as `<repository>`, `<project>` and `~`. `checkreport.verify`, for publish and the index CI,
+  `--no-run` report never passes (exit code 1). The report holds no machine path or secret: the repository's, the
+  project's, Undine's home's and the home directory's absolute paths are written as `<repository>`, `<project>`,
+  `<undine home>` and `~` (only as whole paths, so a name is never touched), a URL loses its user and password, and a
+  local index or repository path becomes `<local index>` or `<local repository>`. `checkreport.verify`, for publish
+  and the index CI,
   refuses another SHA-256, a format or kind it does not know, another name, version, commit or tree than the line's,
   and a report that does not pass.
 

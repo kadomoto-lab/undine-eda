@@ -302,7 +302,7 @@ def test_check_no_run_writes_the_report_under_the_project_bound_to_the_commit_an
     assert rep["pdk"] == {"family": "sky130", "variants": ["sky130A"], "built_with": PDK_COMMIT,
                           "project": PDK_COMMIT}
     assert rep["license"] == {"expression": "Apache-2.0", "ok": True, "ids": ["Apache-2.0"]}
-    assert rep["dependencies"] == [{"name": "bias", "package": "bias_gen", "req": "^0.3", "index": str(w.index),
+    assert rep["dependencies"] == [{"name": "bias", "package": "bias_gen", "req": "^0.3", "index": "<local index>",
                                     "resolved": "0.3.2"}]
     assert rep["publisher_project"] == {"name": "p", "lib": "analog_ip"}
     assert set(rep["cells"]) == {"inv", "unit_cap"}
@@ -315,7 +315,7 @@ def test_check_no_run_writes_the_report_under_the_project_bound_to_the_commit_an
     assert cap["lvs"]["why"] == "no schematic" and inv["drc"]["waived"] == []
     assert rep["files"]["count"] == 5 and rep["files"]["over"] == []
     data = (prj.path / ".undine" / "check" / "analog_ip-1.0.0" / checkreport.FILE).read_bytes()
-    assert str(prj.path).encode() not in data and str(Path.home()).encode() + b"/" not in data
+    assert str(tmp_path).encode() not in data and str(Path.home()).encode() + b"/" not in data
     assert f"wrote {prj.path / '.undine' / 'check' / 'analog_ip-1.0.0' / checkreport.FILE} (sha256 " \
            f"{hashlib.sha256(data).hexdigest()}): does not pass" in out
     assert "! runs: DRC, LVS, the symbol and netlist checks and the specs were not run (--no-run)" in out
@@ -419,3 +419,124 @@ def test_listing_lists_every_code_block_and_rtl_file_and_flags_the_refused(tmp_p
                           {"path": "rtl/sub/b.sv", "refused": False, "findings": []}]
     bare = trust.listing(d)                                                   # no PDK: its path cannot be told
     assert [b["refused"] for b in bare["blocks"] if b.get("path", "").startswith("$PDK_ROOT")] == [True]
+
+
+# ------------------------------------------------------------------ regressions (review of the first version)
+
+OLD_TABLES = ('[checks]\nlvs = { deck = "x.lvs" }\nwaive = [{ cell = "missing", rules = ["r"] }]\n'
+              '[renames]\n"9.0.0" = { a = "b" }\n')
+
+
+def test_a_package_locked_with_old_checks_tables_still_installs_and_pkg_check_refuses_them(tmp_path, capsys):
+    w = World(tmp_path)
+    w.default()
+    repo, commit = w.package("old_ip", "1.0.0", None, ["old_cell"], pdk=OLD_TABLES)
+    with cas.store_lock(shared=True):                     # the consumer's path: blob_tree parses and checks files
+        gitsrc.fetch(str(repo), None, "v1.0.0")
+        files = gitsrc.blob_tree(str(repo), commit, None, "include")
+    w.append({"name": "old_ip", "vers": "1.0.0", "git": str(repo), "commit": commit, "tree": cas.tree_hash(files)})
+    w.publish("other", "0.1.0")
+    store, prj, d = _library(tmp_path)
+    deps.add(prj, "old_ip", None)
+    deps.add(store.get("p"), "other", None)                                  # another add reads the locked manifest
+    shutil.rmtree(prj.path / deps.DEPS)
+    assert {x["name"]: x["action"] for x in deps.sync(store.get("p"))} == {"old_ip": "installed",
+                                                                            "other": "installed"}
+    assert store.get("p").libraries()["old_ip"].origin == "dep"
+    _manifest(d, _basic(repository=str(prj.path), more=OLD_TABLES))
+    _release(prj, tag="v1.0.0")
+    assert _cli(store, "check", str(d), "--no-run") == 1
+    assert "checks.lvs: unknown key" in capsys.readouterr().out
+    assert _cli(store, "pack", str(d)) == 1
+    assert "checks.lvs: unknown key" in capsys.readouterr().out
+
+
+def test_a_valid_waiver_for_a_cell_the_tree_lacks_is_a_check_problem_and_refused_by_pack(tmp_path, capsys):
+    store, prj, d = _library(tmp_path)
+    _manifest(d, _basic(repository=str(prj.path), more='[checks]\nwaive = [{ cell = "gone", rules = ["m1.2"], '
+                                                       'reason = "r" }]\n'))
+    _release(prj, tag="v1.0.0")
+    assert _cli(store, "check", str(d), "--no-run", "--offline") == 1
+    assert _problems(_report_of(prj), "checks")[0].endswith("checks.waive[0].cell: gone is not a cell of the "
+                                                             "package: a waiver names a cell the package's files "
+                                                             "include (its own DRC run); fix the name or drop it")
+    assert _cli(store, "pack", str(d)) == 1
+    assert "gone is not a cell of the package" in capsys.readouterr().out
+
+
+def test_init_force_replaces_a_manifest_that_does_not_read(tmp_path, capsys):
+    store, prj, d = _library(tmp_path)
+    _manifest(d, "[package\nthis is not TOML")
+    assert _cli(store, "init", str(d)) == 1
+    assert "undine-package.toml exists" in capsys.readouterr().out
+    assert _cli(store, "init", str(d), "--force") == 0
+    assert mf.from_dir(d, "t").name == "analog_ip"
+
+
+def test_pack_refuses_a_manifest_that_gitignore_keeps_out_of_the_tag(tmp_path, capsys):
+    store, prj, d = _library(tmp_path)
+    (prj.path / ".gitignore").write_text(".undine/\nlibs/analog_ip/undine-package.toml\n")
+    _manifest(d, _basic(repository=str(prj.path)))
+    _release(prj, tag="v1.0.0")
+    assert pkgsource.dirty(pkgsource.locate(str(d), store)) == []          # git status does not show it
+    for cmd in (["pack", str(d)], ["check", str(d), "--no-run"]):
+        assert _cli(store, *cmd) == 1
+        assert "libs/analog_ip/undine-package.toml is not committed at v1.0.0 (is it matched by .gitignore?)" in \
+            capsys.readouterr().out
+
+
+def test_listing_reports_a_value_it_cannot_scan_as_unparsed_and_goes_on(tmp_path):
+    from undine.store import trust
+    d = tmp_path / "lib"
+    d.mkdir()
+    (d / "a.netlist.yaml").write_text(json.dumps({"instances": {"x1": {"props": {
+        "value": ".include /a\x00b", "model": "file=/x\x00y"}}, "x2": {"props": {"value": ".include ok.spice"}}}}))
+    got = trust.listing(d)
+    rows = [(b["where"], b["kind"], b["refused"]) for b in got["blocks"]]
+    assert ("a.netlist.yaml x1 value", "unparsed", True) in rows and ("a.netlist.yaml x2 value", "include", False) \
+        in rows
+
+
+def test_a_relative_root_does_not_scrub_names_from_the_report(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    store = ProjectStore(Path("."), {})
+    prj = store.create("amp")
+    assert not prj.path.is_absolute()
+    deps.write_lock(prj.path, {**deps.read_lock(prj.path), "format": 2, "pdk": None})
+    _pin_pdk(prj)
+    d = prj.create_library("amp_lib").path
+    (d / "inv.sch").write_text(_sch())
+    (d / "inv.sym").write_text(SYM)
+    _git(prj.path, "init", "-q")
+    (prj.path / ".gitignore").write_text(".undine/\n")
+    _manifest(d, _basic(name="amp_lib", repository=str(prj.path.resolve())))
+    commit = _release(prj, tag="v1.0.0")
+    assert _cli(store, "check", "amp/amp_lib", "--no-run") == 1
+    data = (prj.path / ".undine" / "check" / "amp_lib-1.0.0" / checkreport.FILE).read_bytes()
+    rep = json.loads(data)
+    assert (rep["package"]["name"], rep["publisher_project"]) == ("amp_lib", {"name": "amp", "lib": "amp_lib"})
+    assert rep["package"]["repository"] == "<repository>" and str(tmp_path).encode() not in data
+    line = ix.parse_line(json.dumps({"name": "amp_lib", "vers": "1.0.0", "git": "https://e.org/a.git",
+                                     "commit": commit, "tree": rep["package"]["tree"]}), "x")
+    assert checkreport.verify(data, line, None) == ["the report does not pass: 1 problem(s), the first: DRC, LVS, "
+                                                    "the symbol and netlist checks and the specs were not run "
+                                                    "(--no-run): a report passes only with them"]
+
+
+def test_an_index_url_with_a_password_or_a_local_path_is_not_published(tmp_path, capsys):
+    store, prj, d = _library(tmp_path)
+    prj.meta["indexes"] = {"acme": "https://user:s3cret-TOKEN@example.invalid/idx.git"}
+    prj.save()
+    _manifest(d, _basic(repository=str(prj.path), more='[dependencies]\n'
+                                                       'tech = { version = "^1", index = "acme" }\n'
+                                                       'loc = { version = "^1", index = "/srv/private/idx" }\n'))
+    _release(prj, tag="v1.0.0")
+    assert _cli(store, "check", str(d), "--no-run", "--offline") == 1
+    data = (prj.path / ".undine" / "check" / "analog_ip-1.0.0" / checkreport.FILE).read_text()
+    assert "s3cret-TOKEN" not in data and "user:" not in data and "/srv/private" not in data
+    rep = json.loads(data)
+    assert [x["index"] for x in rep["dependencies"]] == ["https://example.invalid/idx.git", "<local index>"]
+    assert any("https://example.invalid/idx.git has no local copy" in p for p in _problems(rep, "dependencies"))
+    assert checkreport.public_url("ssh://git:pw@host/x.git") == "ssh://host/x.git"
+    assert checkreport.public_url("git@github.com:me/idx.git") == "git@github.com:me/idx.git"
+    assert checkreport.public_url("file:///srv/idx") == "<local index>"

@@ -134,8 +134,11 @@ waive = [{ cell = "unit_cap", rules = ["m1.2"], reason = "abutment cell: clean o
 キーのパスを示します。`drc` は `deck`(ディレクトリを含まない deck のファイル名)と `options`(それぞれ true、false、数、
 文字列)を取ります。免除にはセル、1 つ以上の規則、空でない理由が要り、そのセルは include の集合の最上位のセルでなければ
 なりません。`[renames]` のキーは `[package].version` 以下のバージョンで、古い名前も新しい名前もセル名です。名前を自分自身に
-改名することも、1 つのバージョンで 2 つの古い名前を 1 つの新しい名前にすることもできません。`manifest.render` は manifest を
-TOML に書き戻し、それを解析すると同じ manifest になります。[段階 5 の状況](#phase-5-status)を参照してください。
+改名することも、1 つのバージョンで 2 つの古い名前を 1 つの新しい名前にすることもできません。これらの規則は公開
+(`pkg init`、`pack`、`check`)のものです。利用する側(取得、`lib sync`、lock、ライブラリの一覧)は 2 つの表を前と同じく
+中身を問わずに読むので、前に公開されたり固定されたりしたパッケージは今も install できます。表が規則に合わないとき、型の
+付いたフィールドは空になります。`manifest.render` は manifest を TOML に書き戻し、それを解析すると同じ manifest になります。
+[段階 5 の状況](#phase-5-status)を参照してください。
 
 <a id="index"></a>
 
@@ -1145,7 +1148,8 @@ index もすべて手元のもの。GitHub に触れるテストはありませ�
   たどってプロジェクトを見つける)か、`--root` の下の `PROJECT/LIBRARY` です。依存や PDK のライブラリは拒否します。タグは
   `v<version>`、HEAD に `undine-package.toml` が 2 つ以上あれば `<name>-v<version>` です。`at_tag` は、パッケージの
   サブディレクトリに追跡しているものの変更も追跡していないファイルもなく(リポジトリのほかの部分は見ない)、HEAD がタグ
-  (注釈つきのタグでもよい)にあることを求めます。`served` はタグの commit をリポジトリの URL から読みます(`git ls-remote`)。
+  (注釈つきのタグでもよい)にあり、manifest がそこにコミットされていること(無視されたファイルは `git status` に出ない)を
+  求めます。`served` はタグの commit をリポジトリの URL から読みます(`git ls-remote`)。
   `tree` は include の集合を、利用する側の取得と同じように git の blob からストアに読み込み、ファイルのバイト数を合計します。
 - **`pkg init LIBRARY [--name] [--version] [--license] [--repository] [--force]`** は manifest を書きます。ライブラリの名前、
   バージョン 0.1.0、シンボルのあるセルを公開、例の include の一覧、プロジェクトの PDK からの `[pdk]`(family と variant。
@@ -1171,8 +1175,10 @@ index もすべて手元のもの。GitHub に触れるテストはありませ�
   `tcleval`)とすべての RTL ファイルを、拒否されるかどうかにかかわらず一覧にします。一時ディレクトリに install した include の
   木について実行するので、公開するファイルだけを調べます。セルごとのシンボル、ネットリスト、DRC(deck、オプション、理由つきの
   免除)、LVS(回路図とレイアウトの両方があるセル)、スペックの項目は `not_run` です。`runs.state` が `not_run` であること
-  自体が問題なので、`--no-run` の報告は決して通りません(終了コード 1)。リポジトリ、プロジェクト、ホームディレクトリの
-  パスを含む文字列は `<repository>`、`<project>`、`~` として書きます。`checkreport.verify` は、publish と index の CI の
+  自体が問題なので、`--no-run` の報告は決して通りません(終了コード 1)。報告にはマシンのパスも秘密も入れません。
+  リポジトリ、プロジェクト、Undine のホーム、ホームディレクトリの絶対パスは `<repository>`、`<project>`、`<undine home>`、
+  `~` として書き(パス全体としてだけ置き換えるので、名前には触れない)、URL からはユーザー名とパスワードを除き、手元の
+  index やリポジトリのパスは `<local index>` や `<local repository>` にします。`checkreport.verify` は、publish と index の CI の
   ために、違う SHA-256、知らない形式や種類、行と違う名前、バージョン、commit、木、通らない報告を拒否します。
 
 段階 5 でこれから作るもの: `pkg check` でのシンボルとネットリストの検証、免除つきの DRC と LVS の実行(KLayout で、ジョブの

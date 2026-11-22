@@ -21,7 +21,8 @@ The resolver pins an index requirement through the index (deps._Graph.index_pin,
 without an index refuses it.
 
 [checks] (how `pkg check` runs DRC: the deck, its options, and waived rules per cell, each with a reason) and
-[renames] (old cell name -> new, per version) are typed here (Checks, Waiver, Manifest.renames); `render` writes a
+[renames] (old cell name -> new, per version) are typed here (Checks, Waiver, Manifest.renames), refused when wrong
+only for publishing (strict=True: a consumer reads them as before phase 5); `render` writes a
 Manifest back as TOML (`pkg init`). The licence is kept as written: its SPDX syntax is store/spdx.py's, checked by
 `pkg init` and `pkg check` only, so a manifest that parsed before keeps parsing.
 """
@@ -136,6 +137,7 @@ class Manifest:
     include: tuple | None = None                           # [files] include; None: every file
     checks: Checks | None = None                           # [checks]; None: the PDK's first deck, no waiver
     renames: dict = field(default_factory=dict)            # [renames]: {Version: {old cell: new cell}}
+    raw: dict = field(default_factory=dict, compare=False)  # [checks] and [renames] as written (parse's docstring)
 
 
 # ------------------------------------------------------------------ errors
@@ -153,8 +155,13 @@ def _err(where: str, path: str, what: str, fix: str = "") -> ManifestError:
 # ------------------------------------------------------------------ parse
 
 
-def parse(data: bytes, where: str) -> Manifest:
-    """The manifest in `data`, checked. Raises ManifestError for the first problem found."""
+def parse(data: bytes, where: str, strict: bool = False) -> Manifest:
+    """The manifest in `data`, checked. Raises ManifestError for the first problem found.
+
+    [checks] and [renames] are checked in full only with strict=True (publishing: pkg init, pack and check). A
+    consumer (a fetch, the lock, the library list) reads them as before phase 5, as tables of any content: a package
+    published or locked before they were typed keeps installing. There the typed fields are filled when the tables
+    pass the checks and left empty (checks None, renames {}) when they do not; `raw` keeps the tables as written."""
     if len(data) > MAX_BYTES:
         raise _err(where, "", f"{len(data)} bytes, more than {MAX_BYTES}", "a manifest is a short text file")
     try:
@@ -165,12 +172,13 @@ def parse(data: bytes, where: str) -> Manifest:
         doc = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise _err(where, "", f"not valid TOML: {e}", "fix the TOML at that line") from None
-    return _Parser(where).manifest(doc)
+    return _Parser(where, strict).manifest(doc)
 
 
 class _Parser:
-    def __init__(self, where: str):
+    def __init__(self, where: str, strict: bool = False):
         self.where = where
+        self.strict = strict
 
     def err(self, path: str, what: str, fix: str = "") -> ManifestError:
         return _err(self.where, path, what, fix)
@@ -227,8 +235,18 @@ class _Parser:
         m.dependencies = self.dependencies(self.table(doc, "dependencies") or {}, name)
         m.exports = self.exports(self.table(doc, "exports"))
         m.include = self.include(self.table(doc, "files"))
-        m.checks = self.checks(self.table(doc, "checks"))
-        m.renames = self.renames(self.table(doc, "renames"), version)
+        checks, renames = self.table(doc, "checks"), self.table(doc, "renames")
+        m.raw = {k: t for k, t in (("checks", checks), ("renames", renames)) if t is not None}
+        try:
+            m.checks = self.checks(checks)
+        except ManifestError:
+            if self.strict:
+                raise
+        try:
+            m.renames = self.renames(renames, version)
+        except ManifestError:
+            if self.strict:
+                raise
         return m
 
     def name(self, v, *path) -> str:
@@ -503,9 +521,9 @@ def select(include, paths) -> set[str]:
     return {x for x in paths if x == MANIFEST or any(_match(pat, x.split("/")) for pat in pats)}
 
 
-def check_files(m: Manifest, paths, where: str) -> None:
-    """Refuses a selection with no top-level cell, exported cells the selection does not have, and a waiver for a
-    cell that is not among the package's top-level cells."""
+def check_files(m: Manifest, paths, where: str, strict: bool = False) -> None:
+    """Refuses a selection with no top-level cell and exported cells the selection does not have; with strict=True
+    (publishing) also a waiver for a cell that is not among the package's top-level cells."""
     sel = select(m.include, paths)
     top = {p for p in sel if "/" not in p}
     if not any(p.endswith(CELL_SUFFIXES) for p in top):
@@ -518,7 +536,7 @@ def check_files(m: Manifest, paths, where: str) -> None:
     if missing:
         raise _err(where, "exports.cells", f"no .sym, .sch or .oas among the package's files for {', '.join(missing)}",
                    "add the cell's files to [files] include, or drop it from exports")
-    for i, w in enumerate(m.checks.waive if m.checks else ()):
+    for i, w in enumerate(m.checks.waive if m.checks and strict else ()):
         if not any(w.cell + s in top for s in CELL_SUFFIXES):
             raise _err(where, f"checks.waive[{i}].cell", f"{w.cell} is not a cell of the package",
                        "a waiver names a cell the package's files include (its own DRC run); fix the name or drop it")
@@ -661,9 +679,9 @@ def from_archive(sha: str, where: str) -> Manifest | None:
     return None if files is None else from_files(files, where)
 
 
-def from_dir(d: Path, where: str) -> Manifest | None:
+def from_dir(d: Path, where: str, strict: bool = False) -> Manifest | None:
     """The manifest of an installed or checked-out directory; None when it has none. A manifest that is a symbolic
-    link is refused: it could name any file on the machine."""
+    link is refused: it could name any file on the machine. strict: as parse's."""
     p = Path(d) / MANIFEST
     if p.is_symlink():
         raise _err(where, "", "is a symbolic link", "a manifest is a regular file; reinstall with `undine lib sync`")
@@ -671,4 +689,4 @@ def from_dir(d: Path, where: str) -> Manifest | None:
         return None
     if not p.is_file():
         raise _err(where, "", "is not a regular file", "make it one")
-    return parse(_read(p), where)
+    return parse(_read(p), where, strict)

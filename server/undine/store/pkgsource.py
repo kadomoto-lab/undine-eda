@@ -70,10 +70,11 @@ def _rev(top: Path, ref: str) -> str | None:
 # ------------------------------------------------------------------ finding the library
 
 
-def locate(arg: str, store) -> Src:
+def locate(arg: str, store, read_manifest: bool = True) -> Src:
     """The library `arg` names: a directory (a project library's, the project found by walking up to its
     project.json), or PROJECT/LIBRARY under the store's root. A dependency's or a PDK's library is refused: it is
-    published from its own repository."""
+    published from its own repository. Its manifest is read as publishing reads it (strict); read_manifest=False
+    (`pkg init`, which may replace a manifest that does not read) leaves it None."""
     from undine.store.project import Project
     p = Path(arg).expanduser()
     if p.is_dir():
@@ -110,7 +111,8 @@ def locate(arg: str, store) -> Src:
     if top is not None:
         rel = lib.path.resolve().relative_to(top.resolve()).as_posix()
         subdir = None if rel == "." else rel
-    return Src(prj, lib, top, subdir, mf.from_dir(lib.path, f"{prj.name}/{lib.name}"))
+    m = mf.from_dir(lib.path, f"{prj.name}/{lib.name}", strict=True) if read_manifest else None
+    return Src(prj, lib, top, subdir, m)
 
 
 def need_manifest(src: Src) -> mf.Manifest:
@@ -172,6 +174,12 @@ def at_tag(src: Src) -> tuple[str, str]:
     if tagged != head:
         raise PackageSourceError(f"{src.where}: tag {tag} is {tagged[:12]}, HEAD is {head[:12]}: check out {tag}, "
                                  "or raise [package] version and tag HEAD with it")
+    rel = f"{src.subdir}/{mf.MANIFEST}" if src.subdir else mf.MANIFEST
+    try:
+        gitsrc._run(None, "-C", str(top), "cat-file", "-e", f"{head}:{rel}")
+    except gitsrc.GitSourceError:                # an ignored file is in no `git status`: look in the commit itself
+        raise PackageSourceError(f"{src.where}: {rel} is not committed at {tag} (is it matched by .gitignore?): "
+                                 "commit it (git add -f), then tag that commit") from None
     return tag, head
 
 
@@ -364,7 +372,7 @@ def draft(src: Src, *, name: str | None = None, version: str | None = None, lice
                     dependencies=dependencies, exports=exports, include=mf.DEFAULT_INCLUDE)
     text = mf.render(m, notes)
     try:
-        back = mf.parse(text.encode(), src.where)
+        back = mf.parse(text.encode(), src.where, strict=True)
     except mf.ManifestError as e:
         raise PackageSourceError(f"the manifest drafted does not read back ({e}): write it by hand") from None
     return Draft(back, notes, guessed, warnings)

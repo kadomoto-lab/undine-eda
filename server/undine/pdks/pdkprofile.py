@@ -13,6 +13,9 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Callable
 
+from undine.pdks.formulas import gf180_stack as _gf180_stack, ihp_stack as _ihp_stack
+from undine.pdks.formulas import mim_area_perimeter as _mim
+
 SWITCHES = ("feol", "beol", "offgrid")                 # the DRC switches the Verify panel shows
 
 
@@ -91,12 +94,6 @@ def _computed(el: LvsElement, name: str, given: dict) -> dict:
     except KeyError:
         raise ValueError(f"{name}: LVS compares it as {el.to or 'an element'} by parameters computed from its own, "
                          f"which are not all numbers: {', '.join(f'{k}={v}' for k, v in given.items()) or 'none'}") from None
-
-
-def _mim(p: dict) -> dict:
-    """A MIM capacitor as KLayout's sky130 deck extracts it (MIMCap: A and P compared, C not): area and perimeter of
-    one unit from its W and L in um."""
-    return {"A": p["w"] * p["l"], "P": 2 * (p["w"] + p["l"])}
 
 
 @dataclass(frozen=True)
@@ -198,7 +195,7 @@ class Cut:
     enc_below: tuple[float, float]
     enc_above: tuple[float, float]
     rules: str = ""                                    # the rule names, as answers cite them
-    extra: tuple[tuple[str, float], ...] = ()
+    extra: tuple[tuple[str, float, float, float], ...] = ()
     away: tuple[tuple[str, float], ...] = ()
 
 
@@ -273,7 +270,8 @@ class Profile:
     drc_extra: tuple[str, ...] = ()                    # more KLayout decks the shuttle prechecks run
     lvs_klayout: tuple[str, ...] = ()                  # globs under <decks>/lvs
     lvs_options: dict = field(default_factory=dict)    # default -rd switches of the LVS deck
-    deck_vars: dict = field(default_factory=dict)      # PDK name -> -rd values every DRC / LVS run gets (metal stack)
+    # PDK name -> -rd values every DRC / LVS run gets (metal stack)
+    deck_vars: dict[str, dict] = field(default_factory=dict)
     magic_rc: str | None = None                        # under libs.tech/magic; {name} is the PDK name (sky130A)
     magic_drc: bool = False                            # run_checks runs Magic's drc(full) next to the KLayout deck
                                                        # (the deck lacks rules of Magic's that shuttle prechecks run);
@@ -322,7 +320,8 @@ class Profile:
     stdcell_lvs: StdcellLvs | None = None              # KLayout LVS of layouts with standard cells (None: as drawn)
     stdcell_tie: str = ""                              # the tie cell a constant input takes its 1 / 0 from (its pins)
     stack: Stack | None = None                         # connectivity and drawing rules (None: those tools refuse)
-    stacks: dict = field(default_factory=dict)         # PDK name -> its own Stack where the variants' metal stacks differ
+    # PDK name -> its own Stack where the variants' metal stacks differ
+    stacks: dict[str, Stack] = field(default_factory=dict)
 
     def stdcell(self, name: str) -> tuple[str, str] | None:
         """(library, its GDS relative to the PDK root) of a standard cell by its name; None when the name is not one."""
@@ -491,30 +490,6 @@ SKY130 = Profile(
                      latchup=15.0)),        # LU.2 / LU.3
 )
 
-def _gf180_stack(thin: int, top: str | None, plate: tuple[str, str] | None) -> Stack:
-    """GF180MCU's stack, from gf180mcu_fd_pv's KLayout deck: metal1 .. metal{thin} thin, `top` above them with the
-    9K / 11K MetalTop rules (MT.*), and the MIM's top plate FuseTop (option B: on the metal under the top one, `plate`
-    (metal, its via) landing on it; the symbol's G is the metal under it, the deck's P1, as Undine netlists it). Where
-    the 3.3 V and the 5 / 6 V rules differ, the larger: a shape is correct inside DualGate and outside it. Contacts and
-    vias use the spacing a 4 x 4 array needs (CO.2b, Vn.2b) at every size. No taps: a GF180 tap is COMP with the other
-    implant, which these tools do not draw."""
-    conductors = [Conductor("poly", 0.2, 0.24, away=(("comp", 0.3),))]          # PL.1_MV, PL.3a, PL.5a / 5b_MV
-    conductors += [Conductor(f"metal{i}", 0.23 if i == 1 else 0.28, 0.23 if i == 1 else 0.28, 0.1444, ((10.0, 0.3),))
-                   for i in range(1, thin + 1)]                                  # Mn.1, Mn.2a, Mn.3, Mn.2b
-    if top:
-        conductors.append(Conductor(top, 0.44, 0.46, 0.5625, ((10.0, 0.6),)))   # MT.1, MT.2a, MT.4, MT.2b
-    metals = [c.name for c in conductors[1:]]
-    cuts = [Cut("contact", "comp", "metal1", 0.22, 0.28, (0.07, 0.07), (0.005, 0.06),
-                "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7", away=(("poly", 0.15),)),
-            Cut("contact", "poly", "metal1", 0.22, 0.28, (0.07, 0.07), (0.005, 0.06),
-                "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8", away=(("comp", 0.17),))]
-    for i, (lo, hi) in enumerate(zip(metals, metals[1:]), 1):    # metal1 encloses via1 by 0 (V1.3a), the others 0.01
-        cuts.append(Cut(f"via{i}", lo, hi, 0.26, 0.36, (0.0 if i == 1 else 0.01, 0.06), (0.01, 0.06),
-                        f"V{i}.1, V{i}.2b, V{i}.3{'a' if i == 1 else 'b'}, V{i}.3c, V{i}.3d, V{i}.4a, V{i}.4b, V{i}.4c"))
-    return Stack(diff="comp", tap=None, poly="poly", well="nwell", conductors=tuple(conductors), cuts=tuple(cuts),
-                 plates=(Plate("fusetop", plate[0], plate[1], top="B", bottom="G"),) if plate else ())
-
-
 # GF180MCU: open_pdks' gf180mcu{A..D}, decks from globalfoundries-pdk-libs-gf180mcu_fd_pv (libs.tech/klayout/tech).
 # Exercised on gf180mcuD (open_pdks 792ef670, the version wafer.space pins): KLayout DRC and LVS of
 # gf180mcu_fd_sc_mcu7t5v0__inv_1 (LVS matches), ngspice at typical / ss / ff.
@@ -571,31 +546,6 @@ GF180 = Profile(
     stack=_gf180_stack(4, "metal5", ("metal4", "via4")),
     stacks={"gf180mcuB": _gf180_stack(3, "metal4", ("metal3", "via3")), "gf180mcuA": _gf180_stack(2, None, None)},
 )
-
-def _ihp_stack(thin: int, tops: tuple[str, ...]) -> Stack:
-    """IHP SG13's stack, from its KLayout deck (the maximal rule set): metal1 .. metal{thin} and the thick `tops`, and
-    for SG13G2 the MIM's plate on metal5 (TopVia1 on it joins it, as the deck's mim_via, and Vmim, which the cmim
-    PCell draws; c0 the top plate, the deck's mim_top). Contacts and vias use the spacing a large array needs (Cnt.b1,
-    Vn.b1) at every size; the wide-metal spacings (Mn.e, Mn.f) hold beside any wide shape, whatever the run length. Not
-    checked: pSD's 0.09 um from a contact on Activ (Cnt.g1 / g2), the device's own. No taps: an IHP tap is Activ with or
-    without pSD, which these tools do not draw."""
-    conductors = [Conductor("poly", 0.13, 0.18, 0.09, away=(("diff", 0.07),)),             # Gat.a, b, e, d
-                  Conductor("metal1", 0.16, 0.18, 0.09, ((0.3, 0.22), (10.0, 0.6)))]       # M1.a, b, d, e, f
-    conductors += [Conductor(f"metal{i}", 0.2, 0.21, 0.144, ((0.39, 0.24), (10.0, 0.6))) for i in range(2, thin + 1)]
-    conductors += [Conductor("topmetal1", 1.64, 1.64), Conductor("topmetal2", 2.0, 2.0, wide=((5.0, 5.0),))][:len(tops)]
-    cuts = [Cut("contact", "diff", "metal1", 0.16, 0.2, (0.07, 0.07), (0.0, 0.05), "Cnt.a, Cnt.b1, Cnt.c, M1.c, M1.c1, Cnt.f",
-                away=(("poly", 0.11),)),
-            Cut("contact", "poly", "metal1", 0.16, 0.2, (0.07, 0.07), (0.0, 0.05), "Cnt.a, Cnt.b1, Cnt.d, M1.c, M1.c1, Cnt.e",
-                away=(("diff", 0.14),)),
-            Cut("via1", "metal1", "metal2", 0.19, 0.29, (0.01, 0.05), (0.005, 0.05), "V1.a, V1.b1, V1.c, V1.c1, M2.c, M2.c1")]
-    cuts += [Cut(f"via{i}", f"metal{i}", f"metal{i + 1}", 0.19, 0.29, (0.005, 0.05), (0.005, 0.05),
-                 f"V{i}.a, V{i}.b1, V{i}.c, V{i}.c1, M{i + 1}.c, M{i + 1}.c1") for i in range(2, thin)]
-    cuts.append(Cut("topvia1", f"metal{thin}", "topmetal1", 0.42, 0.42, (0.1, 0.1), (0.42, 0.42), "TV1.a, TV1.b, TV1.c, TV1.d"))
-    if len(tops) > 1:
-        cuts.append(Cut("topvia2", "topmetal1", "topmetal2", 0.9, 1.06, (0.5, 0.5), (0.5, 0.5), "TV2.a, TV2.b, TV2.c, TV2.d"))
-    return Stack(diff="diff", tap=None, poly="poly", well="nwell", conductors=tuple(conductors), cuts=tuple(cuts),
-                 plates=(Plate("mim", "metal5", "topvia1", also=("vmim",)),) if thin == 5 else ())
-
 
 # IHP SG13G2: IHP-Open-PDK through ciel (family ihp-sg13), decks in libs.tech/klayout/tech.
 # Exercised on ihp-sg13g2 (89d42ee6): KLayout DRC of sg13g2_inv_1 (clean) and LVS against its CDL (matches), ngspice 47

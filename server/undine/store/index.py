@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import tomllib
 from collections.abc import Callable
@@ -103,6 +104,66 @@ def configured() -> dict[str, str]:
                 raise IndexReadError(f"{p}: indexes.{k}: not a nickname (lower-case letters, digits, _ and -)")
             out[k] = _check_url(v)
     return out
+
+
+def add_configured(name: str, url: str) -> bool:
+    """Adds `name = "url"` to $UNDINE_HOME/config.toml's [indexes] (`pkg index add`), the rest of the file kept as
+    written: its line endings, its mode, and a symbolic link (the file it points to is written). False when it is there
+    already with that URL. Refused (IndexReadError) for a name that is no nickname, a URL that is no index URL, or a
+    name the file gives another URL. One writer at a time (an flock beside the file); the text is parsed again before
+    it is written and must then give exactly what it gave plus the new entry."""
+    if not _NICK.match(name or ""):
+        raise IndexReadError(f"{name!r}: not a nickname (lower-case letters, digits, _ and -)")
+    url = _check_url(url)
+    p = home() / "config.toml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p.parent / ".config.toml.lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        configured()                                     # a config.toml it cannot read: refused first
+        target = p.resolve() if p.is_symlink() else p
+        old = target.read_bytes().decode("utf-8") if target.is_file() else ""
+        mine = tomllib.loads(old).get("indexes", {}) if old else {}
+        if name in mine:
+            if mine[name] == url:
+                return False
+            raise IndexReadError(f"{p}: indexes.{name} is {mine[name]} already: edit the file to change it")
+        eol = "\r\n" if "\r\n" in old else "\n"
+        line = f"{name} = {json.dumps(url)}{eol}"
+        lines = old.splitlines(keepends=True)
+        head = next((i for i, x in enumerate(lines) if re.match(r"^\s*\[indexes\]\s*(#.*)?\r?$", x.rstrip("\n"))),
+                    None)
+        if head is None:
+            sep = ("" if not old or old.endswith("\n") else eol) + (eol if old.strip() else "")
+            text = old + sep + "[indexes]" + eol + line
+        else:
+            end = next((i for i in range(head + 1, len(lines)) if re.match(r"^\s*\[", lines[i])), len(lines))
+            while end > head + 1 and not lines[end - 1].strip():
+                end -= 1                                 # after the table's last entry, before blank lines
+            if end > 0 and not lines[end - 1].endswith("\n"):
+                lines[end - 1] += eol
+            text = "".join(lines[:end] + [line] + lines[end:])
+        try:
+            parsed = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as e:
+            raise IndexReadError(f"{p}: cannot add {name} without breaking the file ({e}): add it by hand") from None
+        before = tomllib.loads(old) if old else {}
+
+        def rest(d: dict) -> dict:
+            return {k: v for k, v in d.items() if k != "indexes"}
+        if parsed.get("indexes", {}) != {**mine, name: url} or rest(parsed) != rest(before):
+            raise IndexReadError(f"{p}: cannot add {name} to [indexes] as written: add it by hand")
+        mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".config.toml.", suffix=".new")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(text.encode("utf-8"))
+            if mode is not None:
+                os.chmod(tmp, mode)
+            os.replace(tmp, target)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+    return True
 
 
 def project_indexes(meta: dict) -> dict[str, str]:

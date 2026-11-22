@@ -206,11 +206,17 @@ analog_ip 1.2.0 at 229914698b1f (4 cells), requirement ^1.2.0, locked in undine.
   acme = "git@github.com:acme/undine-index.git"
   ```
 
+  `pkg index add acme git@github.com:acme/undine-index.git` でこの行を書けます(`--project demo` ならプロジェクトの `project.json` に)。
+
   `--index acme`(または `"index": "acme"`)で、そこからパッケージを取ります。パッケージが `index` なしで書いた依存は、そのパッケージ
   自身のインデックスから来ます(cargo の規則): `acme` のパッケージが `sar_common` を必要とすれば acme のものを取り、別の場所で誰かが
   その名前で公開したものは取りません。1 つのプロジェクトで、1 つのパッケージ名を 2 つのインデックスから取ることは拒否します。
   アクセスは git のものです: ssh の鍵か認証ヘルパー。各インデックスはストアに一度取得し、取得し直すのは `pkg index update`、
   `pkg update`、必要なバージョンが見つからなかった解決のときだけです。`pkg index list` で、それぞれをいつ取得したかがわかります。
+- **git からインデックスへ。** パッケージがインデックスに載る前に git から加えた依存は、そのまま動きます。`pkg migrate demo analog_ip`
+  は、インデックスに install したバージョンがあり、そのバージョンのファイルが install したものと等しいときに、それをインデックスの
+  パッケージに変えます。要求は `=VERSION` と書き(`pkg update demo analog_ip --version ^VERSION` で緩めます)、もう install しない
+  ファイル(manifest の `[files] include` の外のもの)を示します。`pkg remove demo NAME` は、`lib remove` と同じく依存を削除します。
 
 <a id="packages-in-the-browser"></a>
 ### ブラウザのパッケージ欄

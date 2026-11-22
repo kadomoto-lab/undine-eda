@@ -8,10 +8,13 @@
     pkg tree PROJECT            the dependency tree as locked
     pkg why PROJECT PACKAGE     the chains from the project to a package
     pkg lock PROJECT            as `lib lock`: resolve what the lock does not pin
+    pkg remove PROJECT NAME     as `lib remove`: a dependency, with the packages nothing needs any more
+    pkg migrate PROJECT NAME    a git dependency becomes a package from an index, when the files are the same
     pkg sync PROJECT            as `lib sync`; --from-vendor DIR installs from a vendored bundle, offline
     pkg licenses PROJECT        the licence of every locked dependency and of the PDK
     pkg vendor PROJECT DIR      DIR/vendor/: the locked trees and their licences, for a tapeout bundle
     pkg index list | update     the indexes known here, and fetching them again
+    pkg index add NAME URL      a nickname for an index, in ~/.undine/config.toml (--project: project.json)
 
 search, info and outdated read the local copy of each index (fetched once on first use); `pkg index update`, `pkg
 update` and a resolution that finds no version it needs fetch it again."""
@@ -45,6 +48,13 @@ def add_parser(sub) -> None:
         x.add_argument("project")
         if name == "outdated":
             x.add_argument("--offline", action="store_true", help="read the local copies; fetch no index")
+    rm = pk.add_parser("remove", help="remove a dependency and the packages nothing needs any more (as lib remove)")
+    rm.add_argument("project")
+    rm.add_argument("name")
+    mg = pk.add_parser("migrate", help="turn a git dependency into a package from an index (same files)")
+    mg.add_argument("project")
+    mg.add_argument("name", help="the project.json name of the git dependency")
+    mg.add_argument("--index", help="an index nickname or URL (default: the default index)")
     y = pk.add_parser("sync", help="install the dependencies exactly as locked (as lib sync)")
     y.add_argument("project")
     y.add_argument("--offline", action="store_true", help="fetch nothing; install from the store")
@@ -62,14 +72,19 @@ def add_parser(sub) -> None:
     w.add_argument("project")
     w.add_argument("package")
     ixp = pk.add_parser("index", help="the indexes known here").add_subparsers(dest="index_cmd", required=True)
-    for name in ("list", "update"):
+    for name in ("list", "update", "add"):
         x = ixp.add_parser(name)
         if name == "update":
             x.add_argument("indexes", nargs="*", help="nicknames or URLs (default: every index known)")
-        x.add_argument("--project", help="a project, for the indexes its project.json names")
+        if name == "add":
+            x.add_argument("name", help="the nickname (lower-case letters, digits, _ and -)")
+            x.add_argument("url", help="the index's git URL")
+        x.add_argument("--project", help="a project, for the indexes its project.json names" if name != "add"
+                       else "write it into this project's project.json (a clone finds it) instead of config.toml")
 
 
 def run(args: argparse.Namespace, store) -> int:
+    from undine.pdks.pin import PinError
     from undine.store import deps
     from undine.store import index as ix
 
@@ -96,6 +111,12 @@ def run(args: argparse.Namespace, store) -> int:
             return _tree(prj)
         elif args.pkg_cmd == "why":
             return _why(prj, args.package)
+        elif args.pkg_cmd == "remove":
+            from undine.__main__ import _remove
+            _remove(prj, args)
+            return 0
+        elif args.pkg_cmd == "migrate":
+            return _migrate(prj, args)
         elif args.pkg_cmd == "sync":
             return _sync(prj, args)
         elif args.pkg_cmd == "licenses":
@@ -108,7 +129,7 @@ def run(args: argparse.Namespace, store) -> int:
         for w in st["warnings"]:
             print(f"~ {w}")
         return 0
-    except (deps.DepError, ix.IndexReadError) as e:
+    except (deps.DepError, ix.IndexReadError, PinError, OSError) as e:
         print(f"error: {e}")
         return 1
 
@@ -167,6 +188,8 @@ def _index(args, store) -> int:
             c = i.commit()
             print(f"{nick:<12} {url}  " + (f"fetched at {c[:12]}" if c else "not fetched"))
         return 0
+    if args.index_cmd == "add":
+        return _index_add(args, store)
     urls = [ix.url_of(n, meta) for n in args.indexes] or list(dict.fromkeys(known.values()))
     bad = 0
     for url in urls:
@@ -356,4 +379,54 @@ def _vendor(prj, args) -> int:
     print(f"wrote {r['dir']} ({len(r['entries'])} trees, vendor.json, LICENSES.json, LICENSES.md)")
     if unknown:
         print(f"~ no licence recorded for {', '.join(unknown)}: see their licence files in LICENSES.md")
+    return 0
+
+
+def _index_add(args, store) -> int:
+    import json
+
+    from undine.store import deps
+    from undine.store import index as ix
+    if not args.project:
+        if ix.add_configured(args.name, args.url):
+            print(f"{args.name} = {args.url} added to {ix.home() / 'config.toml'} [indexes]")
+        else:
+            print(f"{args.name} is {args.url} already")
+        return 0
+    prj = store.get(args.project)
+    if not ix._NICK.match(args.name or ""):
+        raise ix.IndexReadError(f"{args.name!r}: not a nickname (lower-case letters, digits, _ and -)")
+    url = ix._check_url(args.url)
+    with deps.meta_lock(prj.path):
+        prj.meta = json.loads((prj.path / "project.json").read_text())     # as it is now, under the lock
+        have = ix.project_indexes(prj.meta)
+        if have.get(args.name) == url:
+            print(f"{args.name} is {url} already in {prj.name}'s project.json")
+            return 0
+        if args.name in have:
+            raise ix.IndexReadError(f"project.json: indexes.{args.name} is {have[args.name]} already: edit it to "
+                                    "change it")
+        prj.meta.setdefault("indexes", {})[args.name] = url
+        prj.save()
+    print(f"{args.name} = {url} added to {prj.name}'s project.json indexes")
+    return 0
+
+
+def _migrate(prj, args) -> int:
+    from undine.pdks import pdkops
+    from undine.store import deps
+    lock = deps.read_lock(prj.path)
+    if not lock or deps.lock_format(lock) < 2:
+        deps.migrate(prj, args.name, index=args.index, dry=True)    # refused before the lock is converted
+        up = pdkops.upgrade(prj)                         # the one way to format 2 (lib lock --format 2 does the same)
+        print(f"{deps.LOCK}: format {up.get('format', 2)}")
+    r = deps.migrate(prj, args.name, index=args.index)
+    print(f"{args.name}: now {r['package']} {r['version']} from {r['index']}, requirement ={r['version']} "
+          f"(`python -m undine pkg update {prj.name} {args.name} --version ^{r['version']}` loosens it)")
+    if r["dropped_files"]:
+        shown = ", ".join(r["dropped_files"][:10]) + (f" and {len(r['dropped_files']) - 10} more"
+                                                      if len(r["dropped_files"]) > 10 else "")
+        print(f"  no longer installed (outside the manifest's [files] include): {shown}")
+    for u in r.get("used_by", []):
+        print(f"  used by  {u}")
     return 0

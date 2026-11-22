@@ -1,7 +1,8 @@
 # パッケージと PDK(設計)
 
-状態: 設計です。2026-11-05 に決めました([決定事項](#decisions))。**段階 0、段階 1**(ストアと lock format 2)、**段階 2**(manifest、推移的な依存、PDK の互換性、信頼の規則)
-**は済んでいます**。**段階 3 から 6 は実装していません**。[段階](#phases)に、各段階でできることと、段階ごとに今あるものを書きました。
+状態: 設計です。2026-11-05 に決めました([決定事項](#decisions))。**段階 0、段階 1**(ストアと lock format 2)、**段階 2**(manifest、推移的な依存、PDK の互換性、信頼の規則)、
+**段階 3**(index のパッケージ、リモートのホストの方針、ライセンスと vendor、ライブラリブラウザのパッケージ欄)**は済んでいます**。
+**段階 4**(changeset とエージェント)**は進行中です**。**段階 5 と 6 は実装していません**。[段階](#phases)に、各段階でできることと、段階ごとに今あるものを書きました。
 今の PDK でユーザーができることは[PDK のガイド](../guide/pdks.ja.md)に、依存関係とパッケージについては
 [ライブラリと依存関係](../guide/libraries.ja.md)にあります。
 
@@ -283,7 +284,7 @@ manifest の `version` はラベルです。`^`、`~`、`=`、素の形、`*` �
   そこで format 2 を書くのは、それを必要とする明示的なコマンドだけにし、ほかの変更のついでには書きません。しかもそのコマンドは
   段階 1 から入り、段階 1 は段階 0 の確認を含むリリースが出回ってから出します。古い Undine を使う共同作業者は、壊れた lock ではなく
   拒否を受け取ります。段階 1 で書くのは `pdk verify PROJECT --pin` と `lib lock PROJECT --format 2` で、どちらも 1 つの関数
-  (`pdkops.upgrade`)を通ります。`pkg add` と `pkg migrate` も、[段階 3](#phases) でできれば書きます。`lib lock --format 2` が
+  (`pdkops.upgrade`)を通ります。`pkg add` と `pkg migrate`([段階 3](#phases))も書きます。`lib lock --format 2` が
   なければ、段階 1 では PDK のないプロジェクトが format 2 にできません(どちらのコマンドも、ここに入っていない PDK は拒否します。
   先に `pdk fetch`)。format 1 の lock は
   読め、今のコマンド(`lib add`、`set-pdk` など)はこれまでどおり format 1 で書きます。*実装済み(段階 0):* `read_lock` は、より
@@ -667,7 +668,11 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   前のもので(manifest のない commit は公開できない)、しかも今の `sha` はサブディレクトリ全体を、index の `tree` は含めるファイルと
   manifest だけを対象にするので、2 つのハッシュは比べません。migrate は manifest のファイルの組で install し直し、変化を報告します。
   加わる manifest と、`include` の外にあって消えるファイルです。lock の format 1 は読み、format 2 は `pkg migrate` が書きます
-  ([lockfile](#lockfile) を参照)。
+  ([lockfile](#lockfile) を参照)。*実装済み(段階 3、deps.migrate):* 比べるバージョンは install したもの(その manifest のもの)で、
+  index の手元の写しから探し、写しになければ一度取得し直します。書く要求は `=VERSION` で(`pkg update --version ^VERSION` で
+  緩めます)、依存は `lib update` と同じ経路で install し直すので、エントリの信頼はほかの更新と同じく外れます。manifest のない依存、
+  index にないバージョン、含めるファイルが 1 つでも違うものは、何も変えずに拒否します。format 1 の lock は先に変換します
+  (`lib lock --format 2` と同じ `pdkops.upgrade`)。
 - **PDK の id**: 12 文字の id(`sky130A@8afc8346a57f`)は、入っている PDK から(一意な接頭辞として)commit 全体に広げます。
   なければ、人がネットワークを許したときに `ciel ls-remote` から広げます。PDK は、その commit についてプロファイルのパッケージが
   列挙する木のハッシュと照合します。プロファイルが列挙していない commit は、見つけたハッシュで固定し、プロファイルが列挙するまで
@@ -1075,7 +1080,9 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   index?}` を書く。古くなった項目(別の index やパッケージ、または要求がもう受け付けないバージョン)は `lib lock` が解決する。
   `sync` は index を読まずに lock からインストールする。形式 2 だけ。
 - **yank**: 新しい解決では飛ばし、固定したところでは残す。`status` は手元の写しから警告する。
-- **コマンド**: `pkg search / info / add / update / outdated / tree / why / lock / index list / index update`。
+- **コマンド**: `pkg search / info / add / update / outdated / tree / why / lock / remove / migrate / index list /
+  index update / index add`(`index add` は `~/.undine/config.toml` に、`--project` なら project.json に書き、ファイルのほかの部分は
+  そのまま残します)。
 
 既定の index のリポジトリ [`kadomoto-lab/undine-index`](https://github.com/kadomoto-lab/undine-index) はできています(2026-11-20 に
 作成。`config.json` だけで、パッケージはまだありません)。

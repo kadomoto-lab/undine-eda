@@ -35,22 +35,22 @@ server, behind a Design API. The web UI is one client of that API; scripts and A
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td width="50%"><img src="images/showcase-cell.png" alt="The sar_adc cell page: the notes and specs of its design intent"><br><sub><b>Cells and intent</b>: what a cell has to do: its goals, constraints and specs, with the conditions they are measured at</sub></td>
-    <td width="50%"><img src="images/showcase-schematic.png" alt="Top-level schematic of the SAR ADC: sampling switches, capacitive DACs, comparator and controller"><br><sub><b>Schematic</b>: Xschem-compatible editing, here the SAR ADC's top level</sub></td>
-  </tr>
-  <tr>
-    <td><img src="images/showcase-simulation.png" alt="The comparator testbench tb_sar_comp: ngspice transient of outp and outn in the browser"><br><sub><b>Simulation</b>: ngspice on the server, waveforms in the browser (the comparator's decisions on a ±0.45 mV input)</sub></td>
-    <td><img src="images/showcase-comparator.png" alt="Layout of the SAR ADC's dynamic comparator at the transistor level"><br><sub><b>Layout</b>: server-rendered tiles from the PDK's layers, here the comparator</sub></td>
-  </tr>
-  <tr>
-    <td><img src="images/drc.png" alt="DRC result browser with a met1 spacing marker"><br><sub><b>DRC / LVS</b>: KLayout or Magic decks, rules and markers in the layout</sub></td>
-    <td><img src="images/changeset.png" alt="Changeset review: an agent's proposal with its diff and before/after checks"><br><sub><b>Changesets</b>: an agent's proposal, its diff and before/after checks, waiting for a human</sub></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="images/tapeout.png" alt="Tiny Tapeout tile with all sign-off checks passing" width="50%"><br><sub><b>Tapeout</b>: Tiny Tapeout tile checks and the sign-off suite</sub></td>
-  </tr>
+<table markdown="block">
+<tr markdown="block">
+<td width="50%" markdown="span">![The sar_adc cell page: the notes and specs of its design intent](images/showcase-cell.png)<br><sub><b>Cells and intent</b>: what a cell has to do: its goals, constraints and specs, with the conditions they are measured at</sub></td>
+<td width="50%" markdown="span">![Top-level schematic of the SAR ADC: sampling switches, capacitive DACs, comparator and controller](images/showcase-schematic.png)<br><sub><b>Schematic</b>: Xschem-compatible editing, here the SAR ADC's top level</sub></td>
+</tr>
+<tr markdown="block">
+<td markdown="span">![The comparator testbench tb_sar_comp: ngspice transient of outp and outn in the browser](images/showcase-simulation.png)<br><sub><b>Simulation</b>: ngspice on the server, waveforms in the browser (the comparator's decisions on a ±0.45 mV input)</sub></td>
+<td markdown="span">![Layout of the SAR ADC's dynamic comparator at the transistor level](images/showcase-comparator.png)<br><sub><b>Layout</b>: server-rendered tiles from the PDK's layers, here the comparator</sub></td>
+</tr>
+<tr markdown="block">
+<td markdown="span">![DRC result browser with a met1 spacing marker](images/drc.png)<br><sub><b>DRC / LVS</b>: KLayout or Magic decks, rules and markers in the layout</sub></td>
+<td markdown="span">![Changeset review: an agent's proposal with its diff and before/after checks](images/changeset.png)<br><sub><b>Changesets</b>: an agent's proposal, its diff and before/after checks, waiting for a human</sub></td>
+</tr>
+<tr markdown="block">
+<td colspan="2" align="center" markdown="span">![Tiny Tapeout tile with all sign-off checks passing](images/tapeout.png){ width="50%" }<br><sub><b>Tapeout</b>: Tiny Tapeout tile checks and the sign-off suite</sub></td>
+</tr>
 </table>
 
 ## Acknowledgments

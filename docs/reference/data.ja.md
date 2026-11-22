@@ -393,8 +393,33 @@ Undo は `merge` の記録で止まります。[ライブ changeset](../design/l
 どちらかです。入力は生成したままのネットリストのものなので、コピーを使っても key は変わりません
 ([PDK のモデル](../guide/verification.md#pdk-models-in-a-simulation))。
 
-`key` はすべての入力のハッシュで、同じ key の 2 つのジョブは同じものに対して実行されています。設計、PDK、デッキ、ツールのバージョンが今と違えば、
-そのジョブは **古い(outdated)** と判定します。`GET /api/p/<project>/jobs/<job>/freshness` は
+key に入る入力がさらに 2 つあります。シミュレーションの `inputs.models` は、ネットリストが `.lib` と `.include` で読むすべてのファイル
+(たどった先も含み、`.lib` の行ではそのセクションのファイル)と、ngspice が読み込む OSDI モデルを、元のファイル(縮小したコピーではなく)の
+`{"path", "sha"}` として並べます。パッケージのコードブロックが include するモデルファイルが変わると、ネットリストの文面が同じでも
+そのジョブは古くなります。相対パスは、ngspice が動く `runs/` の下のジョブ自身のディレクトリから読みます。OSDI モデルは PDK が今持って
+いるものをもう一度探すので、別の場所でコンパイルし直したモデルでもジョブは古くなります。`inputs.profile` は、そのジョブが使う PDK プロファイルの項目です。KLayout の DRC では `drc_options`(デッキの既定値)と
+`deck_vars`、KLayout の LVS では `lvs_options` と `deck_vars`、シミュレーションでは `model_lib`、`model_includes`、`osdi`、`corners` です。
+ほかのジョブはどちらも記録しません。
+
+key の外に、ジョブは使ったものを記録します(`about`。情報として、また証拠のため):
+
+```json
+"about": {
+  "packages": [{"name": "analog_ip", "package": "analog_ip", "version": "1.2.0", "tree": "sha256:…", "index": null}],
+  "pdk":      {"id": "sky130A@8afc8346a57f", "commit": "8afc8346a57f…", "family": "sky130", "variant": "sky130A",
+               "tree": null},
+  "profile":  {"family": "sky130", "source": "built-in", "undine": "0.1.0 (3f9c2e1)"}
+}
+```
+
+`packages` は、ジョブがインストール済みのファイルを読んだロックのエントリ(ネットリストの回路図とシンボル、モデルファイル、レイアウトの
+ライブラリ)で、`tree` か `sha` はロックが固定しているとおりです。`pdk.tree` はロックが固定した PDK(フォーマット 2)で、なければ null です。
+`about` は key に入らないので、別のバージョンのパッケージでもファイルが同じなら同じ実行です。パッケージの 1 つのセルを変える更新は、
+そのセルを使う結果だけを古くし、README の変更は何も古くしません。
+
+`key` はすべての入力のハッシュで、同じ key の 2 つのジョブは同じものに対して実行されています。設計、PDK、デッキ、ツールのバージョン、
+モデルファイル、プロファイルの項目が今と違えば、そのジョブは **古い(outdated)** と判定します(`models` と `profile` を記録する前のジョブは
+それらを除いて比べます)。`GET /api/p/<project>/jobs/<job>/freshness` は
 `{"fresh": true | false | null, "changed": ["layout of mylib/inv changed", ...]}` を返します(`null`: 入力を記録するようになる前のジョブ)。
 形式は `server/undine/store/provenance.py` の先頭に書いてあります。
 
@@ -407,7 +432,10 @@ changeset の証拠は、これが今も同じファイルについては、読�
 
 changeset を採用または破棄すると、その変更とチェックの要約を、両方のプレビュープロジェクトのジョブのディレクトリと一緒に
 `<project>/changesets/<id>/evidence/` に保存します。ジョブの `status.json` は、実際の結果とログとともに `inputs`、`key`、出力ファイルのハッシュを保ち、
-起動に失敗したジョブが書いたものも含みます。`manifest.json` には、保存した変更(操作の引数を含む)、検証の要約、保存したジョブ、ファイルのハッシュを記録します。
+起動に失敗したジョブが書いたものも含みます。`manifest.json` には、保存した変更(操作の引数を含む)、検証の要約、保存したジョブ(記録していればジョブの `about` 付き)、
+ファイルのハッシュと、それぞれの側の依存関係のロックが固定しているもの、`"packages": {"base": [...], "work": [...]}`
+(各エントリは `{name, names, package, version, tree | sha, index}`)と `"pdk": {"base": {id, commit, family, variant, tree}, "work": ...}`
+を記録します。
 `base/` と `work/` のサブディレクトリには、それぞれのプロジェクトの設定、依存関係のロック、`runs/` のジョブのディレクトリが残ります。
 git 上の changeset ではマニフェストは `"version": 2` で、起点のコミットとレビューした先端(`"commits": {"base", "tip"}`)を記録します。設計のファイルと
 操作ログ全体は(プロジェクトの `.gitignore` が `history/` を git から外していなければ)、`refs/undine/changesets/<project>/<id>` に残るそれらのコミットにあります。以前の changeset のアーカイブ(`"version": 1`)には、

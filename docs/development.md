@@ -22,8 +22,10 @@ Python versions it replaced stay in the code as references (`xschem._py_parse` .
 `server/tests/test_core.py` checks that both give the same results.
 
 What is specific to a process (layer numbers, rule decks and their switches, Magic / Netgen setup, models and corners,
-the PCell library and how its devices map from a schematic) is described once per PDK family in
-`undine/pdks/pdkprofile.py`; the rest of the server reads it from there.
+the PCell library and how its devices map from a schematic) is described once per process, in a profile: data in
+`undine/data/profiles/<package>/profile.toml` (a profile package per ciel family), read by `undine/pdks/profiledata.py`
+into the dataclasses of `undine/pdks/pdkprofile.py`; the rest of the server reads it from there. The few computed values
+a profile names (a formula, stack generators) are functions of `undine/pdks/formulas.py`.
 
 ## Repository layout
 

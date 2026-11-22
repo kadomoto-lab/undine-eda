@@ -6,6 +6,8 @@
                                                  as installed (writes lock format 2); --network: ciel may resolve a
                                                  commit prefix
     python -m undine pdk fetch PROJECT [--yes] [--network]    install the project's PDK with ciel (asks first)
+    python -m undine pdk tested FAMILY [--all]   the PDK commit Undine is tested with (its built-in profile)
+    python -m undine pdk enable FAMILY [COMMIT]  ciel enable that commit (default: the tested one); `pixi run pdk`
     python -m undine doctor                      check prerequisites, print the fix for each missing one
     python -m undine new     PROJECT [--pdk sky130A]
     python -m undine set-pdk PROJECT PDK         pin the project to another PDK version (e.g. sky130A@8afc8346a57f);
@@ -587,6 +589,38 @@ def pdk_command(args, store, pdks: dict) -> int:
     return _fetch(prj, args)
 
 
+def pdk_profile_command(args) -> int:
+    """`pdk tested` and `pdk enable`: the tested commits of the built-in profiles ([[pdk]] tested = true), with no
+    PDK scan. What setup.sh and `pixi run pdk` install."""
+    from undine.pdks import ciel, profiledata
+
+    commits = profiledata.tested_commits(args.family)
+    commit = commits[0] if commits else None
+    if args.pdk_cmd == "enable" and args.commit:
+        commit = args.commit
+    if commit is None:
+        known = ", ".join(s.family for s in profiledata.builtin())
+        print(f"undine: no built-in profile lists a tested commit of {args.family!r} (families: {known})"
+              + ("; name the commit: pdk enable FAMILY COMMIT" if args.pdk_cmd == "enable" else ""), file=sys.stderr)
+        return 1
+    if args.pdk_cmd == "tested":
+        print("\n".join(commits if args.all else commits[:1]))
+        return 0
+    try:
+        ciel._check_name("the PDK family", args.family)
+        ciel._check_name("the PDK version", commit)
+        exe = ciel._exe()
+    except ciel.CielError as e:
+        print(f"undine: {e}", file=sys.stderr)
+        return 1
+    root = []
+    if args.pdk_root:                               # as `pdk fetch`: the first root given that ciel can install into
+        from undine.pdks import pin as pdkpin
+        root = ["--pdk-root", str(pdkpin.fetch_root(args.pdk_root))]
+    print(" ".join(["ciel enable", *root, "--pdk-family", args.family, commit]), flush=True)
+    return subprocess.run([str(exe), "enable", *root, "--pdk-family", args.family, commit]).returncode
+
+
 def _fetch(prj, args) -> int:
     """`pdk fetch`: shows what ciel would install where, asks (unless --yes), runs it, then compares with the lock."""
     from undine.pdks import pdkops
@@ -727,6 +761,13 @@ def main() -> None:
     for x in (pv, pf):
         x.add_argument("--network", action="store_true",
                        help="ciel may look a commit prefix up at its source (ciel ls-remote)")
+    pt = pk.add_parser("tested", help="the PDK commit of a ciel family that Undine is tested with (from its "
+                                      "built-in profile)")
+    pt.add_argument("family")
+    pt.add_argument("--all", action="store_true", help="every tested commit, one a line (the first is the default)")
+    pe = pk.add_parser("enable", help="install and enable a PDK with ciel: the tested commit unless one is given")
+    pe.add_argument("family")
+    pe.add_argument("commit", nargs="?")
     st = sub.add_parser("store", help="the content-addressed store of dependency files").add_subparsers(
         dest="store_cmd", required=True)
     st.add_parser("verify", help="re-hash every object and record; remove the ones that do not match").add_argument(
@@ -851,6 +892,9 @@ def main() -> None:
 
     if args.cmd in ("merge-driver", "resolve", "merge-check", "precommit", "diff"):   # git's, the shell's: no PDK scan
         raise SystemExit(vcs_command(args))
+
+    if args.cmd == "pdk" and args.pdk_cmd in ("tested", "enable"):   # the built-in profiles: no PDK scan
+        raise SystemExit(pdk_profile_command(args))
 
     pdks = discover(args.pdk_root or default_pdk_roots())
     store = ProjectStore(args.root.expanduser(), pdks)

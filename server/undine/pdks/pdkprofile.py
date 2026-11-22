@@ -1,17 +1,23 @@
 """What Undine needs to know about a process, in one place.
 
 Everything that used to be hard-wired to sky130 (layer numbers, rule-deck names and options, model paths, Magic /
-Netgen setup) is described by a profile per PDK family. `for_pdk` picks it from the PDK's family. A profile with
-`verified=False` is written from the PDK's public layer map / file layout and has not been exercised against an
-installed PDK in this repository; `limits` names what is still missing, and Undine says so instead of pretending.
+Netgen setup) is described by a profile per process. `for_pdk` picks it from the PDK's name, then its family. The
+profiles are data: a profile package per ciel family (profile_sky130, profile_gf180mcu, profile_ihp_sg13), whose
+profile.toml profiledata.py reads into the dataclasses below; Undine's own copies are built in
+(undine/data/profiles/), and SKY130, GF180, IHP, IHP_CMOS5L and PROFILES are read from them on first use. A profile
+with `verified=False` has not been exercised against an installed PDK in Undine's tests (pdks/tested.py records
+which have); `limits` names what is still missing, and Undine says so instead of pretending.
 """
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Callable
+
+from undine.pdks.formulas import mim_area_perimeter as _mim  # noqa: F401  (LvsElement.params of sky130's MIMs)
 
 SWITCHES = ("feol", "beol", "offgrid")                 # the DRC switches the Verify panel shows
 
@@ -91,12 +97,6 @@ def _computed(el: LvsElement, name: str, given: dict) -> dict:
     except KeyError:
         raise ValueError(f"{name}: LVS compares it as {el.to or 'an element'} by parameters computed from its own, "
                          f"which are not all numbers: {', '.join(f'{k}={v}' for k, v in given.items()) or 'none'}") from None
-
-
-def _mim(p: dict) -> dict:
-    """A MIM capacitor as KLayout's sky130 deck extracts it (MIMCap: A and P compared, C not): area and perimeter of
-    one unit from its W and L in um."""
-    return {"A": p["w"] * p["l"], "P": 2 * (p["w"] + p["l"])}
 
 
 @dataclass(frozen=True)
@@ -198,7 +198,7 @@ class Cut:
     enc_below: tuple[float, float]
     enc_above: tuple[float, float]
     rules: str = ""                                    # the rule names, as answers cite them
-    extra: tuple[tuple[str, float], ...] = ()
+    extra: tuple[tuple[str, float, float, float], ...] = ()
     away: tuple[tuple[str, float], ...] = ()
 
 
@@ -260,7 +260,7 @@ class Stack:
 class Profile:
     family: str
     label: str
-    verified: bool
+    verified: bool                                     # Undine's tests ran it (pdks/tested.py, not profile.toml)
     layers: dict[str, tuple[int, int]]                 # logical name -> (layer, datatype)
     metals: tuple[str, ...]                            # logical names, bottom to top
     max_metal: str                                     # highest metal a shuttle allows (informational default)
@@ -273,11 +273,12 @@ class Profile:
     drc_extra: tuple[str, ...] = ()                    # more KLayout decks the shuttle prechecks run
     lvs_klayout: tuple[str, ...] = ()                  # globs under <decks>/lvs
     lvs_options: dict = field(default_factory=dict)    # default -rd switches of the LVS deck
-    deck_vars: dict = field(default_factory=dict)      # PDK name -> -rd values every DRC / LVS run gets (metal stack)
+    # PDK name -> -rd values every DRC / LVS run gets (metal stack)
+    deck_vars: dict[str, dict] = field(default_factory=dict)
     magic_rc: str | None = None                        # under libs.tech/magic; {name} is the PDK name (sky130A)
     magic_drc: bool = False                            # run_checks runs Magic's drc(full) next to the KLayout deck
                                                        # (the deck lacks rules of Magic's that shuttle prechecks run);
-                                                       # set once drc(full) has been run on the PDK's cells
+                                                       # set once drc(full) has been run on the PDK's cells (tested.py)
     # body taps as drawn, for run_checks' ERC of taps butted against a source / drain of another net: a union of
     # terms, each the layers (profile names) a tap is drawn on and, after "-", those it is not on
     erc_tap: tuple[tuple[str, ...], ...] = ()
@@ -322,7 +323,8 @@ class Profile:
     stdcell_lvs: StdcellLvs | None = None              # KLayout LVS of layouts with standard cells (None: as drawn)
     stdcell_tie: str = ""                              # the tie cell a constant input takes its 1 / 0 from (its pins)
     stack: Stack | None = None                         # connectivity and drawing rules (None: those tools refuse)
-    stacks: dict = field(default_factory=dict)         # PDK name -> its own Stack where the variants' metal stacks differ
+    # PDK name -> its own Stack where the variants' metal stacks differ
+    stacks: dict[str, Stack] = field(default_factory=dict)
 
     def stdcell(self, name: str) -> tuple[str, str] | None:
         """(library, its GDS relative to the PDK root) of a standard cell by its name; None when the name is not one."""
@@ -386,303 +388,62 @@ class Profile:
         return {**{k: _tf(v) for k, v in self.deck_vars.get(name, {}).items()}, **{k: _tf(v) for k, v in opts.items()}}
 
 
-SKY130 = Profile(
-    family="sky130", label="SkyWater SKY130", verified=True,
-    layers={"poly": (66, 20), "diff": (65, 20), "tap": (65, 44), "licon1": (66, 44), "li1": (67, 20), "mcon": (67, 44),
-            "met1": (68, 20), "via": (68, 44), "met2": (69, 20), "via2": (69, 44), "met3": (70, 20), "via3": (70, 44),
-            "met4": (71, 20), "via4": (71, 44), "met5": (72, 20), "nwell": (64, 20), "nsdm": (93, 44), "psdm": (94, 20),
-            "li1.label": (67, 5), "met1.label": (68, 5), "met2.label": (69, 5), "met3.label": (70, 5), "met4.label": (71, 5),
-            "met5.label": (72, 5), "met4.pin": (71, 16),
-            # the rest of what sky130's devices draw (MIM plates, thick-oxide and Vt implants, the poly-contact implant,
-            # marker layers), so that get_device_geometry names them
-            "capm": (89, 44), "cap2m": (97, 44), "npc": (95, 20), "hvi": (75, 20), "hvntm": (125, 20), "lvtn": (125, 44),
-            "poly.res": (66, 13), "diff.res": (65, 13),
-            "hvtp": (78, 44), "hvtr": (18, 20), "dnwell": (64, 18), "pwell": (64, 44), "rpm": (86, 20), "urpm": (79, 20),
-            "ldntm": (11, 44), "pad": (76, 20), "poly.label": (66, 5), "areaid.sc": (81, 4), "areaid.ce": (81, 2),
-            "areaid.de": (81, 23), "areaid.ed": (81, 19), "areaid.lvt": (81, 60), "prBoundary": (235, 4),
-            "li1.pin": (67, 16), "met1.pin": (68, 16), "met2.pin": (69, 16), "met3.pin": (70, 16), "met5.pin": (72, 16),
-            "pwell.label": (64, 59)},
-    metals=("li1", "met1", "met2", "met3", "met4", "met5"), max_metal="met5",
-    drc_klayout=("sky130?_mr.drc",), drc_options={"sky130?_mr.drc": {"feol": True, "beol": True, "offgrid": True}},
-    drc_extra=("met_min_ca_density.lydrc", "pin_label_purposes_overlapping_drawing.rb.drc", "zeroarea.rb.drc"),
-    # the SPICE reader reads W=2 as 2 m (= 2e6 um); the deck's scale switch brings the layout side to the same units
-    lvs_klayout=("sky130.lvs",), lvs_options={"lvs_sub": "VSS", "scale": True},
-    # the MIM symbols write a call (XC1 c0 c1 sky130_fd_pr__cap_mim_m3_1 W=.. L=.. m=MF, um) that the deck's reader
-    # leaves a call; the deck extracts the plates (met3 / capm, met4 / cap2m) as capacitors of the model's name,
-    # compared by area and perimeter
-    lvs_elements=(LvsElement(r"(sky130_fd_pr__)?cap_mim_m3_1", "C", to="sky130_fd_pr__model__cap_mim", params=_mim),
-                  LvsElement(r"(sky130_fd_pr__)?cap_mim_m3_2", "C", to="sky130_fd_pr__model__cap_mim_m4", params=_mim)),
-    magic_rc="{name}.magicrc", netgen_setup="{name}_setup.tcl", pcells=True,
-    # sky130A_mr.drc has none of Magic's MV diff / tap rules (diff/tap.14-17) and checks the MIM spacings (capm.11,
-    # met3.3c) otherwise: a PCell's 0.45 um butted tap on a 5 V device is clean in KLayout and diff/tap.16 in Magic
-    magic_drc=True, erc_tap=(("tap",),),
-    mims=(Mim("sky130_fd_pr__cap_mim_m3_1", (89, 44), "met3", "via3", "met4", ("metal4", "metal3"), ("*mimcap", "cap1")),
-          Mim("sky130_fd_pr__cap_mim_m3_2", (97, 44), "met4", "via4", "met5", ("metal5", "metal4"), ("*mimcap2", "cap2"))),
-    net_labels=(("licon1", "li1.label"), ("mcon", "met1.label"), ("via", "met2.label"), ("via2", "met3.label"),
-                ("via3", "met4.label"), ("via4", "met5.label")),
-    # open_pdks 2025+: gdsfactory 8 on kfactory 0.2x (the older pymacros/cells generation is not run, see pcell.py). Its
-    # mim_cap (as Magic's generator) clamps each side of a cap_mim_m3_1 to 2 um, where capm.1 allows 1 um: a CDAC's
-    # 1.17 um unit would come out 2 x 2 um, so the clamp is lowered to the rule (the drawing is clean in both decks
-    # from 1 um). cap_mim_m3_2 keeps its 2.16 um: its 0.8 um via4 needs it
-    pcell_lib=PcellLib(paths=("python",), module="cells", init="sky130", library="skywater130",
-                       limits=(("cap", "l_mim", 1.0),)),
-    strap=Strap(via=0.15, enc1=(0.085, 0.055), enc2=(0.085, 0.055), m2_space=0.14),
-    # Magic's drc(full) where it is stricter than the KLayout deck (capm.11: 1.34 um from a capm to another plate's
-    # metal3, which the mr deck checks as 0.5 um); the bottom plates of capm.2b are capm + 0.14 um, 1.2 um apart
-    space=(Space("diff", "diff", 0.3, "difftap.3, difftap.15a (MV)"), Space("tap", "tap", 0.27, "difftap.3"),
-           Space("diff", "tap", 0.37, "difftap.15b (MV)"), Space("poly", "poly", 0.21, "poly.2"),
-           Space("npc", "npc", 0.27, "npc.2"), Space("licon1", "licon1", 0.17, "licon.2"), Space("li1", "li1", 0.17, "li.3"),
-           Space("mcon", "mcon", 0.19, "ct.2"), Space("met1", "met1", 0.14, "m1.2"), Space("via", "via", 0.17, "via.2"),
-           Space("met2", "met2", 0.14, "m2.2"), Space("met3", "met3", 0.3, "m3.2"), Space("met4", "met4", 0.3, "m4.2"),
-           Space("met5", "met5", 1.6, "m5.2"), Space("nwell", "nwell", 1.27, "nwell.2a", merge=True),
-           Space("diff", "nwell", 0.34, "difftap.9", unless="nwell"), Space("tap", "nwell", 0.13, "difftap.11", unless="nwell"),
-           Space("hvi", "hvi", 0.7, "hvi.5", merge=True), Space("nwell", "hvi", 0.7, "hvi.5", unless="hvi"),
-           Space("capm", "capm", 1.48, "capm.2b: bottom plates 1.2 apart"),
-           Space("capm", "met3", 1.34, "capm.11 (Magic): to another plate's metal3"),
-           Space("cap2m", "cap2m", 1.48, "cap2m.2b: bottom plates 1.2 apart"),
-           Space("cap2m", "met4", 1.34, "cap2m.11 (Magic): to another plate's metal4")),
-    fill=("nwell", "nsdm", "psdm", "lvtn", "hvi", "hvntm"),
-    # a ring 0.41 um wide: licon 0.17 with 0.12 of tap around it (licon.5); units 0.4 um inside it (their implant clear
-    # of the ring's); the n-tap 0.18 um inside the well (diff/tap.10), 0.33 um thick-oxide (diff/tap.19). The PDK's
-    # guard_ring_gen is not used: Magic reads its n-tap ring as overlapping layers
-    ring=Ring(width=0.41, space=0.4, conductor="li1", well=(0.18, 0.33)),
-    model_vars=(("SKYWATER_MODELS", "libs.tech/ngspice"), ("SKYWATER_STDCELLS", "libs.ref/sky130_fd_sc_hd/spice"),
-                ("SKYWATER_STDCELLS_HD", "libs.ref/sky130_fd_sc_hd/spice")),
-    model_lib="libs.tech/ngspice/sky130.lib.spice", corners=("tt", "ss", "ff", "sf", "fs"),
-    corner_symbol="sky130_fd_pr/corner.sym",
-    mismatch_section="{corner}_mm",                    # MC_MM_SWITCH=1 (tt_mm ...): MOSFETs, MIM and MOM capacitors
-    pin_label_layers=("li1.label", "met1.label", "met2.label", "met3.label", "met4.label", "met5.label"),
-    # sky130_fd_sc_hd__nand2_1; the sky130_ef_sc_hd__ cells (fill, decap) are in the sky130_fd_sc_hd library too
-    stdcells=((r"sky130_(?:fd|ef)_sc_([a-z]+)__\w+", r"sky130_fd_sc_\1"),),
-    # their SPICE calls sky130_fd_pr__nfet_01v8 / special_nfet_01v8 / pfet_01v8_hvt with w=650000u (scale 1e-6); conb_1's
-    # poly resistors (res_generic_po) have no resistor marker, the deck joins their ends; a flop has two VNB labels on
-    # the pwell (64/59) that only the deck's inductors and vpp capacitors connect to (must-connect error otherwise)
-    stdcell_lvs=StdcellLvs(mos=r"sky130_fd_pr__(special_)?[np]fet\w*", short=r"sky130_fd_pr__res_generic_\w+",
-                           rename=((r"special_nfet", "nfet"),), scale=1e-6, drop_labels=("pwell.label",),
-                           strip=("diff", "poly")),
-    # the functional models (no specify blocks, no timing checks) without delay: UNIT_DELAY empty
-    stdcell_verilog=("libs.ref/{lib}/verilog/primitives.v", "libs.ref/{lib}/verilog/{lib}.v"),
-    stdcell_verilog_defines=("FUNCTIONAL", "UNIT_DELAY="),
-    stdcell_tie="sky130_fd_sc_hd__conb_1 (HI: 1, LO: 0)",
-    # the periphery rules (SkyWater's rule names, as KLayout's mr deck and Magic's drc(full) check them): poly.1a / 2 / 4 / 5,
-    # li.1 / 3 / 6, m1.1 / 2 / 3b / 6, m2.*, m3.1 / 2 / 3cd / 6, m4.*, m5.*; licon.1 / 2 / 5a / 5c / 7 / 8 / 8a / 15
-    # (npc around a poly contact), li.5, ct.1 / 2 / 4, m1.4 / 5, via.1a / 2 / 4a / 5a, m2.4 / 5, via2.1a / 2 / 4 / 5,
-    # m3.4, via3.1 / 2 / 4 / 5, m4.3, via4.1 / 2 / 4, m5.3; diff/tap.3 / 9 / 10 / 11, nsd / psd.5a / 1 / 2, nwell.1 / 2a
-    stack=Stack(
-        diff="diff", tap="tap", poly="poly", well="nwell",
-        conductors=(Conductor("poly", 0.15, 0.21, away=(("diff", 0.075), ("tap", 0.055))), Conductor("li1", 0.17, 0.17, 0.0561),
-                    Conductor("met1", 0.14, 0.14, 0.083, ((3.0, 0.28),)), Conductor("met2", 0.14, 0.14, 0.0676, ((3.0, 0.28),)),
-                    Conductor("met3", 0.3, 0.3, 0.24, ((3.0, 0.4),)), Conductor("met4", 0.3, 0.3, 0.24, ((3.0, 0.4),)),
-                    Conductor("met5", 1.6, 1.6, 4.0)),
-        cuts=(Cut("licon1", "diff", "li1", 0.17, 0.17, (0.04, 0.06), (0.0, 0.08), "licon.1, licon.2, licon.5a, licon.5c, "
-                  "licon.11, li.5", away=(("poly", 0.055),)),
-              Cut("licon1", "tap", "li1", 0.17, 0.17, (0.04, 0.12), (0.0, 0.08), "licon.1, licon.2, licon.7, li.5"),
-              Cut("licon1", "poly", "li1", 0.17, 0.17, (0.05, 0.08), (0.0, 0.08), "licon.1, licon.2, licon.8, licon.8a, "
-                  "licon.14, licon.15, li.5, npc.1, npc.2, licon.13", extra=(("npc", 0.1, 0.27, 0.27),),
-                  away=(("diff", 0.19), ("tap", 0.19))),
-              Cut("mcon", "li1", "met1", 0.17, 0.19, (0.0, 0.0), (0.03, 0.06), "ct.1, ct.2, ct.4, m1.4, m1.5"),
-              Cut("via", "met1", "met2", 0.15, 0.17, (0.055, 0.085), (0.055, 0.085), "via.1a, via.2, via.4a, via.5a, m2.4, m2.5"),
-              Cut("via2", "met2", "met3", 0.2, 0.2, (0.04, 0.085), (0.065, 0.065), "via2.1a, via2.2, via2.4, via2.5, m3.4"),
-              Cut("via3", "met3", "met4", 0.2, 0.2, (0.06, 0.09), (0.065, 0.065), "via3.1, via3.2, via3.4, via3.5, m4.3"),
-              Cut("via4", "met4", "met5", 0.8, 0.8, (0.19, 0.19), (0.31, 0.31), "via4.1, via4.2, via4.4, m5.3")),
-        plates=(Plate("capm", "met3", "via3"), Plate("cap2m", "met4", "via4")),
-        taps=TapRule(implant={"ptap": "psdm", "ntap": "nsdm"}, implant_enc=0.125, implant_width=0.38, implant_space=0.38,
-                     well_enc=0.18, space=0.27, well_space=0.13, well_well=1.27, well_ndiff=0.34,
-                     latchup=15.0)),        # LU.2 / LU.3
-)
 
-def _gf180_stack(thin: int, top: str | None, plate: tuple[str, str] | None) -> Stack:
-    """GF180MCU's stack, from gf180mcu_fd_pv's KLayout deck: metal1 .. metal{thin} thin, `top` above them with the
-    9K / 11K MetalTop rules (MT.*), and the MIM's top plate FuseTop (option B: on the metal under the top one, `plate`
-    (metal, its via) landing on it; the symbol's G is the metal under it, the deck's P1, as Undine netlists it). Where
-    the 3.3 V and the 5 / 6 V rules differ, the larger: a shape is correct inside DualGate and outside it. Contacts and
-    vias use the spacing a 4 x 4 array needs (CO.2b, Vn.2b) at every size. No taps: a GF180 tap is COMP with the other
-    implant, which these tools do not draw."""
-    conductors = [Conductor("poly", 0.2, 0.24, away=(("comp", 0.3),))]          # PL.1_MV, PL.3a, PL.5a / 5b_MV
-    conductors += [Conductor(f"metal{i}", 0.23 if i == 1 else 0.28, 0.23 if i == 1 else 0.28, 0.1444, ((10.0, 0.3),))
-                   for i in range(1, thin + 1)]                                  # Mn.1, Mn.2a, Mn.3, Mn.2b
-    if top:
-        conductors.append(Conductor(top, 0.44, 0.46, 0.5625, ((10.0, 0.6),)))   # MT.1, MT.2a, MT.4, MT.2b
-    metals = [c.name for c in conductors[1:]]
-    cuts = [Cut("contact", "comp", "metal1", 0.22, 0.28, (0.07, 0.07), (0.005, 0.06),
-                "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7", away=(("poly", 0.15),)),
-            Cut("contact", "poly", "metal1", 0.22, 0.28, (0.07, 0.07), (0.005, 0.06),
-                "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8", away=(("comp", 0.17),))]
-    for i, (lo, hi) in enumerate(zip(metals, metals[1:]), 1):    # metal1 encloses via1 by 0 (V1.3a), the others 0.01
-        cuts.append(Cut(f"via{i}", lo, hi, 0.26, 0.36, (0.0 if i == 1 else 0.01, 0.06), (0.01, 0.06),
-                        f"V{i}.1, V{i}.2b, V{i}.3{'a' if i == 1 else 'b'}, V{i}.3c, V{i}.3d, V{i}.4a, V{i}.4b, V{i}.4c"))
-    return Stack(diff="comp", tap=None, poly="poly", well="nwell", conductors=tuple(conductors), cuts=tuple(cuts),
-                 plates=(Plate("fusetop", plate[0], plate[1], top="B", bottom="G"),) if plate else ())
-
-
-# GF180MCU: open_pdks' gf180mcu{A..D}, decks from globalfoundries-pdk-libs-gf180mcu_fd_pv (libs.tech/klayout/tech).
-# Exercised on gf180mcuD (open_pdks 792ef670, the version wafer.space pins): KLayout DRC and LVS of
-# gf180mcu_fd_sc_mcu7t5v0__inv_1 (LVS matches), ngspice at typical / ss / ff.
-GF180 = Profile(
-    family="gf180mcu", label="GlobalFoundries GF180MCU", verified=True,
-    layers={"comp": (22, 0), "poly": (30, 0), "contact": (33, 0), "metal1": (34, 0), "via1": (35, 0), "metal2": (36, 0),
-            "via2": (38, 0), "metal3": (42, 0), "via3": (40, 0), "metal4": (46, 0), "via4": (41, 0), "metal5": (81, 0),
-            "via5": (82, 0), "metaltop": (53, 0), "pad": (37, 0), "nwell": (21, 0), "dnwell": (12, 0), "lvpwell": (204, 0),
-            "nplus": (32, 0), "pplus": (31, 0),
-            "dualgate": (55, 0), "pr_bndry": (0, 0), "guard_ring_mk": (167, 5), "poly.label": (30, 10),
-            "metal1.label": (34, 10), "metal2.label": (36, 10), "metal3.label": (42, 10), "metal4.label": (46, 10),
-            "metal5.label": (81, 10), "metaltop.label": (53, 10), "fusetop": (75, 0)},
-    metals=("metal1", "metal2", "metal3", "metal4", "metal5", "metaltop"), max_metal="metal5",
-    klayout_dir="tech", drc_klayout=("gf180mcu.drc",), drc_switches="tags",
-    # density and antenna are chip-level (a shuttle target runs them on the die); CUP needs pads. As the wafer.space precheck.
-    drc_options={"gf180mcu.drc": {"decks": "all,-density,-antenna,-cup"}},
-    # flat: in deep mode the deck extracts no pfet that sits in a sub-cell (a PCell placed in a cell, 10/26); nfets are found.
-    # combine: the fingers of a device (nf, m in the schematic) are compared as one device, as SG13G2's deck does by default
-    lvs_klayout=("gf180mcu.lvs",), lvs_options={"run_mode": "flat", "combine": True},
-    # metal stack per variant (the decks default to 6LM / 9K otherwise); from the PDK's drc/options.rb
-    deck_vars={"gf180mcuA": {"metal_level": "3LM", "metal_top": "30K", "mim_option": "A"},
-               "gf180mcuB": {"metal_level": "4LM", "metal_top": "11K", "mim_option": "B"},
-               "gf180mcuC": {"metal_level": "5LM", "metal_top": "9K", "mim_option": "B"},
-               "gf180mcuD": {"metal_level": "5LM", "metal_top": "11K", "mim_option": "B"}},
-    magic_rc="{name}.magicrc", netgen_setup="{name}_setup.tcl", pcells=True,
-    # wafer.space's precheck runs Magic DRC before KLayout's; drc(full) exercised on gf180mcuA / D: a wire too narrow
-    # (M1.1) in a cell and in the top cell, clean on gf180mcu_fd_sc_mcu7t5v0__inv_1 and the nfet / pfet PCells
-    magic_drc=True,
-    # COMP of the well's own implant, as the LVS deck's ptap / ntap (and _dw in a deep n-well); its deck does not join a
-    # silicided source / drain butted to a tap, which is a short there
-    erc_tap=(("comp", "pplus", "-nwell", "-dnwell"), ("comp", "nplus", "nwell"), ("comp", "pplus", "lvpwell", "dnwell"),
-             ("comp", "nplus", "dnwell", "-lvpwell")),
-    # exercised with two gf180mcu_fd_sc_mcu7t5v0__inv_1 joined in metal2 (test_parasitics.py)
-    net_labels=(("contact", "metal1.label"), ("via1", "metal2.label"), ("via2", "metal3.label"),
-                ("via3", "metal4.label")),
-    # gdsfactory 7.9 on gdstk (gf180mcu_fd_pr requirements.txt), hence an environment of its own
-    pcell_lib=PcellLib(paths=("tech/pymacros",), module="cells", init="gf180mcu", library="gf180mcu", env="pcell-gf180"),
-    # V1.1 0.26, V1.3c / V1.4b end-of-line enclosure 0.06 (metal narrower than 0.34), M2.2a 0.28
-    strap=Strap(via=0.26, enc1=(0.06, 0.06), enc2=(0.06, 0.06), m2_space=0.28,
-                layers=("comp", "poly", "metal1", "via1", "metal2")),
-    model_vars=(("180MCU_MODELS", "libs.tech/ngspice"),),
-    # the resistor and MIM symbols have no lvs_format: their Xname .. model r_width= .. becomes the R / C element the deck's
-    # reader takes (as its own gf180_xschem_klayout_spice_convert.py does for ppolyf_u)
-    lvs_elements=(LvsElement(r"(ppolyf|npolyf|nplus|pplus)_[us](_[0-9a-z]+)*|nwell|rm[1-3]|tm(6|9|11|30)k", "R",
-                             {"r_width": "W", "r_length": "L"}),
-                  LvsElement(r"cap_mim_[0-9a-z]+", "C", {"c_width": "W", "c_length": "L"})),
-    model_lib="libs.tech/ngspice/sm141064.ngspice", model_includes=("libs.tech/ngspice/design.ngspice",),
-    corners=("typical", "ss", "ff", "sf", "fs"), gate_layers=("poly", "comp"),
-    mismatch_param="sw_stat_mismatch=1",               # design.ngspice sets it 0; checked with ngspice 42, not in a test
-    pin_label_layers=("metal1.label", "metal2.label", "metal3.label", "metal4.label", "metal5.label"),
-    stdcells=((r"(gf180mcu_fd_sc_mcu[79]t5v0)__\w+", r"\1"),),
-    # C, D: five metals, metal5 the top one, the MIM on metal4. B: four, metal4 on top, the MIM on metal3. A: metal3 is
-    # the 30K top metal (its own rules, MT30.*: not drawn here) and the MIM is option A (on metal2, via2 lands on it)
-    stack=_gf180_stack(4, "metal5", ("metal4", "via4")),
-    stacks={"gf180mcuB": _gf180_stack(3, "metal4", ("metal3", "via3")), "gf180mcuA": _gf180_stack(2, None, None)},
-)
-
-def _ihp_stack(thin: int, tops: tuple[str, ...]) -> Stack:
-    """IHP SG13's stack, from its KLayout deck (the maximal rule set): metal1 .. metal{thin} and the thick `tops`, and
-    for SG13G2 the MIM's plate on metal5 (TopVia1 on it joins it, as the deck's mim_via, and Vmim, which the cmim
-    PCell draws; c0 the top plate, the deck's mim_top). Contacts and vias use the spacing a large array needs (Cnt.b1,
-    Vn.b1) at every size; the wide-metal spacings (Mn.e, Mn.f) hold beside any wide shape, whatever the run length. Not
-    checked: pSD's 0.09 um from a contact on Activ (Cnt.g1 / g2), the device's own. No taps: an IHP tap is Activ with or
-    without pSD, which these tools do not draw."""
-    conductors = [Conductor("poly", 0.13, 0.18, 0.09, away=(("diff", 0.07),)),             # Gat.a, b, e, d
-                  Conductor("metal1", 0.16, 0.18, 0.09, ((0.3, 0.22), (10.0, 0.6)))]       # M1.a, b, d, e, f
-    conductors += [Conductor(f"metal{i}", 0.2, 0.21, 0.144, ((0.39, 0.24), (10.0, 0.6))) for i in range(2, thin + 1)]
-    conductors += [Conductor("topmetal1", 1.64, 1.64), Conductor("topmetal2", 2.0, 2.0, wide=((5.0, 5.0),))][:len(tops)]
-    cuts = [Cut("contact", "diff", "metal1", 0.16, 0.2, (0.07, 0.07), (0.0, 0.05), "Cnt.a, Cnt.b1, Cnt.c, M1.c, M1.c1, Cnt.f",
-                away=(("poly", 0.11),)),
-            Cut("contact", "poly", "metal1", 0.16, 0.2, (0.07, 0.07), (0.0, 0.05), "Cnt.a, Cnt.b1, Cnt.d, M1.c, M1.c1, Cnt.e",
-                away=(("diff", 0.14),)),
-            Cut("via1", "metal1", "metal2", 0.19, 0.29, (0.01, 0.05), (0.005, 0.05), "V1.a, V1.b1, V1.c, V1.c1, M2.c, M2.c1")]
-    cuts += [Cut(f"via{i}", f"metal{i}", f"metal{i + 1}", 0.19, 0.29, (0.005, 0.05), (0.005, 0.05),
-                 f"V{i}.a, V{i}.b1, V{i}.c, V{i}.c1, M{i + 1}.c, M{i + 1}.c1") for i in range(2, thin)]
-    cuts.append(Cut("topvia1", f"metal{thin}", "topmetal1", 0.42, 0.42, (0.1, 0.1), (0.42, 0.42), "TV1.a, TV1.b, TV1.c, TV1.d"))
-    if len(tops) > 1:
-        cuts.append(Cut("topvia2", "topmetal1", "topmetal2", 0.9, 1.06, (0.5, 0.5), (0.5, 0.5), "TV2.a, TV2.b, TV2.c, TV2.d"))
-    return Stack(diff="diff", tap=None, poly="poly", well="nwell", conductors=tuple(conductors), cuts=tuple(cuts),
-                 plates=(Plate("mim", "metal5", "topvia1", also=("vmim",)),) if thin == 5 else ())
-
-
-# IHP SG13G2: IHP-Open-PDK through ciel (family ihp-sg13), decks in libs.tech/klayout/tech.
-# Exercised on ihp-sg13g2 (89d42ee6): KLayout DRC of sg13g2_inv_1 (clean) and LVS against its CDL (matches), ngspice 47
-# with the OSDI models at mos_tt / mos_ss / mos_ff.
-_IHP_LAYERS = {"diff": (1, 0), "psd": (14, 0), "nsd": (7, 0), "poly": (5, 0), "contact": (6, 0), "nwell": (31, 0),
-               "metal1": (8, 0), "via1": (19, 0), "metal2": (10, 0), "via2": (29, 0), "metal3": (30, 0), "via3": (49, 0),
-               "metal4": (50, 0), "via4": (66, 0), "metal5": (67, 0), "topvia1": (125, 0), "topmetal1": (126, 0),
-               "topvia2": (133, 0), "topmetal2": (134, 0), "passiv": (9, 0), "edgeseal": (39, 0), "prboundary": (189, 0),
-               "metal1.label": (8, 25), "metal2.label": (10, 25), "metal3.label": (30, 25), "metal4.label": (50, 25),
-               "metal5.label": (67, 25), "topmetal1.label": (126, 25), "topmetal2.label": (134, 25),
-               "metal1.pin": (8, 2), "metal2.pin": (10, 2), "metal3.pin": (30, 2), "metal4.pin": (50, 2),
-               "metal5.pin": (67, 2), "topmetal1.pin": (126, 2), "topmetal2.pin": (134, 2), "mim": (36, 0), "vmim": (129, 0)}
-# the PDK ships its transistor models as Verilog-A; `pixi run osdi` compiles them with OpenVAF into the store
-# (Pdk.osdi_dir), each into <name>.osdi; Pdk.osdi_files says where each is found
-_IHP_OSDI = ("psp103", "psp103_nqs", "r3_cmc", "mosvar", "cap_cmomi", "cap_cmomf")
-
-IHP = Profile(
-    family="ihp-sg13g2", label="IHP SG13G2", verified=True, layers=_IHP_LAYERS,
-    metals=("metal1", "metal2", "metal3", "metal4", "metal5", "topmetal1", "topmetal2"), max_metal="topmetal2",
-    klayout_dir="tech", drc_klayout=("ihp-sg13g2.drc",), drc_switches="negated", lvs_klayout=("sg13g2.lvs",),
-    magic_rc="{name}.magicrc", netgen_setup="{name}_setup.tcl", pcells=True,
-    # drc(full) exercised on ihp-sg13g2: M1.a in a cell and in the top cell, clean on sg13g2_inv_1; it has rules the
-    # KLayout deck's default run leaves out (M1.d, Gat.e minimum areas, LU.a / LU.b tap distances on a lone PCell)
-    magic_drc=True,
-    # Activ of the well's own implant, as the LVS deck's ptap / ntap. The deck joins a salicided source / drain butted
-    # to a tap to the tap (nsd_ptap_abutt, psd_ntap_abutt): a tap of another net there is an LVS short, and the ERC
-    # finds the junction only under SalBlock, where it is a diode (test_layout_checks.py)
-    erc_tap=(("diff", "psd", "-nwell"), ("diff", "nwell", "-psd")),
-    # its Magic tech reads Metal1-TopMetal2 text (n/25) as labels; exercised with two sg13g2_inv_1 joined in metal2
-    # (test_parasitics.py)
-    net_labels=(("contact", "metal1.label"), ("via1", "metal2.label"), ("via2", "metal3.label"),
-                ("via3", "metal4.label"), ("via4", "metal5.label"), ("topvia1", "topmetal1.label"),
-                ("topvia2", "topmetal2.label")),
-    # IHP's own PyCell API on KLayout; the library is bound to the sg13g2 technology
-    pcell_lib=PcellLib(paths=("python", "python/pycell4klayout-api/source/python"), module="sg13g2_pycell_lib",
-                       library="SG13_dev", technology="sg13g2"),
-    # V1.a 0.19, V1.c / V1.c1 metal1 enclosure 0.01 / 0.05 (two opposite sides), Mn.c 0.005, Mn.b 0.21; the PCells draw no
-    # gate contacts: the gates are joined by a poly bar below the diffusion with a contact on each gate (Cnt.a 0.16, Cnt.d
-    # poly enclosure 0.07, Cnt.e 0.14 from Activ) under a metal1 pad (M1.c / c1 0 / 0.05, M1.d area 0.09: 0.3 x 0.3)
-    strap=Strap(via=0.19, enc1=(0.05, 0.01), enc2=(0.05, 0.01), m2_space=0.21, gate="poly", poly_w=0.13,
-                layers=("diff", "poly", "metal1", "via1", "metal2"), cont=0.16, cont_poly=0.07, cont_m1=(0.05, 0.0), m1_min=0.30),
-    model_lib="libs.tech/ngspice/models/cornerMOSlv.lib", corners=("mos_tt", "mos_ss", "mos_ff", "mos_sf", "mos_fs"),
-    mismatch_section="{corner}_mismatch",              # mos_tt_mismatch ... with the symbols' mm_ok=1; ngspice 47, not in a test
-    osdi=_IHP_OSDI,
-    pin_label_layers=("metal1.label", "metal2.label", "metal3.label", "metal4.label", "metal5.label",
-                      "topmetal1.label", "topmetal2.label"),
-    stdcells=((r"sg13g2_\w+", "sg13g2_stdcell"),),     # sg13g2_inv_1 (the IO cells, sg13g2_io, are not in its GDS)
-    stack=_ihp_stack(5, ("topmetal1", "topmetal2")),
-)
-
-# SG13CMOS5L: the same front end with four thin metals and one thick one; ciel installs it next to SG13G2. Its DRC deck
-# runs; the PDK has no LVS runset and no cell libraries yet.
-IHP_CMOS5L = Profile(
-    family="ihp-sg13cmos5l", label="IHP SG13CMOS5L", verified=False,
-    layers={k: v for k, v in _IHP_LAYERS.items() if not k.startswith(("metal5", "via4", "topmetal2", "topvia2", "mim", "vmim"))},
-    metals=("metal1", "metal2", "metal3", "metal4", "topmetal1"), max_metal="topmetal1",
-    klayout_dir="tech", drc_klayout=("ihp-sg13cmos5l.drc",), drc_switches="negated",
-    magic_rc="{name}.magicrc", netgen_setup="{name}_setup.tcl", magic_drc=True,      # as SG13G2 (M1.a, in a test)
-    model_lib="libs.tech/ngspice/models/cornerMOSlv.lib", corners=("mos_tt", "mos_ss", "mos_ff", "mos_sf", "mos_fs"),
-    mismatch_section="{corner}_mismatch",              # as SG13G2 (not exercised)
-    osdi=_IHP_OSDI,
-    limits=("no KLayout LVS runset in the PDK", "no standard cells or device symbols in the PDK",
-            "simulation set up as for SG13G2 but not exercised"),
-    stack=_ihp_stack(4, ("topmetal1",)),
-)
 
 GENERIC = Profile(family="generic", label="Unknown process", verified=False, layers={}, metals=(), max_metal="")
 
-PROFILES = {p.family: p for p in (SKY130, GF180, IHP, IHP_CMOS5L)}
+# the built-in profiles by module attribute, as Undine's code and tests name them: Profile.family of each
+_NAMED = {"SKY130": "sky130", "GF180": "gf180mcu", "IHP": "ihp-sg13g2", "IHP_CMOS5L": "ihp-sg13cmos5l"}
+
+
+@functools.cache
+def profiles() -> dict[str, Profile]:
+    """The built-in profiles by name (Profile.family), in package order: the processes of profiledata.builtin()."""
+    from undine.pdks import profiledata
+    out: dict[str, Profile] = {}
+    for s in profiledata.builtin():
+        for name, p in s.profiles.items():
+            if name in out:
+                raise profiledata.ProfileError(f"built-in {s.package}: profile.toml: {name!r} is a profile of another "
+                                               f"built-in package too")
+            out[name] = p
+    return out
+
+
+def __getattr__(name: str):
+    """SKY130, GF180, IHP, IHP_CMOS5L and PROFILES ({name: Profile}): read from the built-in profile.toml files on
+    first use, the same objects every time."""
+    if name == "PROFILES":
+        return profiles()
+    if name in _NAMED:
+        return profiles()[_NAMED[name]]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def for_family(family: str | None) -> Profile:
     f = (family or "").lower()
-    for k, p in PROFILES.items():
+    for k, p in profiles().items():
         if f == k or f.startswith(k.split("-")[0]):
             return p
     return GENERIC
 
 
+_WITH_STACK: dict[tuple[str, str], tuple[Profile, Profile]] = {}
+
+
 def for_pdk(name: str | None, family: str | None) -> Profile:
     """The profile of a PDK: by its name first (ciel puts sg13g2 and sg13cmos5l under one family, ihp-sg13), then
-    by its family; with the variant's own stack where it has one (gf180mcuA's three metals)."""
+    by its family; with the variant's own stack where it has one (gf180mcuA's three metals), made once per variant."""
     n = (name or "").lower()
-    for k, p in PROFILES.items():
+    for k, p in profiles().items():
         if n == k or (n.startswith(k) and n[len(k):] in ("a", "b", "c", "d", "e", "f")):
             st = next((v for key, v in p.stacks.items() if key.lower() == n), None)
-            return replace(p, stack=st) if st is not None else p
+            if st is None:
+                return p
+            got = _WITH_STACK.get((k, n))
+            if got is None or got[0] is not p:
+                got = _WITH_STACK[(k, n)] = (p, replace(p, stack=st))
+            return got[1]
     return for_family(family)
 
 

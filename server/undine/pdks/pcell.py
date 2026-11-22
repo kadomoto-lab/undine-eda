@@ -27,7 +27,6 @@ from undine.pdks.pdk import Pdk
 WORKER = Path(__file__).with_name("pcell_worker.py")
 GEN_VERSION = 3  # bump when the generated geometry changes (cell names embed it); 3: open_pdks 2025 PCell code
 MIM_CLAMP_UM = 2.0   # the side the open_pdks mim_cap drew at least before PcellLib.limits lowered its clamp
-SUPPORTED = {"sky130": "8afc8346a57fe1ab7934ba5a6056ea8b43078e71"}   # the open_pdks version Undine is tested with
 
 
 def _profile(pdk):
@@ -74,9 +73,11 @@ def legacy(pdk: Pdk | None) -> bool:
 def unavailable_reason(pdk: Pdk | None) -> str | None:
     """Why the PDK's PCells cannot run here (None when they can)."""
     if legacy(pdk):
+        from undine.pdks import profiledata
         fam = getattr(pdk, "family", "") or "sky130"
-        return (f"{pdk.id} has the PCell code of open_pdks before 2025, which Undine no longer supports: move the project "
-                f"to {pdk.name}@{SUPPORTED.get(fam, '')[:12]} (python -m undine set-pdk PROJECT {pdk.name}@{SUPPORTED.get(fam, '')[:12]})")
+        to = f"{pdk.name}@{(profiledata.tested_commits(fam) or ('',))[0][:12]}"   # the version Undine is tested with
+        return (f"{pdk.id} has the PCell code of open_pdks before 2025, which Undine no longer supports: move the "
+                f"project to {to} (python -m undine set-pdk PROJECT {to})")
     s = spec(pdk)
     if s is None:
         return "the PDK has no PCell generators Undine can run"

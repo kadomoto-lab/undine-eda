@@ -54,7 +54,7 @@
 | プロセスの知識 | `pdks/pdkprofile.py` | family ごとの Python の `Profile`(レイヤー、deck、モデル、PCell ライブラリ、スタックの規則)。PDK と一緒にバージョン管理されていない。サポートする commit が 3 か所(`pcell.SUPPORTED`、`pixi.toml`、`setup.sh`)に書かれている |
 | ツール | `tools.py:43-63`、`tools.py:116-131` | lock はバージョンのバナー文字列をそのまま比べる。どの実行ファイルが答えるかは探索順(`PATH` より先に `$UNDINE_TOOLS` か `~/undine-tools/bin`)で決まるので、CLI とサーバーで食い違うことがある。この環境では klayout は `~/undine-tools/bin` の 0.28.17 が答え、`/usr/bin` には 0.30.12 があり、どちらも pixi のものではない |
 | provenance | `store/provenance.py` | ジョブの入力に、セルの内容のハッシュ(ネットリストのハッシュは生成したサブサーキットを、レイアウトのハッシュはコピーしたセルを含む)、PDK の id、ツールのバナー、KLayout の deck の SHA-256 を記録する(deck が変われば結果は古くなる)。モデルのファイル、PCell のコード、PDK の残りはハッシュしていない |
-| changeset、エージェント | `api.py:1592-1595`、`agent.py:20` | 依存の変更はプロジェクトに直接書き込まれ、changeset のプレビューでは拒否される。エージェントは依存を追加できない。`project.json` と `undine.lock` はテキストとしてマージされる(`merge.md`) |
+| changeset、エージェント | `api.py`(`_no_preview`)、`agent.py:20` | 依存の変更はプロジェクトに直接書き込まれ、changeset のプレビューでは拒否される。エージェントは依存を追加できない。`project.json` と `undine.lock` はテキストとしてマージされる(`merge.md`) |
 | ロック | `server/api.py`、`store/deps.py` | サーバーは依存の変更の間、サーバー全体の `srv.lock` を持つ。CLI は `project.json` と `undine.lock` を書くときにロックを何も持たないので、CLI とサーバーが同じプロジェクトに書くと競合する。段階 0 から: 取得の間に持つのはプロジェクトの `.undine/deps.lock` だけで、2 つのファイルを書くもの(リクエスト、CLI、adopt と revert)はすべて `meta_lock`(`.undine/project.lock` への flock)を取る。`srv.lock` はファイルを入れ替える間だけ持つ |
 
 途中で見つけた問題は[段階 0](#phases) で直します。`read_lock` がどんな `format` でも受け付ける。`set-pdk` は lock があるときしか
@@ -540,13 +540,13 @@ index 側の CI(Undine がワークフローのファイルを用意する)は�
 
 ## パッケージとしての PDK プロファイル
 
-`pdkprofile.py` をデータにします。family ごとに 1 つのパッケージ(`profile_sky130`、`profile_gf180mcu`、`profile_ihp_sg13g2`)を
+`pdkprofile.py` をデータにします。ciel の family ごとに 1 つのパッケージ(`profile_sky130`、`profile_gf180mcu`、`profile_ihp_sg13`)を
 作り、今の `Profile` が持つもの(レイヤー、メタル、deck とそのオプション、Magic / Netgen のファイル、モデルとコーナー、PCell
 ライブラリ、スタックの規則、LVS の素子、制限)を `profile.toml` に書きます。さらに次を加えます。
 
 ```toml
 schema = 1                 # プロファイルの形式。それを知らない Undine はプロファイルを拒否する
-undine = ">=0.2"           # このプロファイルを読める Undine のバージョン
+undine = ">=0.1.0"         # このプロファイルを読める Undine のバージョン
 
 [[pdk]]
 commit = "8afc8346a57fe1ab7934ba5a6056ea8b43078e71"
@@ -565,6 +565,32 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 プロファイルの変更(deck のオプション、モデルのパス)はプロファイルのパッケージの更新で、ほかの更新と同じくレビューします。
 ジョブが使うプロファイルの欄はジョブの入力に入るので([evidence](#changesets-and-evidence)を参照)、変わった欄を使った結果は
 古くなり、ほかの結果は古くなりません。
+
+*実装(段階 6、pdks/profiledata.py、pdks/formulas.py、pdks/tested.py):* パッケージはプロセスごとではなく ciel の family
+ごとに 1 つです(決定事項)。`profile_ihp_sg13` の `profile.toml` は SG13G2 と SG13CMOS5L にそれぞれ `[[profile]]` を持ち、
+それぞれが扱う PDK の variant を挙げます。Undine の組み込みの写しは undine-eda の `server/undine/data/profiles/<package>/` に
+あります。`undine-package.toml`(パッケージの名前とバージョン。今は 1.0.0。`[files] include = ["profile.toml"]`)と
+`profile.toml` で、index の行の `subdir` がそこを指せ、組み込みの代替は公開するパッケージとバイト単位で同じになります。
+キーはその名前の `Profile` の欄で(`name` は `Profile.family`)、欄の型注釈で変換します。リストはタプルに、表は dataclass に、
+float の欄の整数は float になります。型のない表(`drc_options`、`lvs_options`、`rename`)は TOML の型のままです。deck には
+`str(value)` が渡るからです。次のものは、それぞれのキーのパスを示して拒否します(`<where>: profile.toml:
+profile[0].stack.cuts[2].name: ...`)。知らないキー(`verified` と `magic_drc` も。ヒントつき)、1 より大きい `schema`、
+この Undine を含まない `undine` の範囲、Undine にない式やスタックの生成関数、知らない `drc_switches`、その欄が埋めない
+テンプレートの置き場所(`{name.attr}` も)、コンパイルできない正規表現、絶対パスか `..` を含むパス、モジュール・関数・
+ライブラリがドットでつないだ名前でないか、環境が Undine のもの(`pcell`、`pcell-gf180`)でない PCell ライブラリ、2 つの
+`[[profile]]` にあるか別の family の variant、2 回挙げた `[[pdk]]` の commit、別の family のタグ、`sha256:<64 桁の 16 進>` で
+ない木の値。名前付きの式のほかに、スタックは名前とバージョンのついた生成関数で作ってもよく(決定事項)、GF180 と IHP の
+スタックはそうしています。`[profile.stack] generator = "gf180_stack@1"` とし、引数をその横に書きます(`thin`、`top`、`plate`。
+`ihp_stack@1` は `thin` と `tops`)。規則が変わったら、生成関数の新しいバージョンにします。`verified`(Undine のテストが
+そのプロファイルを実行した)と `magic_drc` は、Undine の表(`pdks/tested.py`)から family、プロファイルのバージョン、
+プロファイルの名前で引きます。表にないバージョンは verified でなく、`magic_drc` は表にある最新のバージョンのものを引き継ぎます
+(決定事項)。組み込みの `[[pdk]]` は動作確認した commit(sky130 `8afc8346a57f`、gf180mcu `792ef67037d7`、ihp-sg13
+`89d42ee6d2fd`)とそのライセンスです。`compat` と `tree` は読んで確かめますが、組み込みのプロファイルにはまだありません。
+TOML のファイルは Python のプロファイルから書き出し、`test_profile_data.py` が、読み込んだプロファイルを、Python を消す前に
+保存した golden のデータ(`server/tests/data/profiles_golden.json`。意図した変更の後は `profile_golden.py` で書き直す)と、
+型も含めて欄ごとに比べます。`pcell.SUPPORTED` はなくなりました。`profiledata.tested_commits(family)` が family の動作確認した
+commit を返し、`pick_pdk` は PDK の名前だけが指定されたときにそれを優先し(今は GF180 と IHP でも)、`pixi run pdk`
+(`python -m undine pdk enable sky130`)と `setup.sh`(`python -m undine pdk tested FAMILY`)は自分では commit を書きません。
 
 <a id="licences"></a>
 
@@ -594,6 +620,18 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   コピーの `.undine/deps` にストアから install します(ハードリンクなので軽い)。changeset はそのまま新しいセルを置き、検証を
   実行できます。プレビューは依存の変更を拒否しなくなります。`dep_update` はレイアウトのコピーも更新します
   ([バージョンをまたいだセル](#cells-across-versions)を参照)。
+  *実装済み(段階 4、store/changeset.py: Changesets.dep_op、pdk_set):* 操作は deps.add / update / remove(Project.set_pdk)を
+  作業コピーで実行し、プロジェクトでもベースラインでも実行しません(ベースラインは何もインストールする前に拒否します)。作業コピー
+  自身の `.undine/deps.lock` のもとで取得し、ガード(`_DepGuard`)のもとで書きます。ガードは changeset のロック、次にサーバーの
+  ロックを取り、changeset をもう一度確かめ(開いている、中断したマージがない、書き込みのリースが呼び出し側のもの)、作業コピーの
+  プロジェクトログ `history/@project.jsonl`(ライブラリの名前には `@` を使えないので、どのライブラリも持てない名前)に記録を
+  加えます: `{op: dep_add | dep_update | dep_remove | pdk_set, args, actor, reason, cell: null, view: null, effects: [{k: "d",
+  do: add | mod | del, name, before: {project, lock}, after: {project, lock}, state: "installed", pdk?: [old, new]}]}`。
+  2 つのファイルは丸ごと解析したものです。changeset の記録を読むもの(タイムライン、レビューの変更、復元、採用の記録とログ、
+  エージェントの書き込みの上限)は、このログをライブラリとは扱わずに、ライブラリのログと一緒に読みます。復元は操作を新しいものから
+  取り消し(project.json はキーごと、undine.lock は前のとおり)、プロジェクトログの 1 つの `restore` の記録にして、ストアから
+  インストールします(作業コピーのオフラインの sync)。changeset の操作がまだ取得している間の復元は、待たずに Busy になります
+  (操作は、復元が持つ changeset のロックを待つため)。`dep_update` のレイアウトのコピーの更新はまだ作っていません。
 - レビューには、lock の差分、上に書いた更新の報告、ライセンス、ダウンロードの大きさ、パッケージのコードブロックと RTL の
   ファイルを出します([セキュリティ](#security)を参照)。
 - **採用**では `project.json`(`libraries`、`indexes`、`pdk`)と `undine.lock` をエントリ単位でマージし、もう一度解決します。
@@ -606,8 +644,21 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   changeset の採用(branches.plan_merge)でも、JSON としてエントリ単位でマージします。キーごとの規則は [merge.ja.md](merge.ja.md)
   にあります。「もう一度解決する」は、採用では、マージしたファイルだけからの確認です(`deps.merged_problems`: どの要求も指定どおりに
   固定されていて、固定したグラフが欠けていないこと)。何も取得せず、バージョンも選びません。プロジェクトのファイルに前はなかった
-  問題は `undine.lock` の衝突となり、理由を示して採用を拒否します。採用の後の install は、changeset での依存の操作と一緒に作ります。
+  問題は `undine.lock` の衝突となり、理由を示して採用を拒否します。*実装済み(段階 4、install):* マージが持ち込む、または
+  変える lock のエントリで、ファイルがストアにもプロジェクトの固定どおりのインストールにもないものも `undine.lock` の衝突です
+  (`not in the store: fetch it first`、deps.not_stored)。こうして採用は全か無かのまま、何も取得しません。マージしたファイルを
+  書いた後(meta_lock を放し、ネットリストを読み直す前)、`undine.lock` か project.json の依存を変えたマージは、オフラインの
+  deps.sync でそれをプロジェクトに install します。失敗は伝えるだけで(記録の `applied` / `reverted` の `deps_warning`)、
+  採用の失敗にはしません。merging.json が install を記すので、その前に止まったサーバーは次の起動で install します。install はプロジェクトの
+  依存関係のロックを待ちません(changeset のロックとプロジェクトのエディタ、レイアウト、ログを持ったまま動くため)。ほかの操作が
+  それを持っている間は、install を保留にし(`deps_pending`)、`lib sync` に任せます。revert も同じマージを通り、changeset が作った
+  `undine.lock` を消します: changeset が加えた依存は外し、そのセルをまだ置いているプロジェクトのセルを示します(`deps_dropped`、
+  `deps_warning`。[決定事項](#decisions) 19)。
 - 人がライブラリブラウザで自分で **追加** しても、同じ操作を小さな changeset に作り、1 クリックで採用します。経路は 1 つです。
+  *実装済み(段階 4、POST /api/p/{p}/deps/changeset):* ブラウザの追加(git のフォームと Packages のダイアログ)、更新、削除、
+  別の PDK への切り替えは、どれも小さな changeset を開き(リポジトリにないプロジェクトでは先に git-setup)、その中で操作を行い、
+  採用します。操作が拒否されたら changeset は破棄し、採用が拒否されたらレビューのために開いたままにし(409 の本文がその changeset を
+  示す)、ブラウザはそう伝えます。`/deps` のルートと CLI は、これまでどおりプロジェクトを直接変えます。
 - **エージェント**は、手元の index の clone をそのまま使って、自分の changeset に `dep_add` / `dep_update` / `dep_remove` を
   提案できます。取得はしません。木がストアになければ、操作を *取得が必要*(URL、大きさ)として記録し、レビューに **取得** ボタンを
   出します。取得するのは人が確認したときだけです([HTTP](#ui-cli-http-agent-tools) のトークンを参照)。index の更新と PDK の取得も
@@ -621,6 +672,19 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   ネットリストが読み込むモデルのファイル(`.lib` / `.include` の対象と OSDI のファイル、ハッシュで)と、ジョブが使うプロファイルの
   欄(deck のオプション、deck の変数、モデルのパス)です。パッケージの README や関係のないセルの変更、プロファイルのレイヤーの色の
   変更では、何も古くなりません。
+  *実装済み(段階 4、store/provenance.py):* `key` の中では、シミュレーションの入力に `models`(ネットリストが `.lib` / `.include`
+  で読むすべてのファイル。たどった先も含み、`.lib` の行はそのセクションのファイルで、OSDI のファイルも加え、縮小したコピーではなく
+  元のファイルの `{path, sha}` として。`modellib.files_read`。ハッシュはパス、時刻、大きさでキャッシュします)と `profile`
+  (`model_lib`、`model_includes`、`osdi`、`corners`)が加わります。KLayout の DRC と LVS には `profile`(deck の `drc_options`
+  か `lvs_options` と、その PDK の `deck_vars`)が加わります。`key` の外では、どのジョブの status にも `about` があります。
+  `packages`(ジョブが読んだファイル、つまりネットリストの回路図とシンボル、モデルのファイル、レイアウトのライブラリを install に
+  持つ lock のエントリそれぞれの `{name, package, version, tree | sha, index}`)、`pdk`(`{id, commit, family, variant, tree}`。
+  tree は lock の固定)、`profile`(`{family, source: "built-in", undine}`。プロファイルのパッケージは段階 6)です。`recompute` は
+  `models` と `profile` を記録したジョブにだけそれらを作るので、それより前のジョブは不明ではなく最新のままです。`diff` は
+  「model file X changed」と「profile field Y: a → b」を返します。changeset の evidence のマニフェストは、保存した `undine.lock`
+  からそれぞれの側の `packages` と `pdk` を並べ、各ジョブの行はそのジョブの `about` を持ちます
+  ([ジョブの来歴](../reference/data.md#job-provenance))。Magic の DRC、Netgen の LVS、寄生抽出はプロファイルの欄を記録しません
+  (それらの設定ファイルはプロファイルの欄ではないため)。
 
 <a id="ui-cli-http-agent-tools"></a>
 
@@ -852,7 +916,7 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 | 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **済み**、[段階 3 の状況](#phase-3-status)を参照 |
 | 4. changeset とエージェント | changeset での依存の操作、依存の変更のレビュー(コードブロックと RTL の一覧)、確認のトークン、取得の後の通知、DATA の規則つきのエージェントのツール、git のマージドライバでの `project.json` と `undine.lock` のマージの規則(`merge.md` も直す)、`key` の外のパッケージと PDK の情報と、`key` の中のモデルのファイルとプロファイルの欄を含む evidence | changeset で追加、採用、元に戻す。エージェントの追加は *取得が必要* を記録し、取得せず、人の取得の後に続けられる。トークンを返すツールはない。別々のパッケージを追加する 2 つの changeset を、どちらの順でも採用できる。両立しない要求は採用のときに拒否する。1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない | **進行中**、[段階 4 の状況](#phase-4-status)を参照 |
 | 5. 公開 | `pkg init / check / pack / publish / yank`、`[checks]`、検証の報告と、index の行と PR からのそのリンク、semver の報告、報告に入るスペックの結果、`[renames]`、セル単位の更新の報告、レイアウトのコピーの更新、index の CI のワークフロー(DRC / LVS なし) | この木について通った報告がなければ publish は拒否し、PR の本文は報告をその SHA-256 とともにリンクする。SHA-256、commit、木が行と違う報告を index の CI が拒否する。改名したセルが改名として報告され、参照が書き換わる。ピンを消したりレイアウトのピンを動かしたりするとメジャーバージョンが要る。免除した規則は `check` に通り、示される。リポジトリが渡さない木の publish を拒否する。2 つのパッケージを持つリポジトリでのタグ `<name>-v<version>`。更新の後、コピーしたセルが changeset の中で新しくなり、その LVS が古くなる。編集したコピーは置き換えず、示す | **進行中**、[段階 5 の状況](#phase-5-status)を参照 |
-| 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、レイヤーの色を変えても古くならない | **予定** |
+| 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、どのジョブも読まないプロファイルの欄(`label`、`limits`)を変えても古くならない | **作業中**。[段階 6 の状況](#phase-6-status)を参照 |
 
 <a id="phase-0-status"></a>
 ### 段階 0 の状況
@@ -864,7 +928,7 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 | 読むときに `format` を確かめる | 済み | `read_lock`(`store/deps.py:90-115`)は、より大きな整数の `format`(「made by a newer Undine ... update Undine」)、1 以外のほかの値(「which no Undine writes」)、解析できない JSON、オブジェクトでない JSON を、それぞれすべきことと「nothing was changed」を添えて拒否する。`format` のない lock は 1 として読む。読むものはすべてそれを拒否する: `lib add` / `update` / `remove` / `sync` / `lock` / `status`、`set-pdk`、`/deps` のルートと `POST /pdk`(HTTP 400。CLI は 1 行と終了コード 1)。`add` と `update` は取得の前に読み(`store/deps.py:402-472`)、`remove` と `set_pdk` は `project.json` が変わる前に読む。プロジェクトを開くこと(`GET /api/p/{p}`)は読まない。テスト: `test_a_lock_of_a_newer_format_is_refused_by_every_operation_and_left_byte_for_byte`、`test_a_lock_of_a_newer_format_is_refused_over_http_and_by_the_cli`、`test_a_lock_without_format_is_read_as_format_1_and_a_broken_one_is_refused` |
 | `set-pdk` が常に lock を書く | 済み | `Project.set_pdk`(`store/project.py:164-187`)は、lock がないか別の PDK を固定しているとき、`project.json` がすでに新しい PDK を書いていても、`undine.lock` に `pdk` を書く。lock のないプロジェクトには、`lib lock` と同じように今のツールのバージョンを持つ format 1 の lock を新しく作る。ツールは `meta_lock` を取る前に答える。`cli.md`、`api.md`、`pdks.md` にそう書いてある。テスト: `test_set_pdk_writes_the_lock_whether_or_not_the_project_has_one`、`test_set_pdk_over_http_and_from_the_cli_creates_a_missing_lock` |
 | `project.json` から消えた依存を `sync` が消し、`status` が残りを報告する | 済み | `leftovers`(`store/deps.py:351-369`): `project.json` が書いていない `.undine/deps/` のディレクトリか lock の項目を、固定した commit と install した commit とともに返す。`sync`(`store/deps.py:488-550`)はそれぞれを lock の項目とともに消し、`removed` と報告する。`sync` が取得している間に `project.json` から消えたものは次の sync に任せ、取得に失敗した sync は何も消さない。`status`(`store/deps.py:597-611`)はそれぞれを状態 `leftover` として、`lib sync` を示す問題とともに一覧にし(なので `ok` は false)、ライブラリ名でない lock のキーは `sync` が触らない問題として示す。`.undine/deps/` はシンボルのパスの 1 項目のままなので(`Project.symbol_paths`、`store/project.py:237`。理由もそこに書いてある)、残りもののシンボルは `sync` まで見つかる。ネットリストのキャッシュのキーは `.undine/deps/` のすべてのディレクトリを含む(`server/api.py:353-357`)。UI は状態を示し、まず sync を勧める。テスト: `test_status_lists_a_dependency_gone_from_project_json_and_sync_removes_its_files_lock_entry_and_symbols`、`test_a_sync_that_fails_removes_no_leftover_either`、`test_the_cli_and_http_report_a_leftover_and_sync_removes_it`、`test_status_reports_a_leftovers_installed_commit_from_its_files_not_from_the_lock`、`test_the_netlist_hash_changes_when_sync_removes_a_leftover_a_testbench_places`、`test_sync_never_removes_a_directory_a_lock_key_names_outside_the_deps_folder`、段階 0 からの `test_what_changed_while_fetching_is_not_written_back` |
-| CLI とサーバーのためのプロジェクトの flock | 済み | `meta_lock` は `.undine/project.lock` への flock(`store/deps.py:110-115`)で、`_committing`(`store/deps.py:238-244`)、`relock`、`Project.editing`(`store/project.py:184-190`。`set_pdk` と `create_library` も)、changeset の adopt と revert(`store/changeset.py:2401-2404`)が取る。依存の操作を 1 つずつにする `.undine/deps.lock`(`store/deps.py:118-121`)。テスト: `test_project_files_are_written_one_writer_at_a_time`、`test_meta_lock_holds_across_processes_and_a_rename`、`test_an_adopt_waits_for_a_writer_of_project_json`、`test_an_operation_that_waited_works_from_what_the_one_before_wrote` |
+| CLI とサーバーのためのプロジェクトの flock | 済み | `meta_lock` は `.undine/project.lock` への flock(`store/deps.py:110-115`)で、`_committing`(`store/deps.py:238-244`)、`relock`、`Project.editing`(`store/project.py:184-190`。`set_pdk` と `create_library` も)、changeset の adopt と revert(`store/changeset.py`、`_merge`)が取る。依存の操作を 1 つずつにする `.undine/deps.lock`(`store/deps.py:118-121`)。テスト: `test_project_files_are_written_one_writer_at_a_time`、`test_meta_lock_holds_across_processes_and_a_rename`、`test_an_adopt_waits_for_a_writer_of_project_json`、`test_an_operation_that_waited_works_from_what_the_one_before_wrote` |
 | HTTP の取得を `srv.lock` の外で行う | 済み | `add`、`update`、`sync` は `.undine/deps.lock` だけを持って取得し、install と書き込みのときに呼び出し側の `guard`(`srv.lock`)を取る(`store/deps.py:238-244`、`server/api.py:1654-1694`)。テスト: `test_slow_fetch_does_not_stop_the_server`、`test_sync_is_all_or_nothing` |
 | `--dep-root` | 済み | `serve --dep-root DIR`(`__main__.py:267-270`。何度でも指定でき、既定値はない)を `Server.dep_roots`(`server/api.py:141-143`)に入れ、`local_roots` として `add`、`update`、`sync` に渡す。`_source`(`store/deps.py:206-263`。`_local_path`、`_under_roots`、`_git_dirs` とともに)は、取得するすべての URL を、リクエストのものも `project.json` のものも、最初の取得の前に確かめる: ローカルのものは存在するディレクトリで、その実際のパス、git ディレクトリ、共通ディレクトリがルートの下になければならず、git はその git ディレクトリから取得する。ホスト、クエリ、フラグメントを持つ `file://` の URL は拒否する。CLI はルートを渡さず、どのパスも受け付ける。CLI についても: `_check_spec` と `_check_commit`(`store/deps.py:182-203`)は `-` で始まる `rev` や `subdir` の部分と、完全な 16 進の id でない固定した commit を、`_own_dir`(`store/deps.py:384-391`)はライブラリ名でない名前を拒否し、git には `--end-of-options` と `--` を渡す(`_fetch`、`store/deps.py:266-310`)。扱っていないもの: ルートの下のリポジトリの `objects/info/alternates`。テスト: `test_a_local_repository_is_refused_over_http_without_dep_root_and_the_cli_still_takes_it`、`test_a_local_repository_under_a_dep_root_is_added_updated_and_synced_over_http`、`test_a_path_that_escapes_the_dep_root_by_dotdot_or_a_symlink_is_refused_over_http`、`test_a_path_whose_git_directory_is_outside_the_dep_root_is_refused_over_http`、`test_sync_over_http_fetches_a_local_path_project_json_names_only_under_a_dep_root`、`test_serve_dep_root_is_repeatable_and_off_by_default`、`test_a_rev_or_a_lock_commit_that_git_would_read_as_an_option_is_refused_before_git_runs`、`test_a_subdir_that_looks_like_a_git_option_is_refused_before_anything_is_fetched` |
 | ネットリスタが同じ名前で中身の違う 2 つのセルを拒否する | 済み | `spice` はサブサーキットの名前ごとに、その元の回路図を覚えておく(`homes`、`schematics/schematic.py:630-633` と `654`。最上位のセルも含む)。`same_name_check`(`schematics/schematic.py:563-584`)はその名前の 2 つ目のセルをネットリストにし、同じ行にならなければ、両方を示して `SameNameError`(`schematics/schematic.py:390`)を出す。同じ行なら一度だけ書く。なのでどのモードも、それとともにシミュレーション、LVS、スペック、スイープも、これを拒否する。vlsirtools のバックエンドは先に `spice` を動かす(`schematics/schematic.py:789`)。Xschem のバックエンドは Xschem を探す前に `XschemOrder`(`schematics/schematic.py:796-806`。Xschem 自身のシンボルの順)でそれを動かし、そのエラーのときだけ止まる(`schematics/schematic.py:815-823`)。PDK の起動用のページのいくつかは拒否されるようになった(sky130 の `sky130_tests/top`、IHP の `start_page`)。テストは `test_netlist.py` に: `test_two_cells_of_one_name_with_other_content_are_refused_naming_both`、`test_the_xschem_backend_refuses_only_what_xschem_itself_would_netlist_as_one_cell`、`test_every_pdk_schematic_netlists_the_same_from_its_netlist_view`。stand-in の衝突は今までどおり `test_substitute.py` に |
@@ -1127,12 +1191,43 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 
 できたもの: `project.json` と `undine.lock` のマージの規則(vcs/depmerge.py)を git のマージドライバと changeset の採用に入れ、
 採用ではマージした 2 つのファイルを確かめます([changeset と evidence](#changesets-and-evidence)を参照)。テスト:
-`test_depmerge.py`(別々の依存を加えた 2 つの changeset がどちらの順でも採用できる。衝突する要求を拒否する。lock を古いままにする
-マージを理由付きで拒否する。2 つのブランチの `git merge` がドライバを通る)。
+`test_depmerge.py`(別々の依存を加えた 2 つの changeset がどちらの順でも採用でき、install される。衝突する要求を拒否する。lock を
+古いままにするマージを理由付きで拒否する。2 つのブランチの `git merge` がドライバを通る)。
 
-段階 4 でこれから作るもの: changeset での依存の操作(作業コピーでの `dep_add` / `dep_update` / `dep_remove` / `pdk_set` と、
-採用の後の install)、そのレビュー、エージェントの *needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、
-パッケージと PDK の情報を持つ evidence。
+できたもの: changeset での依存の操作(作業コピーでの `dep_add` / `dep_update` / `dep_remove` / `pdk_set`。プロジェクトログに記録し、
+復元で取り消す)、採用と revert の後の install(ストアから。ストアにないエントリは採用で拒否し、中断した install は次の起動で
+終える)、ブラウザの 1 クリックの追加、更新、削除、PDK の変更(`POST /deps/changeset`)、`POST /changesets/{id}/deps` と `/pdk`
+([changeset と evidence](#changesets-and-evidence)と [HTTP API](../reference/api.ja.md#changesets)を参照)。テスト:
+`test_pkg_changesets.py`(changeset で追加、採用、復元。作業コピーのリンクを通して書かない。更新、削除、PDK の変更。ベースラインの
+拒否。書き込みのリース。ストアにない木の採用の拒否。中断した採用の後の install。2 つの changeset の両方の install。install を外し、
+まだ置いているセルを示す revert。操作の取得中の復元は busy。1 クリックのルートの採用と、採用が拒否されたときに開いたままにすること。
+プロジェクトログの名前はライブラリの名前にならない)。
+
+できたもの: パッケージと PDK の情報とモデルのファイルのハッシュを持つ evidence(store/provenance.py、`modellib.files_read`、
+store/changeset.py の evidence のマニフェスト。[changeset と evidence](#changesets-and-evidence)を参照)。テスト:
+`test_pkg_evidence.py`(1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない。
+パッケージのコードブロックが include するモデルのファイルが変わると、ネットリストの文面が同じでもシミュレーションが古くなる。
+プロファイルの欄は key の中、`about` は外。それより前のジョブは最新のまま。マニフェストがパッケージと PDK を並べる)。
+
+段階 4 でこれから作るもの: 依存の変更のレビュー(lock の差分、ライセンス、大きさ、コードブロックと RTL)、エージェントの
+*needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、`dep_update` のレイアウトのコピーの更新。
+
+<a id="phase-6-status"></a>
+### 段階 6 の状況
+
+できたもの: `profile.toml` とその読み込み、式とスタックの生成関数の登録、3 つの組み込みのプロファイルのパッケージ、それを
+返す `pdkprofile.py`(Python のプロファイルは消しました)、`verified` と `magic_drc` の Undine の表、そして動作確認した
+commit をプロファイルから読む `pick_pdk`、PCell のコードのヒント、`pixi run pdk`、`setup.sh` と 2 つのコマンド
+`pdk tested FAMILY [--all]`、`pdk enable FAMILY [COMMIT]`([パッケージとしての PDK プロファイル](#pdk-profiles-as-packages)を
+参照)。テスト: `test_profile_data.py`(読み込んだプロファイルが、Python のものから作った golden のデータと、プロセスごと・
+variant ごとに型も含めて等しく、`pdkprofile` が返すもの全体(deck の `-rd` の値、Magic と Netgen のファイル、family の規則、
+MIM の式)も等しい。拒否はどれもキーのパスを示す。動作確認したプロファイルのバージョンとしていないバージョンについての
+Undine の表。動作確認した commit、2 つのコマンド、commit を書かない `pixi.toml` と `setup.sh`、動作確認した commit に
+wafer.space の GF180 の commit が入っていること)。
+
+段階 6 でこれから作るもの: index のプロファイルのパッケージと lock の `profile` キー(バージョンの選択、`sync`、`vendor`)、
+`[[pdk]]` の期待する木のハッシュと `verified_by`(PDK の状態 *verified*)、プロファイルから読む互換性タグ、ジョブが使う
+プロファイルの欄をその入力に入れること(段階 4 の evidence と一緒に)、プロファイルからの PDK のライセンス。
 
 <a id="phase-5-status"></a>
 ### 段階 5 の状況
@@ -1229,32 +1324,61 @@ index もすべて手元のもの。GitHub に触れるテストはありませ�
     書きます([取得とストア](#fetch-and-store))。テープアウトの evidence が、公開する人がリポジトリを保ち続けることに頼らなくなり、
     写しのためのサービスを運用する必要もありません。
 
+2026-11-22 に、changeset での依存の操作(段階 4)についてユーザーと決めました:
+
+14. **git リポジトリでないプロジェクトでのブラウザの 1 クリックの追加は、それをリポジトリにする**(changeset を開くと、どの
+    changeset を開くときとも同じく git-setup を実行する)。こうして追加はどれも changeset を通ります。
+15. **採用が拒否された(衝突した)1 クリックの操作は、その小さな changeset をレビューのために開いたままにする。** 409 がその
+    changeset を示します。破棄しないので、作業は失われず、衝突を見られます。
+16. **ブラウザの追加、更新、削除、PDK の変更は、どれも 1 クリックの changeset にする**(小さな changeset、その中の操作、採用)。
+    `/deps` の HTTP のルートと CLI は、これまでどおり動きます。
+17. **HTTP で、`--dep-root` の下のローカルリポジトリには確認のトークンを求めない**(取得の確認、スライス 2)。`--dep-root` が
+    すでに、それらのディレクトリについてのサーバーの持ち主の同意です。
+18. **git の rev は (url, rev) を結びつけて確認する**(スライス 2)。トークンは、人が見たものを示します。
+19. **changeset が加えた依存を外す revert は進め**、その依存のセルをまだ置いている changeset の外のセルを一覧にした警告を返す。
+    拒否はしません。revert はできるままで、人は何を直せばよいかがわかります。
+
+2026-11-22 に、段階 6 についてユーザーと決めました。
+
+20. **プロファイルのパッケージは ciel の family ごとに 1 つ**(`profile_sky130`、`profile_gf180mcu`、SG13G2 と SG13CMOS5L を
+    持つ `profile_ihp_sg13`)。互換性タグ(`ihp-sg13/...`)、ライセンス、ciel の取得は family ごとなので、1 つのパッケージが
+    2 つの IHP のプロセスのためにそれを定義します。
+21. **プロファイルのパッケージは undine-eda の中に置く。** index の行が `subdir` で示すサブディレクトリ
+    (`server/undine/data/profiles/<package>/`)です。組み込みの代替は、公開するパッケージとバイト単位で同じになります。
+22. **この Undine が動作確認したものより新しいプロファイルのバージョンは verified でなく、`magic_drc` を動作確認した最新の
+    バージョンから引き継ぐ。** index からのプロファイルの更新で Magic DRC が止まることはありません。
+23. **メタルスタックは、そのまま書いたデータのほかに、名前とバージョンのついた少数のスタックの生成関数でも作れる**
+    (`gf180_stack@1`、`ihp_stack@1`)。GF180 と IHP のスタックを書き出すと、規則の名前が型どおりに並ぶ長い一覧になります。
+    規則が変わったら生成関数の新しいバージョンにするので、プロファイルは前と同じように描き続けます。
+24. **受け入れのテスト「レイヤーの色を変えても何も古くならない」を「どのジョブも読まないプロファイルの欄(`label`、`limits`)を
+    変えても何も古くならない」にする。** プロファイルは色を持ちません。色は PDK の `.lyp` から来ます。
+
 2026-11-22 に、段階 5 についてユーザーと決めました:
 
-14. **`pkg publish` と `pkg yank` の外への書き込みは、どれも先に尋ねる。** 書き込み(`gh release upload`、index の clone からの
+25. **`pkg publish` と `pkg yank` の外への書き込みは、どれも先に尋ねる。** 書き込み(`gh release upload`、index の clone からの
     ブランチの `git push`、`gh pr create`、index に push できない人のための fork)は、それぞれ正確なコマンドを示し、端末では
     y/N で尋ねます。端末がなければ `--yes` のないかぎり拒否し、`--dry-run` は何も実行しません。環境変数もエージェントのツールも
     確認の代わりになりません。index の持ち主は fork を作らず、ブランチを index に直接 push します。人のリポジトリへの書き込みは、
     その人が決めることです。
-15. **index の CI のワークフローのファイルは Undine が同梱し、`kadomoto-lab/undine-index` にはユーザーが加える。** その
+26. **index の CI のワークフローのファイルは Undine が同梱し、`kadomoto-lab/undine-index` にはユーザーが加える。** その
     リポジトリへの commit はユーザーのものです。
-16. **公開するセルのスペックが満たされない、または測られていないときは、`pkg check` を通さない。** アナログの IP では
+27. **公開するセルのスペックが満たされない、または測られていないときは、`pkg check` を通さない。** アナログの IP では
     スペックが約束そのものです。
-17. **本物の GitHub に触れるテストはなく、最初の本当の公開はユーザー自身が実行する。** テストは手元のリポジトリと index、
+28. **本物の GitHub に触れるテストはなく、最初の本当の公開はユーザー自身が実行する。** テストは手元のリポジトリと index、
     偽の `gh` を使います。
-18. **SPDX の式は構文だけで確かめ、ライセンスの一覧は持たない。** Undine はサードパーティの参照データを同梱せず、新しい
+29. **SPDX の式は構文だけで確かめ、ライセンスの一覧は持たない。** Undine はサードパーティの参照データを同梱せず、新しい
     識別子にリリースは要りません。
-19. **シンボルのピンを加えたらマイナーバージョンが要る。** 新しいセルがパッケージのインターフェースに加わるのと同じく、
+30. **シンボルのピンを加えたらマイナーバージョンが要る。** 新しいセルがパッケージのインターフェースに加わるのと同じく、
     セルのインターフェースに加わるもので、利用する側の既存のインスタンスではつながらないまま残ります。
-20. **免除は、免除したセル自身の DRC の実行にだけ効く。** それを置くセルはすべて検証されるので、突き合わせのセルの免除が
+31. **免除は、免除したセル自身の DRC の実行にだけ効く。** それを置くセルはすべて検証されるので、突き合わせのセルの免除が
     配列の中の誤りを隠しません。
-21. **`pkg check` が実行するのは KLayout の DRC と LVS だけ。** GF180 と IHP には、Undine に Magic や Netgen の deck が
+32. **`pkg check` が実行するのは KLayout の DRC と LVS だけ。** GF180 と IHP には、Undine に Magic や Netgen の deck が
     ありません。
-22. **`undine-check.json` は `<project>/.undine/check/` の下に書く。** パッケージのディレクトリの外なので、それが示す木を
+33. **`undine-check.json` は `<project>/.undine/check/` の下に書く。** パッケージのディレクトリの外なので、それが示す木を
     汚しません。
-23. **作業ツリーがきれいかどうかは、パッケージのサブディレクトリだけで確かめる。** リポジトリのほかの部分(プロジェクトの
+34. **作業ツリーがきれいかどうかは、パッケージのサブディレクトリだけで確かめる。** リポジトリのほかの部分(プロジェクトの
     ほかのライブラリ、`project.json`)はパッケージの木に入りません。
-24. **段階 5 では、公開のための HTTP のルートも UI も作らない。** 公開はコマンドラインで、人が実行するものです。
+35. **段階 5 では、公開のための HTTP のルートも UI も作らない。** 公開はコマンドラインで、人が実行するものです。
 
 <a id="later"></a>
 

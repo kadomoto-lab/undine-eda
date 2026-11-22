@@ -4,18 +4,21 @@
 // Refresh fetches it again.
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, PackagePlus, RefreshCw, Search, X } from "lucide-react";
-import { api, type DepAdd, type IndexInfo, type IndexWhere, type PackageFit, type PackageInfo, type PackageSummary } from "./api";
+import { api, keptChangesetOf, type DepAdd, type DepChangeset, type IndexInfo, type IndexWhere, type PackageFit, type PackageInfo,
+  type PackageSummary } from "./api";
 import { apiErrorText, msg, resolveText, useI18n, type UiText } from "./i18n";
 
 const fitText = (fit: PackageFit): UiText | null =>
   fit === null ? null : fit.ok ? msg("app:packages.fits") : msg("app:packages.noFit", { reason: fit.reason ?? "" });
 
-export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, debounceMs = 250 }: {
+export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onKept, debounceMs = 250 }: {
   project: string;
   readOnly: boolean;                       // a preview of a changeset: nothing is added
   taken: (name: string) => boolean;        // a library of the project has that name already
   onClose: () => void;
-  onAdded: (name: string, r: DepAdd) => void | Promise<void>;
+  // the add ran in a small changeset adopted at once (api.addPackageInChangeset): its result, and the whole answer
+  onAdded: (name: string, r: DepAdd, out?: DepChangeset<DepAdd>) => void | Promise<void>;
+  onKept?: (e: unknown, changeset: string) => void;   // the adopt was refused: the changeset stays open for review
   debounceMs?: number;
 }) {
   const { t } = useI18n();
@@ -86,10 +89,12 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, deb
     setBusy("add");
     setErr("");
     try {
-      const r = await api.depAddPackage(project, name, info.name, req.trim() || undefined, index === "undine" ? undefined : index);
-      await onAdded(name, r);
+      const out = await api.addPackageInChangeset(project, name, info.name, req.trim() || undefined, index === "undine" ? undefined : index);
+      await onAdded(name, out.result, out);
     } catch (e) {
-      if (live.current) setErr(apiErrorText(e));
+      const kept = keptChangesetOf(e);
+      if (kept && onKept) onKept(e, kept);
+      else if (live.current) setErr(apiErrorText(e));
     } finally {
       if (live.current) setBusy(null);
     }

@@ -1,0 +1,12 @@
+# Undine's PDK profile of the sky130 family (SkyWater SKY130: sky130A, sky130B): what Undine needs to know about the
+# process, as data, in profile.toml (docs/design/packages.md, PDK profiles). Built into Undine as the fallback, and the
+# same files the package profile_sky130 publishes.
+[package]
+name = "profile_sky130"
+version = "1.0.0"
+description = "Undine's PDK profile of the sky130 family (SkyWater SKY130)"
+license = "Apache-2.0"
+repository = "https://github.com/kadomoto-lab/undine-eda.git"
+
+[files]
+include = ["profile.toml"]

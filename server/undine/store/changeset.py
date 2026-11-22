@@ -28,6 +28,14 @@ not touched until a human applies the changeset:
   state (tip.json) live beside the worktrees, in .../<id>, never in them. The records after the base are parsed once
   per change of a log file (_records_after): a poll of the activity, the review and the timeline does not parse the
   project's whole history again.
+* dependency operations (dep_op, pdk_set; docs/design/packages.md, Changesets and evidence): deps.add / update /
+  remove and Project.set_pdk on the working copy, never the project nor the baseline, fetched under the working copy's
+  own dependency lock, committed under _DepGuard (the changesets' lock, then the server's) and recorded in the working
+  copy's project log, history/@project.jsonl (PROJECT_LOG: no library, read with them by _log_names), each record with
+  project.json and undine.lock before and after. Restore takes them back and installs from the store (Busy while an
+  operation of the changeset fetches); the adopt merges both files entry by entry (vcs/depmerge.py), refuses a lock
+  entry neither in the store nor installed, and once written installs the merged lock offline (_install_deps;
+  merging.json's "install" / "installed", so a recovery installs too).
 * commits (_commit_tip): the working copy is committed onto the branch, its open layouts saved first, when the
   writer's lease ends (Server.lease_ended), before the checks run, and before it is applied or discarded. Not while
   someone else holds the lease: its end commits. While open the branch's tip is in tip.json (the record has other
@@ -190,6 +198,12 @@ HASHERS = 4                           # threads that hash the evidence (hashlib 
 # a hard link refused (another file system; one that has none; the system's rules on links): the file is copied
 _NO_LINK = {errno.EXDEV, errno.EPERM, errno.EACCES, errno.EMLINK, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS}
 _VERB = {"apply": "applied", "discard": "discarded", "revert": "reverted"}
+# the project-level operation log, history/@project.jsonl: the dependency operations (dep_add, dep_update, dep_remove,
+# pdk_set), which change project.json and undine.lock, not a library. No library can have the name (project.NAME_RE
+# allows no "@"), so a reader of the libraries' logs never takes it for one
+PROJECT_LOG = "@project"
+# a dependency operation of a changeset: its record's op and its effect's "do"
+_DEP_OPS = {"add": ("dep_add", "add"), "update": ("dep_update", "mod"), "remove": ("dep_remove", "del")}
 OLD_FORM = ("changeset {cid} is a copy made before changesets were git branches: it can be reviewed and discarded; "
             "to apply it, open the proposal again as a new changeset")
 
@@ -254,6 +268,16 @@ def _walk(top: Path) -> tuple[list[str], list[tuple[str, Path, bool, os.stat_res
             if statmod.S_ISREG(st.st_mode):
                 files.append((os.path.normpath(os.path.join(rd, n)), Path(p), via[rd] or os.path.islink(p), st))
     return folders, files
+
+
+def _about_of(status: Path) -> dict:
+    """{"about": what the job used} from its status.json (provenance.about); {} for a job from before it was
+    recorded, or a status that cannot be read."""
+    try:
+        about = json.loads(status.read_text()).get("about")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {"about": about} if isinstance(about, dict) else {}
 
 
 def _sha(path: Path, progress: live.Closing) -> str:
@@ -561,6 +585,134 @@ def _add(plan: dict, path: str, conflict: dict) -> None:
     entry["conflicts"].append(conflict)
 
 
+def _dep_files(d: Path) -> dict:
+    """project.json and undine.lock of the project directory `d`, parsed (the lock None: it has none), as a dependency
+    operation's record keeps them before and after ({k: "d"} effects)."""
+    lock = d / deps.LOCK
+    return {"project": json.loads((d / "project.json").read_text()),
+            "lock": json.loads(lock.read_text()) if lock.is_file() else None}
+
+
+_NONE = object()
+
+
+def _unapply(cur: dict, before: dict, after: dict) -> dict:
+    """project.json `cur` with what an operation changed from `before` to `after` taken back, key by key (a library
+    entry by entry): what it did not change stays as `cur` has it (a library made since, in the same restore)."""
+    out = dict(cur)
+    for k in dict.fromkeys([*before, *after]):
+        b, a = before.get(k, _NONE), after.get(k, _NONE)
+        if b == a:
+            continue
+        if k == "libraries" and isinstance(b, dict) and isinstance(a, dict) and isinstance(cur.get(k), dict):
+            libs = dict(cur[k])
+            for n in dict.fromkeys([*b, *a]):
+                if b.get(n, _NONE) != a.get(n, _NONE):
+                    if n in b:
+                        libs[n] = b[n]
+                    else:
+                        libs.pop(n, None)
+            out[k] = libs
+        elif b is _NONE:
+            out.pop(k, None)
+        else:
+            out[k] = b
+    return out
+
+
+def _sync_offline(srv, project: str, wait: bool) -> list[dict]:
+    """deps.sync of `project` (a working copy too) from the store only (offline), under the server's lock, with the
+    server's --dep-root / --dep-host; a project with no undine.lock is left with none (sync writes one: removed
+    again). `wait` False: deps.DepsBusy, nothing done, while another operation holds its dependency lock."""
+    prj = srv.project(project)
+    had_lock = (prj.path / deps.LOCK).is_file()
+    try:
+        return deps.sync(prj, guard=srv.lock, local_roots=srv.dep_roots, offline=True, hosts=srv.dep_hosts,
+                         wait=wait)
+    finally:
+        if not had_lock:
+            with deps.meta_lock(prj.path):
+                (prj.path / deps.LOCK).unlink(missing_ok=True)
+
+
+def _pdk_moved(effects: list[dict]) -> bool:
+    """Whether dependency effects ({k: "d"}) change project.json's PDK (a pdk_set, or a restore that undid one)."""
+    return any(e["before"]["project"].get("pdk") != e["after"]["project"].get("pdk") for e in effects)
+
+
+def _installed_names(d: Path) -> set[str]:
+    """The local names installed in the project directory `d` (.undine/deps/<name>; not a staging or old one)."""
+    root = d / deps.DEPS
+    if root.is_symlink() or not root.is_dir():
+        return set()
+    return {p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith(".") and not p.name.endswith(".old")}
+
+
+class _DepGuard:
+    """The `guard` a dependency operation of a changeset's working copy commits under (deps._committing takes
+    meta_lock after it): the changesets' lock, then the server's, in that order (as an apply takes them), with the
+    changeset checked again (open, no interrupted merge, the write lease the caller's), since the operation fetched
+    without them, and project.json and undine.lock read (`before`). Leaving it after the operation wrote them, the
+    locks still held, appends its record to the working copy's project log (PROJECT_LOG): {op, args, actor, reason,
+    cell: null, view: null, effects: [{k: "d", do, name, before, after, state: "installed"}]}, each file parsed
+    whole. Re-entrant (an operation committing more than once: a record each); never held across a fetch, so a
+    restore or an apply never waits for one."""
+
+    def __init__(self, cs: "Changesets", project: str, cid: str, op: str, args: dict, actor: str, reason: str,
+                 do: str, name: str | None):
+        self.cs, self.project, self.cid = cs, project, cid
+        self.op, self.args, self.actor, self.reason, self.do, self.name = op, args, actor, reason, do, name
+        self.depth = 0
+        self.records: list[dict] = []
+
+    def __enter__(self) -> "_DepGuard":
+        srv = self.cs.srv
+        srv.changeset_lock.acquire()
+        try:
+            srv.lock.acquire()
+            try:
+                if self.depth == 0:
+                    meta = self.cs._record(self.project, self.cid)
+                    self.cs._check_open(meta)
+                    self.cs._check_merging(self.project, self.cid)
+                    self.log = srv.oplog(meta["preview"], PROJECT_LOG)
+                    self.log.guard()
+                    self.path = srv.project(meta["preview"]).path
+                    self.before = _dep_files(self.path)
+            except BaseException:
+                srv.lock.release()
+                raise
+        except BaseException:
+            srv.changeset_lock.release()
+            raise
+        self.depth += 1
+        return self
+
+    def __exit__(self, et, ev, tb) -> bool:
+        srv = self.cs.srv
+        try:
+            self.depth -= 1
+            if self.depth == 0 and et is None:
+                after = _dep_files(self.path)
+                if after != self.before:
+                    e = {"k": "d", "do": self.do, "name": self.name, "before": self.before, "after": after,
+                         "state": "installed"}
+                    if self.op == "pdk_set":
+                        e["pdk"] = [self.before["project"].get("pdk"), after["project"].get("pdk")]
+                    self.records.append(self.log.append({
+                        "op": self.op, "args": self.args, "actor": self.actor, "reason": self.reason,
+                        "changeset": self.cid, "cell": None, "view": None, "effects": [e]}))
+        finally:
+            srv.lock.release()
+            srv.changeset_lock.release()
+        return False
+
+    def public(self) -> dict | None:
+        """The operation as recorded ({gseq, opid} of its last record); None: it changed nothing."""
+        r = self.records[-1] if self.records else None
+        return {"gseq": r.get("gseq"), "opid": r.get("opid")} if r else None
+
+
 @dataclasses.dataclass(frozen=True)
 class Preview:
     """Where a changeset's working copy and baseline are (Server.project), and what their logs start from."""
@@ -637,6 +789,14 @@ class Changesets:
             raise KeyError(f"no changeset {cid}")
         return json.loads(p.read_text())
 
+    def _record(self, project: str, cid: str) -> dict:
+        """The record as it is on disk, with nothing tidied first (_load does that): what a check under the
+        changesets' lock reads (_DepGuard)."""
+        p = self._dir(project) / f"{cid}.json"
+        if not CID.fullmatch(cid) or not p.is_file():
+            raise KeyError(f"no changeset {cid}")
+        return json.loads(p.read_text())
+
     def _save(self, project: str, meta: dict) -> dict:
         path = self._dir(project) / f"{meta['id']}.json"
         tmp = path.with_suffix(".json.tmp")
@@ -668,6 +828,11 @@ class Changesets:
             except (KeyError, ValueError):
                 pass
         return libs
+
+    def _log_names(self, meta: dict) -> list[str]:
+        """The logs that hold the changeset's records: its libraries' (_libs), then the project log (PROJECT_LOG: the
+        dependency operations), which is no library (no editor, layout or restore group is made for it)."""
+        return [*self._libs(meta), PROJECT_LOG]
 
     # ------------------------------------------------------------------ the branch
 
@@ -1133,7 +1298,8 @@ class Changesets:
         recorded with its hash is not read at all (_known_hashes). Whether the proposal changed meanwhile is told by
         the stamps of its files ("sources": {path: provenance.stamp} as saved), not by their bytes: the files and their
         stamps, the operations and the branch's tip are compared once all is saved, and the files again at the
-        cleanup.
+        cleanup. The manifest names what each side used, from its undine.lock: "packages" (provenance.lock_packages)
+        and "pdk" (provenance.pdk_about), {side: ...}; each job row carries the job's "about" when it recorded one.
         The closure's progress (live.Closing): phase "evidence", files and bytes (copied or hashed) done of how many.
         """
         sources = [(side, meta[key], self.srv.project(meta[key]).path)
@@ -1190,10 +1356,18 @@ class Changesets:
             # Include status.json itself: it contains the recorded input hashes and the verdict.
             found = {**hashed, **known, **copied}
             manifest["files"] = {rel: found[rel] for rel in sorted(stamps)}
+            # what each side used, from the undine.lock archived: the packages it pins and the PDK (information: the
+            # files are in "files" by hash); each job with its own (provenance.about)
+            manifest["packages"], manifest["pdk"] = {}, {}
+            for side, name, _ in sources:
+                lock = provenance.read_lock(stage / side)
+                manifest["packages"][side] = provenance.lock_packages(lock)
+                manifest["pdk"][side] = provenance.pdk_about(self.srv.project(name).pdk, lock)
             for side, name, _ in sources:
                 for path in sorted((stage / side / "runs").glob("*/status.json")):
                     manifest["jobs"].append({"side": side, "project": name, "id": path.parent.name,
-                                             "path": str(path.parent.relative_to(stage))})
+                                             "path": str(path.parent.relative_to(stage)),
+                                             **_about_of(path)})
             self._ensure_idle(sources)
             if self.changes(project, meta) != manifest["changes"] or self._stamps(sources, dirs) != stamps \
                     or (meta.get("git") and self._branch_tip(project, meta) != manifest["commits"]["tip"]):
@@ -1297,10 +1471,14 @@ class Changesets:
             return
         d = self.srv.project(project).path
         files = state.get("files") or {}
+        installed: dict = {}
         with self._project_locked(project, list(files)) as dbs, branches.lock(d):
             done = bool(state.get("written")) or state.get("paths") is not None \
                 or all(self._is_merged(d / rel, x) for rel, x in files.items())
             if done:
+                if state.get("install") and not state.get("installed"):     # as the merge does, before the netlists
+                    installed = self._install_deps(project)
+                    installed.pop("rewrote", None)
                 paths = state.get("paths")
                 if paths is None:                    # killed before the netlists were read again
                     paths = sorted(set(files) | self._sync_netlists(project, sorted(files)))
@@ -1327,7 +1505,7 @@ class Changesets:
                       "changed since", file=sys.stderr)
             return
         out = {"t": state.get("t"), "by": state.get("by"), "commit": commit,
-               **self._left(commit, paths, state.get("head"), state.get("clean")), "paths": sorted(paths)}
+               **self._left(commit, paths, state.get("head"), state.get("clean")), "paths": sorted(paths), **installed}
         meta.update({k: v for k, v in (state.get("record") or {}).items() if v is not None})
         self._note(meta, None)                       # an earlier try's, taken back: this one is done
         if revert:
@@ -1589,7 +1767,7 @@ class Changesets:
     def _all_records(self, meta: dict) -> list[tuple[str, dict]]:
         """(lib, record) of the working copy in changeset order (gseq), across its libraries: the changeset's own,
         after the base (oplog.py's floor)."""
-        out = [(lib, r) for lib in self._libs(meta) for r in self._own(meta["preview"], lib) if r.get("gseq")]
+        out = [(lib, r) for lib in self._log_names(meta) for r in self._own(meta["preview"], lib) if r.get("gseq")]
         return sorted(out, key=lambda x: x[1]["gseq"])
 
     def _own(self, name: str, lib: str) -> list[dict]:
@@ -1623,7 +1801,7 @@ class Changesets:
         meta = self._load(project, cid)
         if meta["status"] != "open":
             return {"ops": [], "turns": {}, "checkpoints": []}
-        libs = self._libs(meta)
+        libs = self._log_names(meta)
         net = {(lib, r["seq"]) for lib in libs for r in self._records(meta["preview"], lib)}
         logs = {lib: {x["seq"]: x for x in self._own(meta["preview"], lib)} for lib in libs}
         ops: list[dict] = []
@@ -1704,7 +1882,13 @@ class Changesets:
         checkpoint comes back. Cells created after `to` are removed when they are back to how they were created and
         nothing that remains refers to them, and so are libraries created after it, with their logs, once nothing of
         theirs remains. All or nothing: the working copy's files and logs are snapshotted first and put back if any
-        step fails."""
+        step fails.
+
+        Dependency operations (the project log's {k: "d"} records) are taken back newest first, project.json key by key
+        and undine.lock whole as each record had them before, recorded as one `restore` record of the project log,
+        then installed from the store (an offline deps.sync of the working copy). A dependency operation of the
+        changeset still running (it holds the working copy's dependency lock and waits for the changesets' lock that
+        this holds) makes it Busy, nothing changed, rather than both waiting for ever."""
         meta = self._load(project, cid)
         self._check_open(meta)
         self._check_writer(cid)
@@ -1713,8 +1897,9 @@ class Changesets:
         ends = [0] + [r["gseq"] for i, (_, r) in enumerate(recs) if i + 1 == len(recs) or recs[i + 1][1].get("opid") != r.get("opid")]
         if not recs or to not in ends or to >= recs[-1][1]["gseq"]:
             raise ChangesetError(f"{to} is not a point this changeset can be restored to (the end of an earlier operation)")
-        logs = {lib: {x["seq"]: x for x in self._own(work, lib)} for lib in self._libs(meta)}
+        logs = {lib: {x["seq"]: x for x in self._own(work, lib)} for lib in self._log_names(meta)}
         groups: dict[tuple, list[dict]] = {}      # (lib, view, cell) -> effects to apply, in order
+        dep_undo: list[dict] = []                 # the dependency operations' effects to take back, newest first
         made_views: list[tuple[str, str, str, str]] = []
         made_cells: list[tuple[str, str, str | None]] = []
         made_libs: list[str] = []
@@ -1730,6 +1915,9 @@ class Changesets:
                     elif e["k"] == "c" and e["do"] == "del" and e.get("kept"):
                         deleted.setdefault((lib, "layout", e["cell"]), r["gseq"])
         for lib, r in reversed([x for x in recs if x[1]["gseq"] > to]):
+            if lib == PROJECT_LOG:                 # no editor: project.json and undine.lock as they were (_undo_deps)
+                dep_undo += [e for e in reversed(r.get("effects") or []) if e.get("k") == "d"]
+                continue
             remade: list[dict] = []
             if r["op"] == "undo":
                 orig = logs[lib].get(r.get("of")) or {}
@@ -1764,6 +1952,11 @@ class Changesets:
             key = (lib, "layout", None) if view == "layout" else (lib, view, orig.get("cell") or r.get("cell"))
             groups.setdefault(key, []).extend(eff)
         m = {"op": "restore", "args": {"to": to}, "to": to, "actor": actor, "reason": f"restore to checkpoint {to}", "changeset": cid}
+        if dep_undo:                                   # before anything changes: a dependency operation running?
+            try:
+                deps.deps_idle(self.srv.project(work).path)
+            except deps.DepsBusy as e:
+                raise Busy(f"a dependency operation of {cid} is running: restore when it has finished ({e})") from e
         wroot, snap, names = self._snapshot(meta, ".restore-")
         try:
             with live.operation():
@@ -1778,17 +1971,51 @@ class Changesets:
                 dropped = self._drop_made(work, made_views, made_cells, m, made_libs)
                 if dropped:                                    # their records went with them: numbering goes on past
                     live.raise_floor(self._floor_dir(meta), recs[-1][1]["gseq"])
+                if dep_undo and self._undo_deps(work, dep_undo, m):
+                    dropped = dropped | {PROJECT_LOG}           # its restore record says so already
                 for lib in sorted({lib for lib, r in recs if r["gseq"] > to} - dropped):    # every library the restore covers says so
                     self.srv.oplog(work, lib).append({**m, "cell": None, "view": None, "effects": []})
+                if dep_undo:                                   # last: all or nothing, so nothing to put back after it
+                    _sync_offline(self.srv, work, wait=False)  # a state with no lock gets none
+                    self.srv.deps_changed(work)
+                    if _pdk_moved(dep_undo):                   # its layouts and editors hold the PDK taken back
+                        self._forget(project, cid)
         except Exception as e:
             self._forget(project, cid)                       # cached editors / layouts hold the failed state
             self._put_files_back(wroot, snap, names)
             if isinstance(e, live.WriteLocked):
                 raise
+            if isinstance(e, deps.DepsBusy):
+                raise Busy(f"a dependency operation of {cid} is running: restore when it has finished ({e}); "
+                           "nothing was changed") from e
             raise ChangesetError(f"cannot restore to checkpoint {to}: {e}; nothing was changed") from e
         finally:
             shutil.rmtree(snap, ignore_errors=True)
         return self.get(project, cid)
+
+    def _undo_deps(self, work: str, effects: list[dict], m: dict) -> bool:
+        """Takes back the dependency operations' effects (newest first) in the working copy `work`: project.json key by
+        key (_unapply), undine.lock as the oldest of them had it before (none: removed), written under meta_lock and
+        recorded as restore record `m` of the project log with both files before and after. Returns whether it
+        changed anything. Installing is the caller's (an offline deps.sync)."""
+        d = self.srv.project(work).path
+        with deps.meta_lock(d):
+            before = _dep_files(d)
+            meta, lock = before["project"], before["lock"]
+            for e in effects:
+                meta = _unapply(meta, e["before"]["project"], e["after"]["project"])
+                lock = e["before"]["lock"]
+            (d / "project.json").write_text(json.dumps(meta, indent=2) + "\n")
+            if lock is None:
+                (d / deps.LOCK).unlink(missing_ok=True)
+            else:
+                deps.write_lock(d, lock)
+            after = _dep_files(d)
+        if after == before:
+            return False
+        self.srv.oplog(work, PROJECT_LOG).append({**m, "cell": None, "view": None, "effects": [
+            {"k": "d", "do": "mod", "name": None, "before": before, "after": after, "state": "installed"}]})
+        return True
 
     def _drop_made(self, work: str, views: list, cells: list, m: dict, libs: list = ()) -> set[str]:
         """Removes what the operations after the checkpoint created, if unchanged and unused; returns the libraries it
@@ -1867,6 +2094,76 @@ class Changesets:
             prj.save()
             dropped.add(lib)
         return dropped
+
+    # ------------------------------------------------------------------ dependency operations (docs/design/packages.md)
+
+    @staticmethod
+    def _real_of(project: str) -> str:
+        """The project of a dependency operation's request: a preview's name stands for it; its baseline is refused
+        (read-only: an install there would be swapped in before Baseline.save refused the write)."""
+        if project.count("~") == 2:
+            raise PermissionError("the proposal baseline is read-only: change the dependencies in its working copy")
+        return project.split("~", 1)[0]
+
+    def _writable(self, project: str, cid: str) -> tuple[dict, object]:
+        """(the record, the working copy) of a changeset a dependency operation may change: open, on git, no
+        interrupted merge, no other writer (checked again at the commit: _DepGuard)."""
+        meta = self._load(project, cid)
+        self._check_open(meta)
+        if not meta.get("git"):
+            raise ChangesetError(OLD_FORM.format(cid=cid))
+        self._check_merging(project, cid)
+        self.srv.oplog(meta["preview"], PROJECT_LOG).guard()       # the write lease (409 busy): before any fetch
+        return meta, self.srv.project(meta["preview"])
+
+    def dep_op(self, project: str, cid: str, action: str, args: dict, actor: str = "user", reason: str = "", *,
+               local_roots: list[Path] | None = None, hosts=()) -> dict:
+        """A dependency operation in the changeset's working copy (docs/design/packages.md, Changesets and evidence):
+        `action` "add" (args: name, git, rev, subdir, package, version, index), "update" (name, rev, version) or
+        "remove" (name), run by deps.add / update / remove on the working copy, never on the project nor the
+        baseline. They fetch under the working copy's own dependency lock only, then commit under _DepGuard (the
+        changesets' lock and the server's, the changeset checked again), which records the operation in the working
+        copy's project log (PROJECT_LOG; restore takes it back, the adopt merges it). `local_roots`, `hosts`: as
+        deps.add's (serve --dep-root, --dep-host). Returns {changeset, op: {gseq, opid} (None: nothing changed),
+        result: what the deps call returned}. Refusals are the deps ones (ResolveError, NotDirect, DepError ...),
+        nothing changed."""
+        project = self._real_of(project)
+        if action not in _DEP_OPS:
+            raise ChangesetError(f"unknown dependency operation {action!r} (add, update, remove)")
+        name = args.get("name")
+        if not isinstance(name, str) or not name:
+            raise ChangesetError("a dependency operation names the dependency (name)")
+        if action == "add" and not args.get("git") and not args.get("package"):
+            raise ChangesetError("give `git` (a repository) or `package` (a package from an index)")
+        meta, prj = self._writable(project, cid)
+        op, do = _DEP_OPS[action]
+        guard = _DepGuard(self, project, cid, op, {k: v for k, v in args.items() if v is not None}, actor, reason,
+                          do, name)
+        if action == "add":
+            result = deps.add(prj, name, args.get("git"), args.get("rev"), args.get("subdir"), guard=guard,
+                              local_roots=local_roots, package=args.get("package"), version=args.get("version"),
+                              index=args.get("index"), hosts=hosts)
+        elif action == "update":
+            result = deps.update(prj, name, args.get("rev"), guard=guard, local_roots=local_roots,
+                                 version=args.get("version"), hosts=hosts)
+        else:
+            result = {"ok": True, **deps.remove(prj, name, guard=guard)}
+        self.srv.deps_changed(meta["preview"])         # packages it moved under names already open
+        return {"changeset": cid, "op": guard.public(), "result": result}
+
+    def pdk_set(self, project: str, cid: str, spec: str, actor: str = "user", reason: str = "") -> dict:
+        """Pins the changeset's working copy to another PDK (Project.set_pdk under _DepGuard, recorded as `pdk_set` in
+        its project log, the effect's "pdk": [old id, new id]); the working copy's cached layouts and editors
+        forgotten (they hold the old PDK). Returns {changeset, op, old, new, created}."""
+        project = self._real_of(project)
+        meta, prj = self._writable(project, cid)
+        guard = _DepGuard(self, project, cid, "pdk_set", {"pdk": spec}, actor, reason, "mod", None)
+        prepared = prj.prepare_pdk(spec)      # the tools' versions, a PDK hashed: not under the locks
+        with guard:
+            move = prj.set_pdk(spec, prepared)
+        self._forget(project, cid)
+        old, new = move
+        return {"changeset": cid, "op": guard.public(), "old": old, "new": new, "created": move.created}
 
     # ------------------------------------------------------------------ several edits as one step (batch)
 
@@ -1951,7 +2248,7 @@ class Changesets:
         """The recorded operations still in effect in the working copy, per library."""
         work = meta["preview"]
         out = []
-        for lib in self._libs(meta):
+        for lib in self._log_names(meta):
             recs = self._records(work, lib)
             if recs:
                 out.append({"lib": lib, "ops": self.link_causes([{k: r.get(k) for k in
@@ -2027,8 +2324,10 @@ class Changesets:
     def evidence(self, project: str, cid: str, check: bool = False) -> dict:
         """A closed changeset's evidence: {"path", "captured", "commits"?, "size" (now: _evidence_size),
         "bytes" (as captured), "linked", "pruned" (the manifest's notes), "jobs": the manifest's, each with "pruned":
-        its files a prune removed}; with `check`, "check": {"ok": how many files still have their hash, "pruned",
-        "missing", "changed": [path in the evidence]}: a file a prune removed is said to be pruned, not missing."""
+        its files a prune removed and "about" (what it used: provenance.about) when it recorded one, "packages" and
+        "pdk": {side: what that side's undine.lock pins} (a manifest from before them has neither)}; with `check`,
+        "check": {"ok": how many files still have their hash, "pruned", "missing", "changed": [path in the evidence]}:
+        a file a prune removed is said to be pruned, not missing."""
         meta = self._load(project, cid)
         d, manifest = self._manifest(project, meta)
         pruned = self._pruned(manifest)
@@ -2036,7 +2335,8 @@ class Changesets:
                 for j in manifest.get("jobs") or []]
         out = {"path": meta["evidence"].get("path"), "captured": manifest.get("captured"), "size": _evidence_size(d),
                "bytes": manifest.get("bytes"), "linked": manifest.get("linked"), "pruned": manifest.get("pruned") or [],
-               "jobs": jobs, **({"commits": manifest["commits"]} if "commits" in manifest else {})}
+               "jobs": jobs, **({"commits": manifest["commits"]} if "commits" in manifest else {}),
+               **{k: manifest[k] for k in ("packages", "pdk") if k in manifest}}
         if check:
             res = {"ok": 0, "pruned": [], "missing": [], "changed": []}
             present = [(rel, sha) for rel, sha in sorted(manifest.get("files", {}).items())
@@ -2396,7 +2696,8 @@ class Changesets:
         commit = None
         state_file = self._merging_file(project, cid)
         changed = self._diff_paths(d, base, theirs)
-        watch = sorted(set(changed) | {f"history/{lib}.jsonl" for lib in set(_lib_dirs(prj)) | set(meta.get("libs") or [])})
+        watch = sorted(set(changed) | {f"history/{lib}.jsonl"
+                                       for lib in set(_lib_dirs(prj)) | set(meta.get("libs") or []) | {PROJECT_LOG}})
         with self._project_locked(project, changed) as dbs, branches.lock(d) as repo:
             clean = branches.is_clean(d)                     # before anything is written (a save neither)
             seen = self._digests(d, watch)                   # the project's files as the plan merges them ("ours")
@@ -2413,13 +2714,14 @@ class Changesets:
                 # project.json / undine.lock also kept from the CLI's lib commands and a dependency operation
                 # (deps.meta_lock) from the compare-and-swap to the write
                 meta_files = deps.LOCK in writes or "project.json" in writes
+                install, pdk_moved = self._meta_change(d, writes) if meta_files else (False, False)
                 with deps.meta_lock(d) if meta_files else contextlib.nullcontext():
                     self._unchanged(d, writes, seen, cid, action)
                     message = self._merge_message(project, meta, action, actor, manifest)
                     # each file's digest before and after; a log's sizes too ("size": the merged log's, which records
                     # appended since leave in front; "ours_size": the project's log, which the merged one starts with)
                     state = {"action": action, "t": t, "by": actor, "theirs": theirs, "head": repo.head, "clean": clean,
-                             "subject": message.split("\n", 1)[0],
+                             "subject": message.split("\n", 1)[0], "install": install,
                              "files": {rel: {"ours": seen[rel] if rel in seen else _file_digest(d / rel),
                                              "new": _digest(data), **self._sizes(d, rel, data)}
                                        for rel, data in sorted(writes.items())},
@@ -2437,7 +2739,13 @@ class Changesets:
                 raise
             state["written"] = True                          # all of it renamed in: a recovery finishes it
             self._write_merging(state_file, state)
-            paths = set(written) | {p for s in saved for p in s["paths"]} | self._sync_netlists(project, written)
+            installed = {}
+            if install:                  # meta_lock let go (sync takes it); before the netlists, which may place them
+                installed = self._install_deps(project)
+                state["installed"] = True
+                self._write_merging(state_file, state)
+            paths = set(written) | {p for s in saved for p in s["paths"]} | set(installed.pop("rewrote", [])) \
+                | self._sync_netlists(project, written)
             self._write_merging(state_file, {**state, "paths": sorted(paths)})
             for db in dbs.values():                         # held: nothing is drawn on the files as they were
                 self._reread_layout(db)
@@ -2449,10 +2757,99 @@ class Changesets:
                     print(f"undine: cannot commit the {action} of {cid}: {e}", file=sys.stderr)
                 else:
                     self._write_merging(state_file, {**state, "paths": sorted(paths), "commit": commit})
-        self._reread(project)
         out = {"t": t, "by": actor, "commit": commit, **self._left(commit, paths, repo.head, clean),
-               "paths": sorted(paths)}
+               "paths": sorted(paths), **installed}
+        if pdk_moved:                                        # its layouts and editors hold the old PDK
+            with self.srv.lock:
+                for k in [k for k in self.srv.dbs if k[0] == project]:
+                    del self.srv.dbs[k]
+                for k in [k for k in self.srv.editors if Path(k).is_relative_to(d)]:
+                    del self.srv.editors[k]
+        self._reread(project)
         return {**out, "kept": state["kept"]} if revert else out
+
+    @staticmethod
+    def _meta_change(d: Path, writes: dict) -> tuple[bool, bool]:
+        """What a merge's writes of project.json / undine.lock change: (whether what the project installs does:
+        undine.lock, or project.json's dependencies, a library from git or an index, the indexes; whether its PDK
+        does). A project.json change that leaves both (a library made) installs nothing, and never makes a lock."""
+        def read(data: bytes | None) -> dict | None:
+            try:
+                meta = json.loads(data) if data is not None else {}
+            except ValueError:
+                return None
+            return meta if isinstance(meta, dict) else None
+
+        def wanted(meta: dict | None) -> tuple:
+            if meta is None:
+                return (None,)
+            libs = meta.get("libraries") if isinstance(meta.get("libraries"), dict) else {}
+            return ({n: v for n, v in libs.items() if deps.is_dep(v)}, meta.get("indexes"))
+        if "project.json" not in writes:
+            return True, False
+        ours = read((d / "project.json").read_bytes() if (d / "project.json").is_file() else None)
+        new = read(writes["project.json"])
+        return (deps.LOCK in writes or wanted(ours) != wanted(new),
+                (ours or {}).get("pdk") != (new or {}).get("pdk"))
+
+    def _install_deps(self, project: str) -> dict:
+        """After a merge (an apply, a revert, or one an interrupted server left) that changed what the project
+        installs: everything installed as the merged lock pins, from the store (an offline deps.sync: nothing is
+        fetched at adopt, and _dependency_conflicts refused what the store does not have), the merge's own locks let
+        go (sync takes meta_lock). Returns {"deps": the sync's rows}, with "deps_dropped" [{"name", "used_by"}]
+        when local names went (a dependency the merge took out: the project's schematics that still place its
+        cells), and "deps_warning" (said, not raised: the merge is written, `lib sync` installs it later) when the
+        install failed, rewrote project.json or undine.lock, or a dropped dependency is still used. A project with
+        no lock gets none. It never waits for the project's dependency lock (the caller holds the changesets' lock
+        and the project's editors, layouts and logs): while another operation holds it (a `pkg add` fetching), the
+        install is left pending, "deps_pending": true, for `lib sync` (or the next adopt that installs) to do."""
+        prj = self.srv.project(project)
+        d = prj.path
+        names = _installed_names(d)
+        seen = self._digests(d, ("project.json", deps.LOCK))
+        out: dict = {}
+        warnings: list[str] = []
+        try:
+            out["deps"] = _sync_offline(self.srv, project, wait=False)
+        except deps.DepsBusy:
+            out["deps_pending"] = True
+            warnings.append(f"the dependencies are not installed yet: another operation on them was running; "
+                            f"`lib sync {project}` (or the next sync) installs them")
+        except Exception as e:
+            warnings.append(f"the dependencies were not installed after the merge ({e}); install them with "
+                            f"`lib sync {project}`")
+        finally:
+            self.srv.deps_changed(project)
+        rewrote = [rel for rel, digest in seen.items() if _file_digest(d / rel) != digest]
+        if rewrote:
+            warnings.append(f"installing rewrote {' and '.join(rewrote)} after the merge")
+            out["rewrote"] = rewrote
+        gone = sorted(names - _installed_names(d))
+        if gone:
+            out["deps_dropped"] = [{"name": n, "used_by": self._placing(prj, n)} for n in gone]
+            for x in out["deps_dropped"]:
+                if x["used_by"]:
+                    warnings.append(f"{x['name']} is no longer installed, but {', '.join(x['used_by'])} still "
+                                    "place its cells")
+        if warnings:
+            out["deps_warning"] = "; ".join(warnings)
+        return out
+
+    @staticmethod
+    def _placing(prj, name: str) -> list[str]:
+        """The project's schematics ("lib/cell") that place a cell of the dependency installed as `name` (a symbol
+        `name/<cell>.sym`)."""
+        out = []
+        for lib, lib_dir in _lib_dirs(prj).items():
+            for sch in sorted(lib_dir.glob("*.sch")):
+                try:
+                    comps = xschem.parse(sch.read_text(errors="replace")).comps
+                except Exception:
+                    continue
+                if any(c.embedded is None and "/" in c.sym and c.sym.split("/")[0] == name
+                       for c in comps):
+                    out.append(f"{lib}/{sch.stem}")
+        return out
 
     @staticmethod
     def _left(commit: str | None, paths, head: str | None, clean: bool | None) -> dict:
@@ -2544,7 +2941,7 @@ class Changesets:
             editors.update({Path(k): ed for k, ed in self.srv.editors.items()
                             if Path(k).is_relative_to(d) and Path(k) not in editors})     # intent, RTL, netlist
         dbs = self._layouts(project, libs)
-        logs = [self.srv.oplog(project, lib) for lib in libs]
+        logs = [self.srv.oplog(project, lib) for lib in [*libs, PROJECT_LOG]]
         with ExitStack() as stack:
             for _, ed in sorted(editors.items(), key=lambda kv: str(kv[0])):
                 stack.enter_context(ed.lock)
@@ -2562,6 +2959,7 @@ class Changesets:
         d = prj.path
         plan = branches.plan_merge(d, base, theirs, keep_added=revert)
         if revert:
+            self._drop_added_meta(prj, meta, plan, base)
             self._keep_libraries(prj, meta, plan, base, theirs)
         logs = [p for p in plan["paths"] if gitmerge.kind_of(p) == "log"]
         plan["writes"] = {p: v for p, v in plan["writes"].items() if p not in logs}
@@ -2583,7 +2981,8 @@ class Changesets:
         must still be a lock that pins what project.json asks (deps.merged_problems). A problem the merged files have
         and the project's own files (ours) do not is a conflict of undine.lock: the adopt is refused with the reason,
         nothing written. Nothing is resolved or fetched here: `lib lock` on the project, or an update in the
-        changeset, does that."""
+        changeset, does that. So is a lock entry the merge brings or changes whose files are neither in the store nor
+        installed as locked (deps.not_stored): the install after the adopt is from the store only."""
         d, rels = prj.path, ("project.json", deps.LOCK)
         if not any(r in plan["paths"] for r in rels) or any(c["path"] in rels for c in plan["conflicts"]):
             return
@@ -2605,10 +3004,37 @@ class Changesets:
         merged = {r: plan["writes"][r] if r in plan["writes"] else ours(r) for r in rels}
         before = set(problems(ours("project.json"), ours(deps.LOCK)))
         new = [p for p in problems(merged["project.json"], merged[deps.LOCK]) if p not in before]
+        try:                                         # installed after the adopt from the store only: all there?
+            was, now = (json.loads(x) if x is not None else None for x in (ours(deps.LOCK), merged[deps.LOCK]))
+            new += [f"{x} is not in the store: fetch it first (nothing is fetched at adopt)"
+                    for x in deps.not_stored(prj, was if isinstance(was, dict) else None,
+                                             now if isinstance(now, dict) else None)]
+        except ValueError:
+            pass                                     # an unreadable lock: problems() said so
         if new:
             plan["conflicts"].append({"path": deps.LOCK, "kind": "lock", "conflicts": [
                 {"id": f"resolve:{i}", "what": f"after merging project.json and {deps.LOCK}: {p}", "base": None,
                  "ours": None, "theirs": None, "taken": "ours", "resolved": False} for i, p in enumerate(new)]})
+
+    @staticmethod
+    def _drop_added_meta(prj, meta: dict, plan: dict, tip: str) -> None:
+        """A revert keeps the files the changeset added, but not undine.lock or project.json: a lock the changeset
+        made (its first dependency, a Set PDK in a project with none) goes with it, or the project keeps pinning what
+        the revert took back. Removed when it is still as the changeset left it; changed in the project since, it
+        is a conflict (nothing written)."""
+        d, prefix = prj.path, meta["git"].get("prefix") or ""
+        for rel in [r for r in plan["kept"] if r in ("project.json", deps.LOCK)]:
+            plan["kept"].remove(rel)
+            now = (d / rel).read_bytes() if (d / rel).is_file() else None
+            if now is None:
+                continue
+            plan["paths"].append(rel)
+            added = _blob(d, prefix, tip, rel)
+            if now == added:
+                plan["writes"][rel] = None
+            else:
+                _add(plan, rel, _whole(meta["id"], f"{rel}: the changeset added it, and it changed in the project "
+                                       "since", added, now, None))
 
     @staticmethod
     def _keep_libraries(prj, meta: dict, plan: dict, tip: str, base: str) -> None:
@@ -2664,7 +3090,8 @@ class Changesets:
         revert's those its apply put in the project's log (tagged with it, "merged_seq")."""
         d, g, cid = prj.path, meta["git"], meta["id"]
         floor = g.get("base_seq") or {}
-        libs = sorted(set(meta.get("libs") or []) | set(_lib_dirs(prj))) if revert else self._libs(meta)
+        libs = sorted(set(meta.get("libs") or []) | set(_lib_dirs(prj)) | {PROJECT_LOG}) if revert \
+            else self._log_names(meta)
         out = {}
         for lib in libs:
             data = _blob(d, g.get("prefix") or "", tip, f"history/{lib}.jsonl")
@@ -2842,8 +3269,11 @@ class Changesets:
     @staticmethod
     def _touched(prj, plan: dict) -> set[str]:
         """The project's libraries a merge writes into: those whose log the changeset wrote, and those it writes a file
-        of (they get the merge record, and their layouts are saved first)."""
+        of (they get the merge record, and their layouts are saved first); and the project log (PROJECT_LOG) when it
+        writes project.json or undine.lock."""
         libs = {Path(p).stem for p in plan["logs"]}
+        if "project.json" in plan["writes"] or deps.LOCK in plan["writes"]:
+            libs.add(PROJECT_LOG)
         dirs = _lib_dirs(prj)
         for rel in plan["writes"]:
             f = prj.path / rel

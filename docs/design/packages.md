@@ -56,7 +56,7 @@ to the cell body and the symbol it came from); [Phase 2 status](#phase-2-status)
 | process knowledge | `pdks/pdkprofile.py` | one Python `Profile` per family (layers, decks, models, PCell library, stack rules); not versioned with the PDK. Supported commits are written in three places (`pcell.SUPPORTED`, `pixi.toml`, `setup.sh`) |
 | tools | `tools.py:43-63`, `tools.py:116-131` | the lock compares version banners as text; which binary answers depends on the search order (`$UNDINE_TOOLS` or `~/undine-tools/bin` before `PATH`), so CLI and server can disagree. Here klayout answers 0.28.17 from `~/undine-tools/bin` while `/usr/bin` has 0.30.12, and neither is pixi's |
 | provenance | `store/provenance.py` | job inputs record cell content hashes (the netlist hash covers generated subcircuits, the layout hash copied cells), the PDK id, tool banners and the KLayout deck's SHA-256 (a changed deck makes results outdated). Model files, PCell code and the rest of the PDK are not hashed |
-| changesets, agents | `api.py:1592-1595`, `agent.py:20` | dependency changes are written straight into the project, refused in a changeset preview; agents cannot add dependencies. `project.json` and `undine.lock` merge as text (`merge.md`) |
+| changesets, agents | `api.py` (`_no_preview`), `agent.py:20` | dependency changes are written straight into the project, refused in a changeset preview; agents cannot add dependencies. `project.json` and `undine.lock` merge as text (`merge.md`) |
 | locking | `server/api.py`, `store/deps.py` | the server holds the server-wide `srv.lock` around dependency changes; the CLI holds no lock when it writes `project.json` and `undine.lock`, so a CLI and a server writing one project race. Since phase 0: a fetch holds only the project's `.undine/deps.lock`, and every writer of the two files (requests, the CLI, adopt and revert) takes `meta_lock`, an flock on `.undine/project.lock`; `srv.lock` is held only to swap the files in |
 
 Problems found on the way, fixed in [phase 0](#phases): `read_lock` accepts any `format`; `set-pdk` writes the lock
@@ -548,13 +548,13 @@ variant names: putting them in would rename every existing variant for nothing w
 
 ## PDK profiles as packages
 
-`pdkprofile.py` becomes data: one package per family (`profile_sky130`, `profile_gf180mcu`, `profile_ihp_sg13g2`) with
-`profile.toml` holding what `Profile` holds today (layers, metals, decks and options, Magic / Netgen files, models and
-corners, PCell library, stack rules, LVS elements, limits) and:
+`pdkprofile.py` becomes data: one package per ciel family (`profile_sky130`, `profile_gf180mcu`, `profile_ihp_sg13`)
+with `profile.toml` holding what `Profile` holds today (layers, metals, decks and options, Magic / Netgen files, models
+and corners, PCell library, stack rules, LVS elements, limits) and:
 
 ```toml
 schema = 1                 # the profile format; an Undine that does not know it refuses the profile
-undine = ">=0.2"           # the Undine versions that read this profile
+undine = ">=0.1.0"         # the Undine versions that read this profile
 
 [[pdk]]
 commit = "8afc8346a57fe1ab7934ba5a6056ea8b43078e71"
@@ -573,6 +573,34 @@ they record what Undine's own tests have run, not facts about the PDK. Undine sh
 the fallback with no index. A profile change (a deck option, a model path) is an update of the profile package,
 reviewed like any other; the profile fields a job uses are in its inputs (see [evidence](#changesets-and-evidence)),
 so results that used a changed field become outdated, and the others do not.
+
+*Implemented (phase 6, pdks/profiledata.py, pdks/formulas.py, pdks/tested.py):* one package per ciel family, not per
+process (decided): `profile_ihp_sg13`'s `profile.toml` has a `[[profile]]` for SG13G2 and one for SG13CMOS5L, each
+naming the PDK variants it describes. Undine's built-in copies are in undine-eda at
+`server/undine/data/profiles/<package>/`: an `undine-package.toml` (the package's name and version, 1.0.0 now, and
+`[files] include = ["profile.toml"]`) and the `profile.toml`, so that an index line's `subdir` can point at them and the
+built-in fallback is the published package byte for byte. A key is the `Profile` field of its name (`name` is
+`Profile.family`) and is converted by the field's annotation: a list becomes a tuple, a table a dataclass, an integer
+in a float field a float; an untyped table (`drc_options`, `lvs_options`, `rename`) keeps the TOML types, since a deck
+gets `str(value)`. Refused, each with its key path (`<where>: profile.toml: profile[0].stack.cuts[2].name: ...`): an
+unknown key (`verified` and `magic_drc` too, with a hint), a `schema` above 1, an `undine` range that leaves this Undine
+out, a formula or stack generator Undine does not have, an unknown `drc_switches`, a template placeholder the field
+does not fill (`{name.attr}` included), a regex that does not compile, a path that is absolute or has a `..` part, a
+PCell library whose module, function or library is not a dotted name or whose environment is not one of Undine's
+(`pcell`, `pcell-gf180`), a variant in two `[[profile]]` tables or of another family, a `[[pdk]]` commit listed twice,
+a tag of another family and a tree value that is not `sha256:<64 hex>`. Besides the named formula, a stack may come
+from a named, versioned generator (decided), as GF180's and IHP's do: `[profile.stack] generator = "gf180_stack@1"`
+with its arguments beside it (`thin`, `top`, `plate`; `ihp_stack@1` takes `thin` and `tops`); a changed rule is a new
+version of the generator. `verified` (Undine's tests ran the profile) and `magic_drc` come from Undine's table
+(`pdks/tested.py`) by family, profile version and profile name; a version it does not list is not verified and takes
+`magic_drc` from the newest version listed (decided). The built-in `[[pdk]]` entries are the tested commits (sky130
+`8afc8346a57f`, gf180mcu `792ef67037d7`, ihp-sg13 `89d42ee6d2fd`) with their licence; `compat` and `tree` are read and
+checked, and no built-in profile has them yet. The TOML files were written from the Python profiles, and
+`test_profile_data.py` compares the loaded profiles field by field, types included, with golden data saved from the
+Python before it was removed (`server/tests/data/profiles_golden.json`, rewritten by `profile_golden.py` after a
+deliberate change). `pcell.SUPPORTED` is gone: `profiledata.tested_commits(family)` gives a family's tested commits;
+`pick_pdk` prefers one of them for a bare PDK name (for GF180 and IHP too now), and `pixi run pdk` (`python -m undine
+pdk enable sky130`) and `setup.sh` (`python -m undine pdk tested FAMILY`) name no commit of their own.
 
 ## Licences
 
@@ -600,6 +628,20 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   copy and install into its `.undine/deps` from the store (hard links, cheap). The changeset can then place the new
   cells and run checks. The preview no longer refuses dependency changes. `dep_update` refreshes layout copies (see
   [Cells across versions](#cells-across-versions)).
+  *Implemented (phase 4, store/changeset.py: Changesets.dep_op, pdk_set):* the operation runs deps.add / update /
+  remove (Project.set_pdk) on the working copy, never on the project nor the baseline (refused before anything is
+  installed). It fetches under the working copy's own `.undine/deps.lock` and commits under a guard
+  (`_DepGuard`) that takes the changesets' lock and then the server's, checks the changeset again (open, no
+  interrupted merge, the write lease the caller's) and appends the record to the working copy's project log
+  `history/@project.jsonl` (a name no library can have, as `@` is not in a library name): `{op: dep_add | dep_update |
+  dep_remove | pdk_set, args, actor, reason, cell: null, view: null, effects: [{k: "d", do: add | mod | del, name,
+  before: {project, lock}, after: {project, lock}, state: "installed", pdk?: [old, new]}]}`, both files parsed
+  whole. The readers of a changeset's records (the timeline, the review's changes, restore, the adopt's records and
+  logs, the agent's write limit) take that log besides the libraries' without making it a library. Restore takes the
+  operations back newest first (project.json key by key, undine.lock as it was), records that as one `restore` record
+  of the project log and installs from the store (an offline sync of the working copy); while an operation of the
+  changeset still fetches, a restore is Busy rather than waiting (the operation waits for the changesets' lock that
+  the restore holds). `dep_update`'s refresh of layout copies is not built yet.
 - The review shows the lock diff, the update report above, licences, the download size, and the package's code blocks
   and RTL files (see [Security](#security)).
 - **Adopting** merges `project.json` (`libraries`, `indexes`, `pdk`) and `undine.lock` entry by entry, then resolves
@@ -613,9 +655,25 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   [merge.md](merge.md). "Resolves again" is, at adopt, a check from the merged files alone
   (`deps.merged_problems`: every requirement pinned as named, the locked graph complete): it fetches nothing and
   chooses no version, and a problem the project's files did not have before is a conflict of `undine.lock`, the adopt
-  refused with the reason. Installing after the adopt comes with the dependency operations in changesets.
+  refused with the reason. *Implemented (phase 4, the install):* a lock entry the merge brings or changes whose files
+  are neither in the store nor installed in the project as locked is a conflict of `undine.lock` too (`not in the
+  store: fetch it first`, deps.not_stored), so the adopt stays all or nothing with nothing fetched. Once the merged
+  files are written (meta_lock let go, before the netlists are read again), a merge that changed `undine.lock` or
+  project.json's dependencies installs them in the project with an offline deps.sync; a failure is said
+  (`deps_warning` in the record's `applied` / `reverted`), not a failed adopt. merging.json notes the install, so a
+  server stopped before it installs at its next start. The install never waits for the project's dependency lock
+  (it runs with the changesets' lock and the project's editors, layouts and logs held): while another operation holds
+  it, the install is left pending (`deps_pending`) for `lib sync`. A revert goes through the same merge, and takes an
+  `undine.lock` the changeset created back out: the dependency the
+  changeset added is uninstalled, and the cells of the project that still place its cells are named
+  (`deps_dropped`, `deps_warning`; [Decisions](#decisions) 19).
 - A person's own **Add** in the library browser makes the same operation in a small changeset and adopts it in one
   click, so there is one path.
+  *Implemented (phase 4, POST /api/p/{p}/deps/changeset):* the browser's Add (the git form and the Packages dialog),
+  Update, Remove and its move to another PDK each open a small changeset (git-setup first in a project in no
+  repository), run the operation in it and adopt it. An operation refused discards the changeset; an adopt refused
+  keeps it open for review (the 409's body names it) and the browser says so. The `/deps` routes and the CLI change the
+  project directly, as before.
 - **Agents** may propose `dep_add` / `dep_update` / `dep_remove` in their changeset, using the index clones as they
   are. They never fetch: when a tree is not in the store, the operation is recorded as *needs fetch* (URL, size) and
   the review shows a **Fetch** button. Only a person's confirmation fetches (see the token under
@@ -630,6 +688,19 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   files the netlist includes (`.lib` / `.include` targets and OSDI files, by hash) and the profile fields the job uses
   (deck options, deck variables, model paths). A changed README or an unrelated cell in a package, or a layer colour
   in a profile, makes nothing outdated.
+  *Implemented (phase 4, store/provenance.py):* inside `key`, a simulation's inputs gain `models` (every file its
+  netlist reads through `.lib` / `.include`, transitively, a `.lib` line by its section's files, and the OSDI files,
+  as `{path, sha}` of the original files, not the reduced copies; `modellib.files_read`; the hashes cached by path,
+  time and size) and `profile` (`model_lib`, `model_includes`, `osdi`, `corners`); KLayout DRC and LVS gain `profile`
+  (`drc_options` of the deck or `lvs_options`, and `deck_vars` of the PDK). Outside `key`, every job's status has
+  `about`: `packages` (`{name, package, version, tree | sha, index}` of each lock entry one of whose installs holds a
+  file the job read: its netlist's schematics and symbols, its model files, its layout's library), `pdk` (`{id,
+  commit, family, variant, tree}`, the tree being the lock's pin) and `profile` (`{family, source: "built-in",
+  undine}`; profile packages are phase 6). `recompute` gives `models` and `profile` only to a job that recorded them,
+  so a job from before stays fresh rather than unknown; `diff` says "model file X changed" and "profile field Y: a →
+  b". A changeset's evidence manifest lists each side's `packages` and `pdk` from its archived `undine.lock`, and each
+  job row carries the job's `about` ([Job provenance](../reference/data.md#job-provenance)). Magic DRC, Netgen LVS
+  and extraction record no profile fields (their setup files are not profile fields).
 
 ## UI, CLI, HTTP, agent tools
 
@@ -873,7 +944,7 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
 | 3. Index | index format, several indexes, the default index created (`kadomoto-lab/undine-index`), `pkg search / info / add / update / lock / outdated / tree / why`, version ranges, yank, remote-host policy and fetch size limit, library browser Packages section; `pkg licenses`, `pkg vendor` (also run by the tapeout export) and `pkg sync --from-vendor` | a `file://` index in a temporary directory; yanked skipped but kept when locked; private index named in `project.json`; a dependency without `index` comes from the declaring package's index; one name from two indexes refused; an unlisted host refused over HTTP without confirmation; a fetch over the size limit stopped; a vendored bundle, with the package repository deleted and the store emptied, installs the project again offline through `sync --from-vendor` with the locked trees; a vendored file changed by hand is refused; the tapeout bundle has `vendor/` and `report.json` lists it | **Done**, see [Phase 3 status](#phase-3-status) |
 | 4. Changesets and agents | dependency operations in changesets, review of a dependency change (code blocks and RTL listed), the confirmation token, the notice after a fetch, agent tools with the DATA rule, the merge rule for `project.json` and `undine.lock` in the git merge driver (`merge.md` updated), evidence with package and PDK information outside `key` and model files and profile fields inside it | add in a changeset, adopt, restore; an agent's add records *needs fetch*, never fetches, and continues after the person's fetch; no tool returns a token; two changesets adding different packages adopt in either order; conflicting requirements are refused at adopt; an update that changes one cell outdates only results that use that cell; a README change outdates nothing | **In progress**, see [Phase 4 status](#phase-4-status) |
 | 5. Publishing | `pkg init / check / pack / publish / yank`, `[checks]`, the check report and its link in the index line and PR, semver report, spec results in the report, `[renames]`, cell-level update report, refreshed layout copies, index CI workflow (no DRC / LVS) | publish refuses without a passing report for this tree, and the PR body links the report with its SHA-256; the index CI refuses a report whose SHA-256, commit or tree differs from the line; a renamed cell is reported as renamed and references rewritten; a removed pin or a moved layout pin needs a major version; a waived rule passes `check` and is shown; publish refuses a tree the repository does not serve; tag `<name>-v<version>` in a repository of two packages; after an update the copied cell is refreshed in the changeset and its LVS is outdated, and an edited copy is listed, not replaced | **In progress**, see [Phase 5 status](#phase-5-status) |
-| 6. PDK profiles | `profile.toml` per family with `schema` and `undine`, formula registry, profile packages in the index with expected PDK tree hashes, compatibility tags, `pcell.SUPPORTED` / `pixi.toml` / `setup.sh` read from them | data profile equals today's `Profile` for sky130, GF180, IHP; an unknown field is refused; a changed deck option outdates DRC results and a changed layer colour does not | **Planned** |
+| 6. PDK profiles | `profile.toml` per family with `schema` and `undine`, formula registry, profile packages in the index with expected PDK tree hashes, compatibility tags, `pcell.SUPPORTED` / `pixi.toml` / `setup.sh` read from them | data profile equals today's `Profile` for sky130, GF180, IHP; an unknown field is refused; a changed deck option outdates DRC results and a changed profile field no job reads (`label`, `limits`) does not | **In progress**, see [Phase 6 status](#phase-6-status) |
 
 ### Phase 0 status
 
@@ -885,7 +956,7 @@ the code when phase 0 was finished. Tests are in `server/tests/test_deps.py` unl
 | `format` checked on read | Done | `read_lock` (`store/deps.py:90-115`) refuses a larger integer `format` ("made by a newer Undine ... update Undine"), any other value but 1 ("which no Undine writes"), JSON that does not parse and JSON that is not an object, each with what to do and "nothing was changed"; a lock without `format` is read as 1. Every reader refuses it: `lib add` / `update` / `remove` / `sync` / `lock` / `status`, `set-pdk`, the `/deps` routes and `POST /pdk` (HTTP 400, the CLI one line and exit 1); `add` and `update` read it before fetching (`store/deps.py:402-472`), `remove` and `set_pdk` before `project.json` changes. Opening the project (`GET /api/p/{p}`) does not read it. Tests: `test_a_lock_of_a_newer_format_is_refused_by_every_operation_and_left_byte_for_byte`, `test_a_lock_of_a_newer_format_is_refused_over_http_and_by_the_cli`, `test_a_lock_without_format_is_read_as_format_1_and_a_broken_one_is_refused` |
 | `set-pdk` always writes the lock | Done | `Project.set_pdk` (`store/project.py:164-187`) writes `pdk` into `undine.lock` whenever the lock is missing or pins another PDK, also when `project.json` already names the new one; a project without a lock gets a new format 1 lock with the tool versions now, as `lib lock` would. The tools answer before `meta_lock` is taken. `cli.md`, `api.md` and `pdks.md` say so. Tests: `test_set_pdk_writes_the_lock_whether_or_not_the_project_has_one`, `test_set_pdk_over_http_and_from_the_cli_creates_a_missing_lock` |
 | `sync` removes dependencies gone from `project.json`; `status` reports leftovers | Done | `leftovers` (`store/deps.py:351-369`): a directory in `.undine/deps/` or a lock entry that `project.json` does not name, with its locked and installed commits. `sync` (`store/deps.py:488-550`) removes each with its lock entry and reports it as `removed`; one gone from `project.json` while `sync` fetches is left to the next sync, and a sync whose fetch fails removes nothing. `status` (`store/deps.py:597-611`) lists each as state `leftover` with an issue naming `lib sync` (so `ok` is false), and a lock key that is not a library name as an issue that `sync` leaves alone. `.undine/deps/` stays one entry of the symbol path (`Project.symbol_paths`, `store/project.py:237`, which says why), so a leftover's symbols resolve until `sync`; the netlist cache key covers every directory in `.undine/deps/` (`server/api.py:353-357`). The UI shows the state and offers sync first. Tests: `test_status_lists_a_dependency_gone_from_project_json_and_sync_removes_its_files_lock_entry_and_symbols`, `test_a_sync_that_fails_removes_no_leftover_either`, `test_the_cli_and_http_report_a_leftover_and_sync_removes_it`, `test_status_reports_a_leftovers_installed_commit_from_its_files_not_from_the_lock`, `test_the_netlist_hash_changes_when_sync_removes_a_leftover_a_testbench_places`, `test_sync_never_removes_a_directory_a_lock_key_names_outside_the_deps_folder`, and from phase 0 `test_what_changed_while_fetching_is_not_written_back` |
-| The project flock for the CLI and the server | Done | `meta_lock`, an flock on `.undine/project.lock` (`store/deps.py:110-115`), taken by `_committing` (`store/deps.py:238-244`), `relock`, `Project.editing` (`store/project.py:184-190`, also `set_pdk` and `create_library`) and a changeset's adopt or revert (`store/changeset.py:2401-2404`); `.undine/deps.lock` (`store/deps.py:118-121`) for one dependency operation at a time. Tests: `test_project_files_are_written_one_writer_at_a_time`, `test_meta_lock_holds_across_processes_and_a_rename`, `test_an_adopt_waits_for_a_writer_of_project_json`, `test_an_operation_that_waited_works_from_what_the_one_before_wrote` |
+| The project flock for the CLI and the server | Done | `meta_lock`, an flock on `.undine/project.lock` (`store/deps.py:110-115`), taken by `_committing` (`store/deps.py:238-244`), `relock`, `Project.editing` (`store/project.py:184-190`, also `set_pdk` and `create_library`) and a changeset's adopt or revert (`store/changeset.py`, `_merge`); `.undine/deps.lock` (`store/deps.py:118-121`) for one dependency operation at a time. Tests: `test_project_files_are_written_one_writer_at_a_time`, `test_meta_lock_holds_across_processes_and_a_rename`, `test_an_adopt_waits_for_a_writer_of_project_json`, `test_an_operation_that_waited_works_from_what_the_one_before_wrote` |
 | HTTP fetches outside `srv.lock` | Done | `add`, `update`, `sync` fetch under `.undine/deps.lock` only and take the caller's `guard` (`srv.lock`) to install and write (`store/deps.py:238-244`, `server/api.py:1654-1694`). Tests: `test_slow_fetch_does_not_stop_the_server`, `test_sync_is_all_or_nothing` |
 | `--dep-root` | Done | `serve --dep-root DIR` (`__main__.py:267-270`; repeatable, no default) into `Server.dep_roots` (`server/api.py:141-143`), passed as `local_roots` to `add`, `update` and `sync`. `_source` (`store/deps.py:206-263`, with `_local_path`, `_under_roots`, `_git_dirs`) checks every URL to fetch, from the request or from `project.json`, before the first fetch: a local one must be an existing directory whose real path, git directory and common directory are under a root, and git fetches from that git directory; a `file://` URL with a host, query or fragment is refused. The CLI passes no roots and takes any path. Also for the CLI: `_check_spec` and `_check_commit` (`store/deps.py:182-203`) refuse a `rev` or `subdir` part starting with `-` and a locked commit that is not a full hex id, `_own_dir` (`store/deps.py:384-391`) a name that is not a library name, and git gets `--end-of-options` and `--` (`_fetch`, `store/deps.py:266-310`). Not covered: `objects/info/alternates` in a repository under a root. Tests: `test_a_local_repository_is_refused_over_http_without_dep_root_and_the_cli_still_takes_it`, `test_a_local_repository_under_a_dep_root_is_added_updated_and_synced_over_http`, `test_a_path_that_escapes_the_dep_root_by_dotdot_or_a_symlink_is_refused_over_http`, `test_a_path_whose_git_directory_is_outside_the_dep_root_is_refused_over_http`, `test_sync_over_http_fetches_a_local_path_project_json_names_only_under_a_dep_root`, `test_serve_dep_root_is_repeatable_and_off_by_default`, `test_a_rev_or_a_lock_commit_that_git_would_read_as_an_option_is_refused_before_git_runs`, `test_a_subdir_that_looks_like_a_git_option_is_refused_before_anything_is_fetched` |
 | The netlister refuses two cells of one name with other content | Done | `spice` keeps the schematic behind each subcircuit name (`homes`, `schematics/schematic.py:630-633` and `654`, the top cell included); `same_name_check` (`schematics/schematic.py:563-584`) netlists a second cell of that name and raises `SameNameError` (`schematics/schematic.py:390`), naming both, unless it gives the same lines, which are written once. So every mode refuses it, and with it simulation, LVS, specs and sweeps. The vlsirtools backend runs `spice` first (`schematics/schematic.py:789`); the Xschem backend runs it with `XschemOrder` (`schematics/schematic.py:796-806`, Xschem's own symbol order) before looking for Xschem and stops only on that error (`schematics/schematic.py:815-823`). Some PDK launcher pages are now refused (sky130 `sky130_tests/top`, IHP `start_page`). Tests in `test_netlist.py`: `test_two_cells_of_one_name_with_other_content_are_refused_naming_both`, `test_the_xschem_backend_refuses_only_what_xschem_itself_would_netlist_as_one_cell`, `test_every_pdk_schematic_netlists_the_same_from_its_netlist_view`; the stand-in clash as before in `test_substitute.py` |
@@ -1160,13 +1231,46 @@ Phase 3 is done; symbol previews of a package's exported cells are left for late
 
 Built: the merge rule for `project.json` and `undine.lock` (vcs/depmerge.py) in the git merge driver and the
 changeset adopt, and the adopt's check of the merged pair (see [Changesets and evidence](#changesets-and-evidence)).
-Tests: `test_depmerge.py` (two changesets adding different dependencies adopt in either order; conflicting
-requirements refused; a merged pair that leaves the lock stale refused with the reason; a `git merge` of two branches
-through the driver).
+Tests: `test_depmerge.py` (two changesets adding different dependencies adopt in either order, and are installed;
+conflicting requirements refused; a merged pair that leaves the lock stale refused with the reason; a `git merge` of
+two branches through the driver).
 
-Still to build in phase 4: dependency operations in changesets (`dep_add` / `dep_update` / `dep_remove` / `pdk_set`
-in the working copy, installed after the adopt), their review, an agent's *needs fetch* and the person's fetch with
-the confirmation token and the notice, agent tools, and evidence with package and PDK information.
+Built: dependency operations in changesets (`dep_add` / `dep_update` / `dep_remove` / `pdk_set` in the working copy,
+recorded in its project log, taken back by restore), the install after the adopt and after a revert (from the store,
+an entry the store lacks refused at adopt, an interrupted install finished at the next start), the browser's
+one-click Add, Update, Remove and Set PDK (`POST /deps/changeset`), and `POST /changesets/{id}/deps` and `/pdk`
+(see [Changesets and evidence](#changesets-and-evidence) and the [HTTP API](../reference/api.md#changesets)). Tests:
+`test_pkg_changesets.py` (add in a changeset, adopt, restore; never writing through the working copy's links;
+update, remove and set-PDK; the baseline refused; the write lease; the adopt refused for a tree the store lacks; the
+install finished after an interrupted adopt; two changesets both installed; a revert uninstalling with the cells that
+still place it; a restore while an operation fetches is busy; the one-click route applied, and kept open on a
+refused adopt; the project log is no library name).
+
+Built: evidence with package and PDK information, and model-file hashes (store/provenance.py, `modellib.files_read`,
+the evidence manifest in store/changeset.py; see [Changesets and evidence](#changesets-and-evidence)). Tests:
+`test_pkg_evidence.py` (an update that changes one cell outdates only the results that use it; a README change
+outdates nothing; a model file a package's code block includes outdates the simulation with the same netlist text;
+profile fields in the key; `about` outside it; a job from before stays fresh; the manifest lists packages and PDK).
+
+Still to build in phase 4: the review of a dependency change (the lock diff, licences, size, code blocks and RTL), an
+agent's *needs fetch* and the person's fetch with the confirmation token and the notice, agent tools, and
+`dep_update`'s refresh of layout copies.
+
+### Phase 6 status
+
+Built: `profile.toml` and its reader, the registry of formulas and stack generators, the three built-in profile
+packages, `pdkprofile.py` serving them with its Python profiles removed, Undine's table of `verified` and `magic_drc`,
+and the tested commits read from the profiles by `pick_pdk`, the PCell code's hint, `pixi run pdk`, `setup.sh` and two
+commands, `pdk tested FAMILY [--all]` and `pdk enable FAMILY [COMMIT]` (see [PDK profiles as
+packages](#pdk-profiles-as-packages)). Tests: `test_profile_data.py` (the loaded profiles equal the golden data from
+the Python ones, per process and per variant, types included, and so does everything `pdkprofile` serves: deck `-rd`
+values, Magic and Netgen files, the family rule, the MIM formula; each refusal names its key path; Undine's table for a
+tested and an untested profile version; the tested commits, the two commands, `pixi.toml` and `setup.sh` naming no
+commit, wafer.space's GF180 commit among the tested ones).
+
+Still to build in phase 6: profile packages in the index and the lock's `profile` key (choosing a version, `sync`,
+`vendor`), expected tree hashes in `[[pdk]]` and `verified_by` (the PDK state *verified*), compatibility tags read from
+the profile, the profile fields a job uses in its inputs (with phase 4's evidence), and PDK licences from the profile.
 
 ### Phase 5 status
 
@@ -1265,31 +1369,61 @@ Decided with the user on 2026-11-05. Each item gives the decision and why.
     `pkg licenses` ([Fetch and store](#fetch-and-store)). The tapeout evidence then does not depend on publishers
     keeping their repositories, with no mirror service to run.
 
+Decided with the user on 2026-11-22, for the dependency operations in changesets (phase 4):
+
+14. **The browser's one-click Add in a project that is not a git repository makes it one** (opening the changeset
+    runs git-setup, as any changeset open does), so every Add goes through a changeset.
+15. **A one-click operation whose adopt is refused (a conflict) keeps its small changeset open for review**: the 409
+    names the changeset; it is not discarded, so the work is not lost and the conflict can be seen.
+16. **The browser's Add, Update, Remove and Set PDK all become one-click changesets** (a small changeset, the operation
+    in it, the adopt). The direct `/deps` HTTP routes and the CLI keep working unchanged.
+17. **Over HTTP, a local repository under `--dep-root` needs no confirmation token** (for the confirmation of fetches,
+    slice 2): `--dep-root` is already the server owner's consent for those directories.
+18. **A git rev is confirmed by binding (url, rev)** (slice 2): the token names what the person saw.
+19. **A revert that drops a dependency the changeset added proceeds**, and returns a warning listing the cells
+    outside the changeset that still place that dependency's cells, instead of refusing: the revert stays possible,
+    and the person sees what to fix.
+
+Decided with the user on 2026-11-22, for phase 6:
+
+20. **One profile package per ciel family** (`profile_sky130`, `profile_gf180mcu`, and `profile_ihp_sg13` holding
+    SG13G2 and SG13CMOS5L). Compatibility tags (`ihp-sg13/...`), licences and ciel's fetches are per family, so one
+    package defines them for both IHP processes.
+21. **Profile packages live inside undine-eda**, as subdirectories that index lines name with `subdir`
+    (`server/undine/data/profiles/<package>/`). The built-in fallback is then the published package byte for byte.
+22. **A profile version newer than this Undine has tested is not verified and inherits `magic_drc` from the newest
+    tested version.** A profile update from an index then does not turn Magic DRC off.
+23. **Metal stacks may come from a few named, versioned stack generators** (`gf180_stack@1`, `ihp_stack@1`) besides
+    literal data. GF180's and IHP's stacks written out are long lists whose rule names follow patterns; a changed rule
+    is a new generator version, so a profile keeps drawing as it did.
+24. **The acceptance test "a changed layer colour outdates nothing" becomes "a changed profile field no job reads
+    (`label`, `limits`) outdates nothing".** Profiles hold no colours: they come from the PDK's `.lyp`.
+
 Decided with the user on 2026-11-22, for phase 5:
 
-14. **Each external write of `pkg publish` and `pkg yank` is asked first.** The writes (`gh release upload`, `git
+25. **Each external write of `pkg publish` and `pkg yank` is asked first.** The writes (`gh release upload`, `git
     push` of a branch from a clone of the index, `gh pr create`, and a fork when the person cannot push to the index)
     are each shown with the exact command and asked y/N on a terminal; without one they are refused unless `--yes`
     is given; `--dry-run` runs none. No environment variable and no agent tool can confirm. The index's owner pushes
     the branch to the index directly, without a fork. A write to someone's repository is the person's decision.
-15. **Undine ships the index CI workflow file; the user adds it to `kadomoto-lab/undine-index`.** A commit to that
+26. **Undine ships the index CI workflow file; the user adds it to `kadomoto-lab/undine-index`.** A commit to that
     repository stays the user's.
-16. **An exported cell's spec that is not met, or not measured, fails `pkg check`.** For analog IP the specs are the
+27. **An exported cell's spec that is not met, or not measured, fails `pkg check`.** For analog IP the specs are the
     contract.
-17. **No test touches the real GitHub; the first real publish is the user's own run.** Tests use local repositories
+28. **No test touches the real GitHub; the first real publish is the user's own run.** Tests use local repositories
     and indexes and a fake `gh`.
-18. **SPDX expressions are checked by syntax only, with no licence list.** Undine ships no third-party reference
+29. **SPDX expressions are checked by syntax only, with no licence list.** Undine ships no third-party reference
     data, and a new identifier needs no release.
-19. **An added symbol pin needs a minor version.** It adds to a cell's interface as a new cell adds to the package's,
+30. **An added symbol pin needs a minor version.** It adds to a cell's interface as a new cell adds to the package's,
     and a consumer's existing instance leaves it unconnected.
-20. **A waiver applies to the waived cell's own DRC run only.** A cell that places it is checked in full, so an
+31. **A waiver applies to the waived cell's own DRC run only.** A cell that places it is checked in full, so an
     abutment cell's waiver does not hide an error in the array.
-21. **`pkg check` runs KLayout DRC and LVS only.** GF180 and IHP have no Magic or Netgen decks in Undine.
-22. **`undine-check.json` is written under `<project>/.undine/check/`.** Outside the package's directory, it cannot
+32. **`pkg check` runs KLayout DRC and LVS only.** GF180 and IHP have no Magic or Netgen decks in Undine.
+33. **`undine-check.json` is written under `<project>/.undine/check/`.** Outside the package's directory, it cannot
     dirty the tree it describes.
-23. **The clean-worktree check covers the package's subdirectory only.** The rest of the repository (the project's
+34. **The clean-worktree check covers the package's subdirectory only.** The rest of the repository (the project's
     other libraries, `project.json`) does not enter the package's tree.
-24. **No HTTP route or UI for publishing in phase 5.** Publishing is the command line's, run by the person.
+35. **No HTTP route or UI for publishing in phase 5.** Publishing is the command line's, run by the person.
 
 ### Later
 

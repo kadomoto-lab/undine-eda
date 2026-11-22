@@ -3,7 +3,8 @@ import { AlertTriangle, Bot, Box, ChevronDown, ChevronRight, CircuitBoard, Cpu, 
 import { tabViewOf, type ChangeItem } from "./panels/changeItems";
 import type { GitStatus, LiveWriter, SymbolAffectedView, Writer } from "./api";
 import { api, ChatImage, CellInfo, ChangesetMerge, DepsStatus, LibraryInfo, PdkInfo, ProbeResult, ProjectInfo, ToolRecord, ViewKind } from "./api";
-import { incompatibleOf, problemsOf, type DepAdd, type ResolvedDep, type TrustCounts } from "./api";
+import { incompatibleOf, keptChangesetOf, problemsOf, type DepAdd, type DepChangeset, type DepUpdate, type ResolvedDep,
+  type TrustCounts } from "./api";
 import { LayoutEditor } from "./editors/LayoutEditor";
 import { LanguageMenu } from "./LanguageMenu";
 import { PdkFetchDialog, pdkStateText } from "./PdkFetchDialog";
@@ -238,16 +239,42 @@ export function App() {
     if (!to) { await ask({ title: t("app:pdk.unsupportedTitle"), message: info.pdk_unsupported, fields: [], submitLabel: "OK" }); return; }
     if (!await confirmDialog({ title: t("app:pdk.unsupportedTitle"), message: t("app:pdk.moveMessage", { from: info.pdk?.id ?? "", to }), okLabel: t("app:pdk.move", { to }) })) return;
     try {
-      await api.setPdk(project, to);
+      const out = await api.setPdkInChangeset(project, to);       // a small changeset of its own, adopted
       await loadProject(project);
       await loadDeps(project);
-      toast(t("app:pdk.moved", { to }));
+      // in a changeset's preview the move goes into that changeset, not into the project
+      toast(out.status === "open" ? msg("app:pdk.movedInChangeset", { to, id: out.changeset }) : t("app:pdk.moved", { to }));
+      adoptWarning(out);
     } catch (e) {
       // locked packages that do not accept that PDK: each with its chain and why, in a dialog
       const listed = listedRefusal(e, to);
       if (listed) setRefusal(listed);
-      else toast((e as Error).message, "error");
+      else if (!keptOpen(e)) toast((e as Error).message, "error");
     }
+  };
+
+  // the browser's own dependency operations each run in a small changeset adopted at once (api.*InChangeset)
+  /** What else the one click did: the project made a git repository (and what is left of its first commit), and
+   * what the adopt could not do (install from the store, a dependency still placed), said with the adopt done. */
+  const adoptWarning = (out: Pick<DepChangeset<unknown>, "changeset" | "git_setup" | "first_commit" | "first_commit_note" | "deps_warning">) => {
+    if (out.git_setup) {
+      toast(out.first_commit ? msg("app:dependency.gitSetup", { commit: out.first_commit.slice(0, 7), id: out.changeset })
+        : msg("app:dependency.gitSetupHead", { id: out.changeset }));
+      if (out.first_commit && out.first_commit_note) {
+        toast(msg("history:firstCommit.indexNote", { commit: out.first_commit.slice(0, 7), why: out.first_commit_note }), "error");
+      }
+    }
+    if (out.deps_warning) toast(msg("app:dependency.adoptedWarning", { warning: out.deps_warning }), "error");
+  };
+  /** An adopt the project refused (a conflict): the changeset stays open, and the person may review it. */
+  const keptOpen = (e: unknown): boolean => {
+    const id = keptChangesetOf(e);
+    if (!id) return false;
+    setTimeout(async () => {
+      if (await confirmDialog({ title: msg("app:dependency.keptTitle"), message: msg("app:dependency.kept", { id, detail: firstLine(e) }),
+        okLabel: msg("app:review") })) setReviewId(id);
+    }, 0);
+    return true;
   };
 
   const loadProject = useCallback(async (name: string) => {
@@ -765,8 +792,11 @@ export function App() {
       submit: async (v) => {
         let r: DepAdd;
         try {
-          r = await api.depAdd(project, v.name, v.git, v.rev, v.subdir, v.package?.trim());
+          const out = await api.addDepInChangeset(project, v.name, v.git, v.rev, v.subdir, v.package?.trim());
+          r = out.result;
+          adoptWarning(out);
         } catch (e) {
+          if (keptOpen(e)) return;
           // every problem of the resolution at once, in a dialog over this form (which keeps what was typed)
           const listed = listedRefusal(e);
           if (!listed) throw e;
@@ -783,9 +813,10 @@ export function App() {
     });
   };
   /** A package added from the Packages dialog: the project and its lock read again, and what came with it said. */
-  const packageAdded = async (name: string, r: DepAdd) => {
+  const packageAdded = async (name: string, r: DepAdd, out?: DepChangeset<DepAdd>) => {
     if (!project) return;
     setShowPackages(false);
+    if (out) adoptWarning(out);
     await loadProject(project);
     await loadDeps(project);
     toggleLib(name, true);
@@ -822,10 +853,13 @@ export function App() {
       message: msg("app:dependency.updateDescription", { revision: d?.rev ?? msg("app:dependency.defaultBranch"), commit: (d?.locked ?? "").slice(0, 7) }),
       fields: [{ name: "rev", label: msg("app:dependency.revision"), value: d?.rev ?? "", placeholder: msg("app:dependency.defaultBranch"), mono: true }],
       submit: async (v) => {
-        let r: Awaited<ReturnType<typeof api.depUpdate>>;
+        let r: DepUpdate;
         try {
-          r = await api.depUpdate(project, lib, v.rev);
+          const out = await api.updateDepInChangeset(project, lib, v.rev);
+          r = out.result;
+          adoptWarning(out);
         } catch (e) {
+          if (keptOpen(e)) return;
           const listed = listedRefusal(e);
           if (!listed) throw e;
           setRefusal(listed);
@@ -860,11 +894,14 @@ export function App() {
       message: msg("app:dependency.updatePackageDescription", { library: lib, version: d.version ?? "" }),
       fields: [{ name: "version", label: msg("app:packages.requirement"), value: d.requirement ?? "", mono: true }],
       submit: async (v) => {
-        let r: Awaited<ReturnType<typeof api.depUpdate>>;
+        let r: DepUpdate;
         try {
           const next = v.version?.trim();
-          r = await api.depUpdate(project, lib, undefined, next && next !== d.requirement ? next : undefined);
+          const out = await api.updateDepInChangeset(project, lib, undefined, next && next !== d.requirement ? next : undefined);
+          r = out.result;
+          adoptWarning(out);
         } catch (e) {
+          if (keptOpen(e)) return;
           const listed = listedRefusal(e);
           if (!listed) throw e;
           setRefusal(listed);
@@ -888,15 +925,17 @@ export function App() {
     if (!project) return;
     if (!await confirmDialog({ title: msg("app:dependency.remove", { library: lib }), message: msg("app:dependency.removeDescription", { library: lib }), okLabel: msg("common:actions.remove"), danger: true })) return;
     try {
-      const r = await api.depRemove(project, lib);
+      const out = await api.removeDepInChangeset(project, lib);
+      const r = out.result;
       await loadProject(project);
       await loadDeps(project);
+      adoptWarning(out);
       // the packages only it needed went with it; one another dependency still places stays
       const also = (r?.removed_packages ?? []).filter((x) => !x.names.includes(lib)).map((x) => x.package ? `${x.package} ${x.version ?? ""}`.trim() : x.names[0]);
       const said = [...(also.length ? [msg("app:dependency.removedPackages", { list: also.join(", ") })] : []),
         ...(r?.kept ?? []).map((k) => msg("app:dependency.keptRow", { name: k.name, list: k.placed_by.join(", ") }))];
       if (said.length) toast(joinText(said));
-    } catch (e) { toast(apiErrorText(e), "error"); }
+    } catch (e) { if (!keptOpen(e)) toast(apiErrorText(e), "error"); }
   };
 
   // after a rescan or a fetch: the PDKs, the project (which PDK it resolves to) and its lock status read again
@@ -1168,7 +1207,8 @@ export function App() {
       <DialogHost />
       {pdkFetch && project && <PdkFetchDialog project={project} onClose={() => setPdkFetch(false)} onFetched={() => pdksChanged()} />}
       {showPackages && project && <PackagesDialog project={project} readOnly={inPreview} onClose={() => setShowPackages(false)}
-        taken={(n) => !!info?.libraries.some((l) => l.name === n)} onAdded={packageAdded} />}
+        taken={(n) => !!info?.libraries.some((l) => l.name === n)} onAdded={packageAdded}
+        onKept={(e) => { setShowPackages(false); keptOpen(e); }} />}
       {trustName && project && <TrustDialog project={project} name={trustName} onClose={() => setTrustName(null)} onChanged={() => loadDeps(project)} />}
       {refusal && <RefusalDialog refusal={refusal} onClose={() => setRefusal(null)} />}
       <header className="topbar">

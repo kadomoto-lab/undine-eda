@@ -1,0 +1,6557 @@
+{
+ "profiles": {
+  "sky130": {
+   "$": "Profile",
+   "family": "sky130",
+   "label": "SkyWater SKY130",
+   "verified": true,
+   "layers": {
+    "dict": [
+     [
+      "poly",
+      [
+       66,
+       20
+      ]
+     ],
+     [
+      "diff",
+      [
+       65,
+       20
+      ]
+     ],
+     [
+      "tap",
+      [
+       65,
+       44
+      ]
+     ],
+     [
+      "licon1",
+      [
+       66,
+       44
+      ]
+     ],
+     [
+      "li1",
+      [
+       67,
+       20
+      ]
+     ],
+     [
+      "mcon",
+      [
+       67,
+       44
+      ]
+     ],
+     [
+      "met1",
+      [
+       68,
+       20
+      ]
+     ],
+     [
+      "via",
+      [
+       68,
+       44
+      ]
+     ],
+     [
+      "met2",
+      [
+       69,
+       20
+      ]
+     ],
+     [
+      "via2",
+      [
+       69,
+       44
+      ]
+     ],
+     [
+      "met3",
+      [
+       70,
+       20
+      ]
+     ],
+     [
+      "via3",
+      [
+       70,
+       44
+      ]
+     ],
+     [
+      "met4",
+      [
+       71,
+       20
+      ]
+     ],
+     [
+      "via4",
+      [
+       71,
+       44
+      ]
+     ],
+     [
+      "met5",
+      [
+       72,
+       20
+      ]
+     ],
+     [
+      "nwell",
+      [
+       64,
+       20
+      ]
+     ],
+     [
+      "nsdm",
+      [
+       93,
+       44
+      ]
+     ],
+     [
+      "psdm",
+      [
+       94,
+       20
+      ]
+     ],
+     [
+      "li1.label",
+      [
+       67,
+       5
+      ]
+     ],
+     [
+      "met1.label",
+      [
+       68,
+       5
+      ]
+     ],
+     [
+      "met2.label",
+      [
+       69,
+       5
+      ]
+     ],
+     [
+      "met3.label",
+      [
+       70,
+       5
+      ]
+     ],
+     [
+      "met4.label",
+      [
+       71,
+       5
+      ]
+     ],
+     [
+      "met5.label",
+      [
+       72,
+       5
+      ]
+     ],
+     [
+      "met4.pin",
+      [
+       71,
+       16
+      ]
+     ],
+     [
+      "capm",
+      [
+       89,
+       44
+      ]
+     ],
+     [
+      "cap2m",
+      [
+       97,
+       44
+      ]
+     ],
+     [
+      "npc",
+      [
+       95,
+       20
+      ]
+     ],
+     [
+      "hvi",
+      [
+       75,
+       20
+      ]
+     ],
+     [
+      "hvntm",
+      [
+       125,
+       20
+      ]
+     ],
+     [
+      "lvtn",
+      [
+       125,
+       44
+      ]
+     ],
+     [
+      "poly.res",
+      [
+       66,
+       13
+      ]
+     ],
+     [
+      "diff.res",
+      [
+       65,
+       13
+      ]
+     ],
+     [
+      "hvtp",
+      [
+       78,
+       44
+      ]
+     ],
+     [
+      "hvtr",
+      [
+       18,
+       20
+      ]
+     ],
+     [
+      "dnwell",
+      [
+       64,
+       18
+      ]
+     ],
+     [
+      "pwell",
+      [
+       64,
+       44
+      ]
+     ],
+     [
+      "rpm",
+      [
+       86,
+       20
+      ]
+     ],
+     [
+      "urpm",
+      [
+       79,
+       20
+      ]
+     ],
+     [
+      "ldntm",
+      [
+       11,
+       44
+      ]
+     ],
+     [
+      "pad",
+      [
+       76,
+       20
+      ]
+     ],
+     [
+      "poly.label",
+      [
+       66,
+       5
+      ]
+     ],
+     [
+      "areaid.sc",
+      [
+       81,
+       4
+      ]
+     ],
+     [
+      "areaid.ce",
+      [
+       81,
+       2
+      ]
+     ],
+     [
+      "areaid.de",
+      [
+       81,
+       23
+      ]
+     ],
+     [
+      "areaid.ed",
+      [
+       81,
+       19
+      ]
+     ],
+     [
+      "areaid.lvt",
+      [
+       81,
+       60
+      ]
+     ],
+     [
+      "prBoundary",
+      [
+       235,
+       4
+      ]
+     ],
+     [
+      "li1.pin",
+      [
+       67,
+       16
+      ]
+     ],
+     [
+      "met1.pin",
+      [
+       68,
+       16
+      ]
+     ],
+     [
+      "met2.pin",
+      [
+       69,
+       16
+      ]
+     ],
+     [
+      "met3.pin",
+      [
+       70,
+       16
+      ]
+     ],
+     [
+      "met5.pin",
+      [
+       72,
+       16
+      ]
+     ],
+     [
+      "pwell.label",
+      [
+       64,
+       59
+      ]
+     ]
+    ]
+   },
+   "metals": [
+    "li1",
+    "met1",
+    "met2",
+    "met3",
+    "met4",
+    "met5"
+   ],
+   "max_metal": "met5",
+   "grid_nm": 5,
+   "klayout_dir": "",
+   "drc_klayout": [
+    "sky130?_mr.drc"
+   ],
+   "drc_options": {
+    "dict": [
+     [
+      "sky130?_mr.drc",
+      {
+       "dict": [
+        [
+         "feol",
+         true
+        ],
+        [
+         "beol",
+         true
+        ],
+        [
+         "offgrid",
+         true
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "drc_switches": "flags",
+   "drc_extra": [
+    "met_min_ca_density.lydrc",
+    "pin_label_purposes_overlapping_drawing.rb.drc",
+    "zeroarea.rb.drc"
+   ],
+   "lvs_klayout": [
+    "sky130.lvs"
+   ],
+   "lvs_options": {
+    "dict": [
+     [
+      "lvs_sub",
+      "VSS"
+     ],
+     [
+      "scale",
+      true
+     ]
+    ]
+   },
+   "deck_vars": {
+    "dict": []
+   },
+   "magic_rc": "{name}.magicrc",
+   "magic_drc": true,
+   "erc_tap": [
+    [
+     "tap"
+    ]
+   ],
+   "mims": [
+    {
+     "$": "Mim",
+     "model": "sky130_fd_pr__cap_mim_m3_1",
+     "cap": [
+      89,
+      44
+     ],
+     "bottom": "met3",
+     "via": "via3",
+     "top": "met4",
+     "planes": [
+      "metal4",
+      "metal3"
+     ],
+     "shield": [
+      "*mimcap",
+      "cap1"
+     ]
+    },
+    {
+     "$": "Mim",
+     "model": "sky130_fd_pr__cap_mim_m3_2",
+     "cap": [
+      97,
+      44
+     ],
+     "bottom": "met4",
+     "via": "via4",
+     "top": "met5",
+     "planes": [
+      "metal5",
+      "metal4"
+     ],
+     "shield": [
+      "*mimcap2",
+      "cap2"
+     ]
+    }
+   ],
+   "net_labels": [
+    [
+     "licon1",
+     "li1.label"
+    ],
+    [
+     "mcon",
+     "met1.label"
+    ],
+    [
+     "via",
+     "met2.label"
+    ],
+    [
+     "via2",
+     "met3.label"
+    ],
+    [
+     "via3",
+     "met4.label"
+    ],
+    [
+     "via4",
+     "met5.label"
+    ]
+   ],
+   "netgen_setup": "{name}_setup.tcl",
+   "pcells": true,
+   "pcell_lib": {
+    "$": "PcellLib",
+    "paths": [
+     "python"
+    ],
+    "module": "cells",
+    "library": "skywater130",
+    "init": "sky130",
+    "technology": null,
+    "env": "pcell",
+    "limits": [
+     [
+      "cap",
+      "l_mim",
+      1.0
+     ]
+    ]
+   },
+   "strap": {
+    "$": "Strap",
+    "via": 0.15,
+    "enc1": [
+     0.085,
+     0.055
+    ],
+    "enc2": [
+     0.085,
+     0.055
+    ],
+    "m2_space": 0.14,
+    "gate": "met1",
+    "poly_w": 0.0,
+    "layers": [
+     "diff",
+     "poly",
+     "met1",
+     "via",
+     "met2"
+    ],
+    "cont": 0.0,
+    "cont_poly": 0.0,
+    "cont_m1": [
+     0.0,
+     0.0
+    ],
+    "m1_min": 0.0,
+    "contact_layer": "contact"
+   },
+   "space": [
+    {
+     "$": "Space",
+     "a": "diff",
+     "b": "diff",
+     "um": 0.3,
+     "rule": "difftap.3, difftap.15a (MV)",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "tap",
+     "b": "tap",
+     "um": 0.27,
+     "rule": "difftap.3",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "diff",
+     "b": "tap",
+     "um": 0.37,
+     "rule": "difftap.15b (MV)",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "poly",
+     "b": "poly",
+     "um": 0.21,
+     "rule": "poly.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "npc",
+     "b": "npc",
+     "um": 0.27,
+     "rule": "npc.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "licon1",
+     "b": "licon1",
+     "um": 0.17,
+     "rule": "licon.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "li1",
+     "b": "li1",
+     "um": 0.17,
+     "rule": "li.3",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "mcon",
+     "b": "mcon",
+     "um": 0.19,
+     "rule": "ct.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "met1",
+     "b": "met1",
+     "um": 0.14,
+     "rule": "m1.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "via",
+     "b": "via",
+     "um": 0.17,
+     "rule": "via.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "met2",
+     "b": "met2",
+     "um": 0.14,
+     "rule": "m2.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "met3",
+     "b": "met3",
+     "um": 0.3,
+     "rule": "m3.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "met4",
+     "b": "met4",
+     "um": 0.3,
+     "rule": "m4.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "met5",
+     "b": "met5",
+     "um": 1.6,
+     "rule": "m5.2",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "nwell",
+     "b": "nwell",
+     "um": 1.27,
+     "rule": "nwell.2a",
+     "unless": null,
+     "merge": true
+    },
+    {
+     "$": "Space",
+     "a": "diff",
+     "b": "nwell",
+     "um": 0.34,
+     "rule": "difftap.9",
+     "unless": "nwell",
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "tap",
+     "b": "nwell",
+     "um": 0.13,
+     "rule": "difftap.11",
+     "unless": "nwell",
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "hvi",
+     "b": "hvi",
+     "um": 0.7,
+     "rule": "hvi.5",
+     "unless": null,
+     "merge": true
+    },
+    {
+     "$": "Space",
+     "a": "nwell",
+     "b": "hvi",
+     "um": 0.7,
+     "rule": "hvi.5",
+     "unless": "hvi",
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "capm",
+     "b": "capm",
+     "um": 1.48,
+     "rule": "capm.2b: bottom plates 1.2 apart",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "capm",
+     "b": "met3",
+     "um": 1.34,
+     "rule": "capm.11 (Magic): to another plate's metal3",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "cap2m",
+     "b": "cap2m",
+     "um": 1.48,
+     "rule": "cap2m.2b: bottom plates 1.2 apart",
+     "unless": null,
+     "merge": false
+    },
+    {
+     "$": "Space",
+     "a": "cap2m",
+     "b": "met4",
+     "um": 1.34,
+     "rule": "cap2m.11 (Magic): to another plate's metal4",
+     "unless": null,
+     "merge": false
+    }
+   ],
+   "fill": [
+    "nwell",
+    "nsdm",
+    "psdm",
+    "lvtn",
+    "hvi",
+    "hvntm"
+   ],
+   "ring": {
+    "$": "Ring",
+    "width": 0.41,
+    "space": 0.4,
+    "conductor": "li1",
+    "well": [
+     0.18,
+     0.33
+    ]
+   },
+   "model_vars": [
+    [
+     "SKYWATER_MODELS",
+     "libs.tech/ngspice"
+    ],
+    [
+     "SKYWATER_STDCELLS",
+     "libs.ref/sky130_fd_sc_hd/spice"
+    ],
+    [
+     "SKYWATER_STDCELLS_HD",
+     "libs.ref/sky130_fd_sc_hd/spice"
+    ]
+   ],
+   "model_lib": "libs.tech/ngspice/sky130.lib.spice",
+   "model_includes": [],
+   "osdi": [],
+   "corners": [
+    "tt",
+    "ss",
+    "ff",
+    "sf",
+    "fs"
+   ],
+   "corner_symbol": "sky130_fd_pr/corner.sym",
+   "mismatch_section": "{corner}_mm",
+   "mismatch_param": null,
+   "gate_layers": [
+    "poly",
+    "diff"
+   ],
+   "pin_label_layers": [
+    "li1.label",
+    "met1.label",
+    "met2.label",
+    "met3.label",
+    "met4.label",
+    "met5.label"
+   ],
+   "limits": [],
+   "lvs_elements": [
+    {
+     "$": "LvsElement",
+     "model": "(sky130_fd_pr__)?cap_mim_m3_1",
+     "letter": "C",
+     "rename": {
+      "dict": []
+     },
+     "to": "sky130_fd_pr__model__cap_mim",
+     "params": {
+      "formula": "mim_area_perimeter"
+     }
+    },
+    {
+     "$": "LvsElement",
+     "model": "(sky130_fd_pr__)?cap_mim_m3_2",
+     "letter": "C",
+     "rename": {
+      "dict": []
+     },
+     "to": "sky130_fd_pr__model__cap_mim_m4",
+     "params": {
+      "formula": "mim_area_perimeter"
+     }
+    }
+   ],
+   "stdcells": [
+    [
+     "sky130_(?:fd|ef)_sc_([a-z]+)__\\w+",
+     "sky130_fd_sc_\\1"
+    ]
+   ],
+   "stdcell_gds": "libs.ref/{lib}/gds/{lib}.gds",
+   "stdcell_spice": [
+    "libs.ref/{lib}/spice/{lib}.spice",
+    "libs.ref/{lib}/spice/{cell}.spice"
+   ],
+   "stdcell_verilog": [
+    "libs.ref/{lib}/verilog/primitives.v",
+    "libs.ref/{lib}/verilog/{lib}.v"
+   ],
+   "stdcell_verilog_defines": [
+    "FUNCTIONAL",
+    "UNIT_DELAY="
+   ],
+   "stdcell_lvs": {
+    "$": "StdcellLvs",
+    "mos": "sky130_fd_pr__(special_)?[np]fet\\w*",
+    "short": "sky130_fd_pr__res_generic_\\w+",
+    "rename": [
+     [
+      "special_nfet",
+      "nfet"
+     ]
+    ],
+    "scale": 1e-06,
+    "drop_labels": [
+     "pwell.label"
+    ],
+    "strip": [
+     "diff",
+     "poly"
+    ],
+    "physical": "(^|_)(tapvpwrvgnd|tapvgnd|tapvpwr|filltie|fill|decap|decapkapwr|diode|fakediode|endcap|antenna\\w*)(_\\d+)?$",
+    "simplify": true
+   },
+   "stdcell_tie": "sky130_fd_sc_hd__conb_1 (HI: 1, LO: 0)",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": "tap",
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.15,
+      "space": 0.21,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.075
+       ],
+       [
+        "tap",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "li1",
+      "width": 0.17,
+      "space": 0.17,
+      "area": 0.0561,
+      "wide": [],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met1",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.083,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met2",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.0676,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met3",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met4",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met5",
+      "width": 1.6,
+      "space": 1.6,
+      "area": 4.0,
+      "wide": [],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "diff",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.06
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.5a, licon.5c, licon.11, li.5",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "tap",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.12
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.7, li.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "poly",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.05,
+       0.08
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.8, licon.8a, licon.14, licon.15, li.5, npc.1, npc.2, licon.13",
+      "extra": [
+       [
+        "npc",
+        0.1,
+        0.27,
+        0.27
+       ]
+      ],
+      "away": [
+       [
+        "diff",
+        0.19
+       ],
+       [
+        "tap",
+        0.19
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "mcon",
+      "below": "li1",
+      "above": "met1",
+      "size": 0.17,
+      "space": 0.19,
+      "enc_below": [
+       0.0,
+       0.0
+      ],
+      "enc_above": [
+       0.03,
+       0.06
+      ],
+      "rules": "ct.1, ct.2, ct.4, m1.4, m1.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via",
+      "below": "met1",
+      "above": "met2",
+      "size": 0.15,
+      "space": 0.17,
+      "enc_below": [
+       0.055,
+       0.085
+      ],
+      "enc_above": [
+       0.055,
+       0.085
+      ],
+      "rules": "via.1a, via.2, via.4a, via.5a, m2.4, m2.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "met2",
+      "above": "met3",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.04,
+       0.085
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via2.1a, via2.2, via2.4, via2.5, m3.4",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "met3",
+      "above": "met4",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.06,
+       0.09
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via3.1, via3.2, via3.4, via3.5, m4.3",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "met4",
+      "above": "met5",
+      "size": 0.8,
+      "space": 0.8,
+      "enc_below": [
+       0.19,
+       0.19
+      ],
+      "enc_above": [
+       0.31,
+       0.31
+      ],
+      "rules": "via4.1, via4.2, via4.4, m5.3",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "capm",
+      "metal": "met3",
+      "cut": "via3",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     },
+     {
+      "$": "Plate",
+      "name": "cap2m",
+      "metal": "met4",
+      "cut": "via4",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     }
+    ],
+    "taps": {
+     "$": "TapRule",
+     "implant": {
+      "dict": [
+       [
+        "ptap",
+        "psdm"
+       ],
+       [
+        "ntap",
+        "nsdm"
+       ]
+      ]
+     },
+     "implant_enc": 0.125,
+     "implant_width": 0.38,
+     "implant_space": 0.38,
+     "well_enc": 0.18,
+     "space": 0.27,
+     "well_space": 0.13,
+     "well_well": 1.27,
+     "well_ndiff": 0.34,
+     "latchup": 15.0
+    }
+   },
+   "stacks": {
+    "dict": []
+   }
+  },
+  "gf180mcu": {
+   "$": "Profile",
+   "family": "gf180mcu",
+   "label": "GlobalFoundries GF180MCU",
+   "verified": true,
+   "layers": {
+    "dict": [
+     [
+      "comp",
+      [
+       22,
+       0
+      ]
+     ],
+     [
+      "poly",
+      [
+       30,
+       0
+      ]
+     ],
+     [
+      "contact",
+      [
+       33,
+       0
+      ]
+     ],
+     [
+      "metal1",
+      [
+       34,
+       0
+      ]
+     ],
+     [
+      "via1",
+      [
+       35,
+       0
+      ]
+     ],
+     [
+      "metal2",
+      [
+       36,
+       0
+      ]
+     ],
+     [
+      "via2",
+      [
+       38,
+       0
+      ]
+     ],
+     [
+      "metal3",
+      [
+       42,
+       0
+      ]
+     ],
+     [
+      "via3",
+      [
+       40,
+       0
+      ]
+     ],
+     [
+      "metal4",
+      [
+       46,
+       0
+      ]
+     ],
+     [
+      "via4",
+      [
+       41,
+       0
+      ]
+     ],
+     [
+      "metal5",
+      [
+       81,
+       0
+      ]
+     ],
+     [
+      "via5",
+      [
+       82,
+       0
+      ]
+     ],
+     [
+      "metaltop",
+      [
+       53,
+       0
+      ]
+     ],
+     [
+      "pad",
+      [
+       37,
+       0
+      ]
+     ],
+     [
+      "nwell",
+      [
+       21,
+       0
+      ]
+     ],
+     [
+      "dnwell",
+      [
+       12,
+       0
+      ]
+     ],
+     [
+      "lvpwell",
+      [
+       204,
+       0
+      ]
+     ],
+     [
+      "nplus",
+      [
+       32,
+       0
+      ]
+     ],
+     [
+      "pplus",
+      [
+       31,
+       0
+      ]
+     ],
+     [
+      "dualgate",
+      [
+       55,
+       0
+      ]
+     ],
+     [
+      "pr_bndry",
+      [
+       0,
+       0
+      ]
+     ],
+     [
+      "guard_ring_mk",
+      [
+       167,
+       5
+      ]
+     ],
+     [
+      "poly.label",
+      [
+       30,
+       10
+      ]
+     ],
+     [
+      "metal1.label",
+      [
+       34,
+       10
+      ]
+     ],
+     [
+      "metal2.label",
+      [
+       36,
+       10
+      ]
+     ],
+     [
+      "metal3.label",
+      [
+       42,
+       10
+      ]
+     ],
+     [
+      "metal4.label",
+      [
+       46,
+       10
+      ]
+     ],
+     [
+      "metal5.label",
+      [
+       81,
+       10
+      ]
+     ],
+     [
+      "metaltop.label",
+      [
+       53,
+       10
+      ]
+     ],
+     [
+      "fusetop",
+      [
+       75,
+       0
+      ]
+     ]
+    ]
+   },
+   "metals": [
+    "metal1",
+    "metal2",
+    "metal3",
+    "metal4",
+    "metal5",
+    "metaltop"
+   ],
+   "max_metal": "metal5",
+   "grid_nm": 5,
+   "klayout_dir": "tech",
+   "drc_klayout": [
+    "gf180mcu.drc"
+   ],
+   "drc_options": {
+    "dict": [
+     [
+      "gf180mcu.drc",
+      {
+       "dict": [
+        [
+         "decks",
+         "all,-density,-antenna,-cup"
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "drc_switches": "tags",
+   "drc_extra": [],
+   "lvs_klayout": [
+    "gf180mcu.lvs"
+   ],
+   "lvs_options": {
+    "dict": [
+     [
+      "run_mode",
+      "flat"
+     ],
+     [
+      "combine",
+      true
+     ]
+    ]
+   },
+   "deck_vars": {
+    "dict": [
+     [
+      "gf180mcuA",
+      {
+       "dict": [
+        [
+         "metal_level",
+         "3LM"
+        ],
+        [
+         "metal_top",
+         "30K"
+        ],
+        [
+         "mim_option",
+         "A"
+        ]
+       ]
+      }
+     ],
+     [
+      "gf180mcuB",
+      {
+       "dict": [
+        [
+         "metal_level",
+         "4LM"
+        ],
+        [
+         "metal_top",
+         "11K"
+        ],
+        [
+         "mim_option",
+         "B"
+        ]
+       ]
+      }
+     ],
+     [
+      "gf180mcuC",
+      {
+       "dict": [
+        [
+         "metal_level",
+         "5LM"
+        ],
+        [
+         "metal_top",
+         "9K"
+        ],
+        [
+         "mim_option",
+         "B"
+        ]
+       ]
+      }
+     ],
+     [
+      "gf180mcuD",
+      {
+       "dict": [
+        [
+         "metal_level",
+         "5LM"
+        ],
+        [
+         "metal_top",
+         "11K"
+        ],
+        [
+         "mim_option",
+         "B"
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "magic_rc": "{name}.magicrc",
+   "magic_drc": true,
+   "erc_tap": [
+    [
+     "comp",
+     "pplus",
+     "-nwell",
+     "-dnwell"
+    ],
+    [
+     "comp",
+     "nplus",
+     "nwell"
+    ],
+    [
+     "comp",
+     "pplus",
+     "lvpwell",
+     "dnwell"
+    ],
+    [
+     "comp",
+     "nplus",
+     "dnwell",
+     "-lvpwell"
+    ]
+   ],
+   "mims": [],
+   "net_labels": [
+    [
+     "contact",
+     "metal1.label"
+    ],
+    [
+     "via1",
+     "metal2.label"
+    ],
+    [
+     "via2",
+     "metal3.label"
+    ],
+    [
+     "via3",
+     "metal4.label"
+    ]
+   ],
+   "netgen_setup": "{name}_setup.tcl",
+   "pcells": true,
+   "pcell_lib": {
+    "$": "PcellLib",
+    "paths": [
+     "tech/pymacros"
+    ],
+    "module": "cells",
+    "library": "gf180mcu",
+    "init": "gf180mcu",
+    "technology": null,
+    "env": "pcell-gf180",
+    "limits": []
+   },
+   "strap": {
+    "$": "Strap",
+    "via": 0.26,
+    "enc1": [
+     0.06,
+     0.06
+    ],
+    "enc2": [
+     0.06,
+     0.06
+    ],
+    "m2_space": 0.28,
+    "gate": "met1",
+    "poly_w": 0.0,
+    "layers": [
+     "comp",
+     "poly",
+     "metal1",
+     "via1",
+     "metal2"
+    ],
+    "cont": 0.0,
+    "cont_poly": 0.0,
+    "cont_m1": [
+     0.0,
+     0.0
+    ],
+    "m1_min": 0.0,
+    "contact_layer": "contact"
+   },
+   "space": [],
+   "fill": [],
+   "ring": null,
+   "model_vars": [
+    [
+     "180MCU_MODELS",
+     "libs.tech/ngspice"
+    ]
+   ],
+   "model_lib": "libs.tech/ngspice/sm141064.ngspice",
+   "model_includes": [
+    "libs.tech/ngspice/design.ngspice"
+   ],
+   "osdi": [],
+   "corners": [
+    "typical",
+    "ss",
+    "ff",
+    "sf",
+    "fs"
+   ],
+   "corner_symbol": null,
+   "mismatch_section": null,
+   "mismatch_param": "sw_stat_mismatch=1",
+   "gate_layers": [
+    "poly",
+    "comp"
+   ],
+   "pin_label_layers": [
+    "metal1.label",
+    "metal2.label",
+    "metal3.label",
+    "metal4.label",
+    "metal5.label"
+   ],
+   "limits": [],
+   "lvs_elements": [
+    {
+     "$": "LvsElement",
+     "model": "(ppolyf|npolyf|nplus|pplus)_[us](_[0-9a-z]+)*|nwell|rm[1-3]|tm(6|9|11|30)k",
+     "letter": "R",
+     "rename": {
+      "dict": [
+       [
+        "r_width",
+        "W"
+       ],
+       [
+        "r_length",
+        "L"
+       ]
+      ]
+     },
+     "to": null,
+     "params": null
+    },
+    {
+     "$": "LvsElement",
+     "model": "cap_mim_[0-9a-z]+",
+     "letter": "C",
+     "rename": {
+      "dict": [
+       [
+        "c_width",
+        "W"
+       ],
+       [
+        "c_length",
+        "L"
+       ]
+      ]
+     },
+     "to": null,
+     "params": null
+    }
+   ],
+   "stdcells": [
+    [
+     "(gf180mcu_fd_sc_mcu[79]t5v0)__\\w+",
+     "\\1"
+    ]
+   ],
+   "stdcell_gds": "libs.ref/{lib}/gds/{lib}.gds",
+   "stdcell_spice": [
+    "libs.ref/{lib}/spice/{lib}.spice",
+    "libs.ref/{lib}/spice/{cell}.spice"
+   ],
+   "stdcell_verilog": [],
+   "stdcell_verilog_defines": [],
+   "stdcell_lvs": null,
+   "stdcell_tie": "",
+   "stack": {
+    "$": "Stack",
+    "diff": "comp",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.2,
+      "space": 0.24,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "comp",
+        0.3
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.23,
+      "space": 0.23,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal5",
+      "width": 0.44,
+      "space": 0.46,
+      "area": 0.5625,
+      "wide": [
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "comp",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.15
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8",
+      "extra": [],
+      "away": [
+       [
+        "comp",
+        0.17
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.0,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V1.1, V1.2b, V1.3a, V1.3c, V1.3d, V1.4a, V1.4b, V1.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V2.1, V2.2b, V2.3b, V2.3c, V2.3d, V2.4a, V2.4b, V2.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V3.1, V3.2b, V3.3b, V3.3c, V3.3d, V3.4a, V3.4b, V3.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "metal4",
+      "above": "metal5",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V4.1, V4.2b, V4.3b, V4.3c, V4.3d, V4.4a, V4.4b, V4.4c",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "fusetop",
+      "metal": "metal4",
+      "cut": "via4",
+      "top": "B",
+      "bottom": "G",
+      "also": []
+     }
+    ],
+    "taps": null
+   },
+   "stacks": {
+    "dict": [
+     [
+      "gf180mcuB",
+      {
+       "$": "Stack",
+       "diff": "comp",
+       "tap": null,
+       "poly": "poly",
+       "well": "nwell",
+       "conductors": [
+        {
+         "$": "Conductor",
+         "name": "poly",
+         "width": 0.2,
+         "space": 0.24,
+         "area": 0.0,
+         "wide": [],
+         "away": [
+          [
+           "comp",
+           0.3
+          ]
+         ]
+        },
+        {
+         "$": "Conductor",
+         "name": "metal1",
+         "width": 0.23,
+         "space": 0.23,
+         "area": 0.1444,
+         "wide": [
+          [
+           10.0,
+           0.3
+          ]
+         ],
+         "away": []
+        },
+        {
+         "$": "Conductor",
+         "name": "metal2",
+         "width": 0.28,
+         "space": 0.28,
+         "area": 0.1444,
+         "wide": [
+          [
+           10.0,
+           0.3
+          ]
+         ],
+         "away": []
+        },
+        {
+         "$": "Conductor",
+         "name": "metal3",
+         "width": 0.28,
+         "space": 0.28,
+         "area": 0.1444,
+         "wide": [
+          [
+           10.0,
+           0.3
+          ]
+         ],
+         "away": []
+        },
+        {
+         "$": "Conductor",
+         "name": "metal4",
+         "width": 0.44,
+         "space": 0.46,
+         "area": 0.5625,
+         "wide": [
+          [
+           10.0,
+           0.6
+          ]
+         ],
+         "away": []
+        }
+       ],
+       "cuts": [
+        {
+         "$": "Cut",
+         "name": "contact",
+         "below": "comp",
+         "above": "metal1",
+         "size": 0.22,
+         "space": 0.28,
+         "enc_below": [
+          0.07,
+          0.07
+         ],
+         "enc_above": [
+          0.005,
+          0.06
+         ],
+         "rules": "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7",
+         "extra": [],
+         "away": [
+          [
+           "poly",
+           0.15
+          ]
+         ]
+        },
+        {
+         "$": "Cut",
+         "name": "contact",
+         "below": "poly",
+         "above": "metal1",
+         "size": 0.22,
+         "space": 0.28,
+         "enc_below": [
+          0.07,
+          0.07
+         ],
+         "enc_above": [
+          0.005,
+          0.06
+         ],
+         "rules": "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8",
+         "extra": [],
+         "away": [
+          [
+           "comp",
+           0.17
+          ]
+         ]
+        },
+        {
+         "$": "Cut",
+         "name": "via1",
+         "below": "metal1",
+         "above": "metal2",
+         "size": 0.26,
+         "space": 0.36,
+         "enc_below": [
+          0.0,
+          0.06
+         ],
+         "enc_above": [
+          0.01,
+          0.06
+         ],
+         "rules": "V1.1, V1.2b, V1.3a, V1.3c, V1.3d, V1.4a, V1.4b, V1.4c",
+         "extra": [],
+         "away": []
+        },
+        {
+         "$": "Cut",
+         "name": "via2",
+         "below": "metal2",
+         "above": "metal3",
+         "size": 0.26,
+         "space": 0.36,
+         "enc_below": [
+          0.01,
+          0.06
+         ],
+         "enc_above": [
+          0.01,
+          0.06
+         ],
+         "rules": "V2.1, V2.2b, V2.3b, V2.3c, V2.3d, V2.4a, V2.4b, V2.4c",
+         "extra": [],
+         "away": []
+        },
+        {
+         "$": "Cut",
+         "name": "via3",
+         "below": "metal3",
+         "above": "metal4",
+         "size": 0.26,
+         "space": 0.36,
+         "enc_below": [
+          0.01,
+          0.06
+         ],
+         "enc_above": [
+          0.01,
+          0.06
+         ],
+         "rules": "V3.1, V3.2b, V3.3b, V3.3c, V3.3d, V3.4a, V3.4b, V3.4c",
+         "extra": [],
+         "away": []
+        }
+       ],
+       "plates": [
+        {
+         "$": "Plate",
+         "name": "fusetop",
+         "metal": "metal3",
+         "cut": "via3",
+         "top": "B",
+         "bottom": "G",
+         "also": []
+        }
+       ],
+       "taps": null
+      }
+     ],
+     [
+      "gf180mcuA",
+      {
+       "$": "Stack",
+       "diff": "comp",
+       "tap": null,
+       "poly": "poly",
+       "well": "nwell",
+       "conductors": [
+        {
+         "$": "Conductor",
+         "name": "poly",
+         "width": 0.2,
+         "space": 0.24,
+         "area": 0.0,
+         "wide": [],
+         "away": [
+          [
+           "comp",
+           0.3
+          ]
+         ]
+        },
+        {
+         "$": "Conductor",
+         "name": "metal1",
+         "width": 0.23,
+         "space": 0.23,
+         "area": 0.1444,
+         "wide": [
+          [
+           10.0,
+           0.3
+          ]
+         ],
+         "away": []
+        },
+        {
+         "$": "Conductor",
+         "name": "metal2",
+         "width": 0.28,
+         "space": 0.28,
+         "area": 0.1444,
+         "wide": [
+          [
+           10.0,
+           0.3
+          ]
+         ],
+         "away": []
+        }
+       ],
+       "cuts": [
+        {
+         "$": "Cut",
+         "name": "contact",
+         "below": "comp",
+         "above": "metal1",
+         "size": 0.22,
+         "space": 0.28,
+         "enc_below": [
+          0.07,
+          0.07
+         ],
+         "enc_above": [
+          0.005,
+          0.06
+         ],
+         "rules": "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7",
+         "extra": [],
+         "away": [
+          [
+           "poly",
+           0.15
+          ]
+         ]
+        },
+        {
+         "$": "Cut",
+         "name": "contact",
+         "below": "poly",
+         "above": "metal1",
+         "size": 0.22,
+         "space": 0.28,
+         "enc_below": [
+          0.07,
+          0.07
+         ],
+         "enc_above": [
+          0.005,
+          0.06
+         ],
+         "rules": "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8",
+         "extra": [],
+         "away": [
+          [
+           "comp",
+           0.17
+          ]
+         ]
+        },
+        {
+         "$": "Cut",
+         "name": "via1",
+         "below": "metal1",
+         "above": "metal2",
+         "size": 0.26,
+         "space": 0.36,
+         "enc_below": [
+          0.0,
+          0.06
+         ],
+         "enc_above": [
+          0.01,
+          0.06
+         ],
+         "rules": "V1.1, V1.2b, V1.3a, V1.3c, V1.3d, V1.4a, V1.4b, V1.4c",
+         "extra": [],
+         "away": []
+        }
+       ],
+       "plates": [],
+       "taps": null
+      }
+     ]
+    ]
+   }
+  },
+  "ihp-sg13g2": {
+   "$": "Profile",
+   "family": "ihp-sg13g2",
+   "label": "IHP SG13G2",
+   "verified": true,
+   "layers": {
+    "dict": [
+     [
+      "diff",
+      [
+       1,
+       0
+      ]
+     ],
+     [
+      "psd",
+      [
+       14,
+       0
+      ]
+     ],
+     [
+      "nsd",
+      [
+       7,
+       0
+      ]
+     ],
+     [
+      "poly",
+      [
+       5,
+       0
+      ]
+     ],
+     [
+      "contact",
+      [
+       6,
+       0
+      ]
+     ],
+     [
+      "nwell",
+      [
+       31,
+       0
+      ]
+     ],
+     [
+      "metal1",
+      [
+       8,
+       0
+      ]
+     ],
+     [
+      "via1",
+      [
+       19,
+       0
+      ]
+     ],
+     [
+      "metal2",
+      [
+       10,
+       0
+      ]
+     ],
+     [
+      "via2",
+      [
+       29,
+       0
+      ]
+     ],
+     [
+      "metal3",
+      [
+       30,
+       0
+      ]
+     ],
+     [
+      "via3",
+      [
+       49,
+       0
+      ]
+     ],
+     [
+      "metal4",
+      [
+       50,
+       0
+      ]
+     ],
+     [
+      "via4",
+      [
+       66,
+       0
+      ]
+     ],
+     [
+      "metal5",
+      [
+       67,
+       0
+      ]
+     ],
+     [
+      "topvia1",
+      [
+       125,
+       0
+      ]
+     ],
+     [
+      "topmetal1",
+      [
+       126,
+       0
+      ]
+     ],
+     [
+      "topvia2",
+      [
+       133,
+       0
+      ]
+     ],
+     [
+      "topmetal2",
+      [
+       134,
+       0
+      ]
+     ],
+     [
+      "passiv",
+      [
+       9,
+       0
+      ]
+     ],
+     [
+      "edgeseal",
+      [
+       39,
+       0
+      ]
+     ],
+     [
+      "prboundary",
+      [
+       189,
+       0
+      ]
+     ],
+     [
+      "metal1.label",
+      [
+       8,
+       25
+      ]
+     ],
+     [
+      "metal2.label",
+      [
+       10,
+       25
+      ]
+     ],
+     [
+      "metal3.label",
+      [
+       30,
+       25
+      ]
+     ],
+     [
+      "metal4.label",
+      [
+       50,
+       25
+      ]
+     ],
+     [
+      "metal5.label",
+      [
+       67,
+       25
+      ]
+     ],
+     [
+      "topmetal1.label",
+      [
+       126,
+       25
+      ]
+     ],
+     [
+      "topmetal2.label",
+      [
+       134,
+       25
+      ]
+     ],
+     [
+      "metal1.pin",
+      [
+       8,
+       2
+      ]
+     ],
+     [
+      "metal2.pin",
+      [
+       10,
+       2
+      ]
+     ],
+     [
+      "metal3.pin",
+      [
+       30,
+       2
+      ]
+     ],
+     [
+      "metal4.pin",
+      [
+       50,
+       2
+      ]
+     ],
+     [
+      "metal5.pin",
+      [
+       67,
+       2
+      ]
+     ],
+     [
+      "topmetal1.pin",
+      [
+       126,
+       2
+      ]
+     ],
+     [
+      "topmetal2.pin",
+      [
+       134,
+       2
+      ]
+     ],
+     [
+      "mim",
+      [
+       36,
+       0
+      ]
+     ],
+     [
+      "vmim",
+      [
+       129,
+       0
+      ]
+     ]
+    ]
+   },
+   "metals": [
+    "metal1",
+    "metal2",
+    "metal3",
+    "metal4",
+    "metal5",
+    "topmetal1",
+    "topmetal2"
+   ],
+   "max_metal": "topmetal2",
+   "grid_nm": 5,
+   "klayout_dir": "tech",
+   "drc_klayout": [
+    "ihp-sg13g2.drc"
+   ],
+   "drc_options": {
+    "dict": []
+   },
+   "drc_switches": "negated",
+   "drc_extra": [],
+   "lvs_klayout": [
+    "sg13g2.lvs"
+   ],
+   "lvs_options": {
+    "dict": []
+   },
+   "deck_vars": {
+    "dict": []
+   },
+   "magic_rc": "{name}.magicrc",
+   "magic_drc": true,
+   "erc_tap": [
+    [
+     "diff",
+     "psd",
+     "-nwell"
+    ],
+    [
+     "diff",
+     "nwell",
+     "-psd"
+    ]
+   ],
+   "mims": [],
+   "net_labels": [
+    [
+     "contact",
+     "metal1.label"
+    ],
+    [
+     "via1",
+     "metal2.label"
+    ],
+    [
+     "via2",
+     "metal3.label"
+    ],
+    [
+     "via3",
+     "metal4.label"
+    ],
+    [
+     "via4",
+     "metal5.label"
+    ],
+    [
+     "topvia1",
+     "topmetal1.label"
+    ],
+    [
+     "topvia2",
+     "topmetal2.label"
+    ]
+   ],
+   "netgen_setup": "{name}_setup.tcl",
+   "pcells": true,
+   "pcell_lib": {
+    "$": "PcellLib",
+    "paths": [
+     "python",
+     "python/pycell4klayout-api/source/python"
+    ],
+    "module": "sg13g2_pycell_lib",
+    "library": "SG13_dev",
+    "init": null,
+    "technology": "sg13g2",
+    "env": "pcell",
+    "limits": []
+   },
+   "strap": {
+    "$": "Strap",
+    "via": 0.19,
+    "enc1": [
+     0.05,
+     0.01
+    ],
+    "enc2": [
+     0.05,
+     0.01
+    ],
+    "m2_space": 0.21,
+    "gate": "poly",
+    "poly_w": 0.13,
+    "layers": [
+     "diff",
+     "poly",
+     "metal1",
+     "via1",
+     "metal2"
+    ],
+    "cont": 0.16,
+    "cont_poly": 0.07,
+    "cont_m1": [
+     0.05,
+     0.0
+    ],
+    "m1_min": 0.3,
+    "contact_layer": "contact"
+   },
+   "space": [],
+   "fill": [],
+   "ring": null,
+   "model_vars": [],
+   "model_lib": "libs.tech/ngspice/models/cornerMOSlv.lib",
+   "model_includes": [],
+   "osdi": [
+    "psp103",
+    "psp103_nqs",
+    "r3_cmc",
+    "mosvar",
+    "cap_cmomi",
+    "cap_cmomf"
+   ],
+   "corners": [
+    "mos_tt",
+    "mos_ss",
+    "mos_ff",
+    "mos_sf",
+    "mos_fs"
+   ],
+   "corner_symbol": null,
+   "mismatch_section": "{corner}_mismatch",
+   "mismatch_param": null,
+   "gate_layers": [
+    "poly",
+    "diff"
+   ],
+   "pin_label_layers": [
+    "metal1.label",
+    "metal2.label",
+    "metal3.label",
+    "metal4.label",
+    "metal5.label",
+    "topmetal1.label",
+    "topmetal2.label"
+   ],
+   "limits": [],
+   "lvs_elements": [],
+   "stdcells": [
+    [
+     "sg13g2_\\w+",
+     "sg13g2_stdcell"
+    ]
+   ],
+   "stdcell_gds": "libs.ref/{lib}/gds/{lib}.gds",
+   "stdcell_spice": [
+    "libs.ref/{lib}/spice/{lib}.spice",
+    "libs.ref/{lib}/spice/{cell}.spice"
+   ],
+   "stdcell_verilog": [],
+   "stdcell_verilog_defines": [],
+   "stdcell_lvs": null,
+   "stdcell_tie": "",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.13,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.07
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.16,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [
+       [
+        0.3,
+        0.22
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal5",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "topmetal1",
+      "width": 1.64,
+      "space": 1.64,
+      "area": 0.0,
+      "wide": [],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "topmetal2",
+      "width": 2.0,
+      "space": 2.0,
+      "area": 0.0,
+      "wide": [
+       [
+        5.0,
+        5.0
+       ]
+      ],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "diff",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.c, M1.c, M1.c1, Cnt.f",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.11
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.d, M1.c, M1.c1, Cnt.e",
+      "extra": [],
+      "away": [
+       [
+        "diff",
+        0.14
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.01,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V1.a, V1.b1, V1.c, V1.c1, M2.c, M2.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V2.a, V2.b1, V2.c, V2.c1, M3.c, M3.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V3.a, V3.b1, V3.c, V3.c1, M4.c, M4.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "metal4",
+      "above": "metal5",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V4.a, V4.b1, V4.c, V4.c1, M5.c, M5.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "topvia1",
+      "below": "metal5",
+      "above": "topmetal1",
+      "size": 0.42,
+      "space": 0.42,
+      "enc_below": [
+       0.1,
+       0.1
+      ],
+      "enc_above": [
+       0.42,
+       0.42
+      ],
+      "rules": "TV1.a, TV1.b, TV1.c, TV1.d",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "topvia2",
+      "below": "topmetal1",
+      "above": "topmetal2",
+      "size": 0.9,
+      "space": 1.06,
+      "enc_below": [
+       0.5,
+       0.5
+      ],
+      "enc_above": [
+       0.5,
+       0.5
+      ],
+      "rules": "TV2.a, TV2.b, TV2.c, TV2.d",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "mim",
+      "metal": "metal5",
+      "cut": "topvia1",
+      "top": "c0",
+      "bottom": "c1",
+      "also": [
+       "vmim"
+      ]
+     }
+    ],
+    "taps": null
+   },
+   "stacks": {
+    "dict": []
+   }
+  },
+  "ihp-sg13cmos5l": {
+   "$": "Profile",
+   "family": "ihp-sg13cmos5l",
+   "label": "IHP SG13CMOS5L",
+   "verified": false,
+   "layers": {
+    "dict": [
+     [
+      "diff",
+      [
+       1,
+       0
+      ]
+     ],
+     [
+      "psd",
+      [
+       14,
+       0
+      ]
+     ],
+     [
+      "nsd",
+      [
+       7,
+       0
+      ]
+     ],
+     [
+      "poly",
+      [
+       5,
+       0
+      ]
+     ],
+     [
+      "contact",
+      [
+       6,
+       0
+      ]
+     ],
+     [
+      "nwell",
+      [
+       31,
+       0
+      ]
+     ],
+     [
+      "metal1",
+      [
+       8,
+       0
+      ]
+     ],
+     [
+      "via1",
+      [
+       19,
+       0
+      ]
+     ],
+     [
+      "metal2",
+      [
+       10,
+       0
+      ]
+     ],
+     [
+      "via2",
+      [
+       29,
+       0
+      ]
+     ],
+     [
+      "metal3",
+      [
+       30,
+       0
+      ]
+     ],
+     [
+      "via3",
+      [
+       49,
+       0
+      ]
+     ],
+     [
+      "metal4",
+      [
+       50,
+       0
+      ]
+     ],
+     [
+      "topvia1",
+      [
+       125,
+       0
+      ]
+     ],
+     [
+      "topmetal1",
+      [
+       126,
+       0
+      ]
+     ],
+     [
+      "passiv",
+      [
+       9,
+       0
+      ]
+     ],
+     [
+      "edgeseal",
+      [
+       39,
+       0
+      ]
+     ],
+     [
+      "prboundary",
+      [
+       189,
+       0
+      ]
+     ],
+     [
+      "metal1.label",
+      [
+       8,
+       25
+      ]
+     ],
+     [
+      "metal2.label",
+      [
+       10,
+       25
+      ]
+     ],
+     [
+      "metal3.label",
+      [
+       30,
+       25
+      ]
+     ],
+     [
+      "metal4.label",
+      [
+       50,
+       25
+      ]
+     ],
+     [
+      "topmetal1.label",
+      [
+       126,
+       25
+      ]
+     ],
+     [
+      "metal1.pin",
+      [
+       8,
+       2
+      ]
+     ],
+     [
+      "metal2.pin",
+      [
+       10,
+       2
+      ]
+     ],
+     [
+      "metal3.pin",
+      [
+       30,
+       2
+      ]
+     ],
+     [
+      "metal4.pin",
+      [
+       50,
+       2
+      ]
+     ],
+     [
+      "topmetal1.pin",
+      [
+       126,
+       2
+      ]
+     ]
+    ]
+   },
+   "metals": [
+    "metal1",
+    "metal2",
+    "metal3",
+    "metal4",
+    "topmetal1"
+   ],
+   "max_metal": "topmetal1",
+   "grid_nm": 5,
+   "klayout_dir": "tech",
+   "drc_klayout": [
+    "ihp-sg13cmos5l.drc"
+   ],
+   "drc_options": {
+    "dict": []
+   },
+   "drc_switches": "negated",
+   "drc_extra": [],
+   "lvs_klayout": [],
+   "lvs_options": {
+    "dict": []
+   },
+   "deck_vars": {
+    "dict": []
+   },
+   "magic_rc": "{name}.magicrc",
+   "magic_drc": true,
+   "erc_tap": [],
+   "mims": [],
+   "net_labels": [],
+   "netgen_setup": "{name}_setup.tcl",
+   "pcells": false,
+   "pcell_lib": null,
+   "strap": null,
+   "space": [],
+   "fill": [],
+   "ring": null,
+   "model_vars": [],
+   "model_lib": "libs.tech/ngspice/models/cornerMOSlv.lib",
+   "model_includes": [],
+   "osdi": [
+    "psp103",
+    "psp103_nqs",
+    "r3_cmc",
+    "mosvar",
+    "cap_cmomi",
+    "cap_cmomf"
+   ],
+   "corners": [
+    "mos_tt",
+    "mos_ss",
+    "mos_ff",
+    "mos_sf",
+    "mos_fs"
+   ],
+   "corner_symbol": null,
+   "mismatch_section": "{corner}_mismatch",
+   "mismatch_param": null,
+   "gate_layers": [
+    "poly",
+    "diff"
+   ],
+   "pin_label_layers": [],
+   "limits": [
+    "no KLayout LVS runset in the PDK",
+    "no standard cells or device symbols in the PDK",
+    "simulation set up as for SG13G2 but not exercised"
+   ],
+   "lvs_elements": [],
+   "stdcells": [],
+   "stdcell_gds": "libs.ref/{lib}/gds/{lib}.gds",
+   "stdcell_spice": [
+    "libs.ref/{lib}/spice/{lib}.spice",
+    "libs.ref/{lib}/spice/{cell}.spice"
+   ],
+   "stdcell_verilog": [],
+   "stdcell_verilog_defines": [],
+   "stdcell_lvs": null,
+   "stdcell_tie": "",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.13,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.07
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.16,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [
+       [
+        0.3,
+        0.22
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "topmetal1",
+      "width": 1.64,
+      "space": 1.64,
+      "area": 0.0,
+      "wide": [],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "diff",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.c, M1.c, M1.c1, Cnt.f",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.11
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.d, M1.c, M1.c1, Cnt.e",
+      "extra": [],
+      "away": [
+       [
+        "diff",
+        0.14
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.01,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V1.a, V1.b1, V1.c, V1.c1, M2.c, M2.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V2.a, V2.b1, V2.c, V2.c1, M3.c, M3.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V3.a, V3.b1, V3.c, V3.c1, M4.c, M4.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "topvia1",
+      "below": "metal4",
+      "above": "topmetal1",
+      "size": 0.42,
+      "space": 0.42,
+      "enc_below": [
+       0.1,
+       0.1
+      ],
+      "enc_above": [
+       0.42,
+       0.42
+      ],
+      "rules": "TV1.a, TV1.b, TV1.c, TV1.d",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [],
+    "taps": null
+   },
+   "stacks": {
+    "dict": []
+   }
+  },
+  "generic": {
+   "$": "Profile",
+   "family": "generic",
+   "label": "Unknown process",
+   "verified": false,
+   "layers": {
+    "dict": []
+   },
+   "metals": [],
+   "max_metal": "",
+   "grid_nm": 5,
+   "klayout_dir": "",
+   "drc_klayout": [],
+   "drc_options": {
+    "dict": []
+   },
+   "drc_switches": "flags",
+   "drc_extra": [],
+   "lvs_klayout": [],
+   "lvs_options": {
+    "dict": []
+   },
+   "deck_vars": {
+    "dict": []
+   },
+   "magic_rc": null,
+   "magic_drc": false,
+   "erc_tap": [],
+   "mims": [],
+   "net_labels": [],
+   "netgen_setup": null,
+   "pcells": false,
+   "pcell_lib": null,
+   "strap": null,
+   "space": [],
+   "fill": [],
+   "ring": null,
+   "model_vars": [],
+   "model_lib": null,
+   "model_includes": [],
+   "osdi": [],
+   "corners": [],
+   "corner_symbol": null,
+   "mismatch_section": null,
+   "mismatch_param": null,
+   "gate_layers": [
+    "poly",
+    "diff"
+   ],
+   "pin_label_layers": [],
+   "limits": [],
+   "lvs_elements": [],
+   "stdcells": [],
+   "stdcell_gds": "libs.ref/{lib}/gds/{lib}.gds",
+   "stdcell_spice": [
+    "libs.ref/{lib}/spice/{lib}.spice",
+    "libs.ref/{lib}/spice/{cell}.spice"
+   ],
+   "stdcell_verilog": [],
+   "stdcell_verilog_defines": [],
+   "stdcell_lvs": null,
+   "stdcell_tie": "",
+   "stack": null,
+   "stacks": {
+    "dict": []
+   }
+  }
+ },
+ "variants": {
+  "sky130A": {
+   "profile": "sky130",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": "tap",
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.15,
+      "space": 0.21,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.075
+       ],
+       [
+        "tap",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "li1",
+      "width": 0.17,
+      "space": 0.17,
+      "area": 0.0561,
+      "wide": [],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met1",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.083,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met2",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.0676,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met3",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met4",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met5",
+      "width": 1.6,
+      "space": 1.6,
+      "area": 4.0,
+      "wide": [],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "diff",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.06
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.5a, licon.5c, licon.11, li.5",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "tap",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.12
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.7, li.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "poly",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.05,
+       0.08
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.8, licon.8a, licon.14, licon.15, li.5, npc.1, npc.2, licon.13",
+      "extra": [
+       [
+        "npc",
+        0.1,
+        0.27,
+        0.27
+       ]
+      ],
+      "away": [
+       [
+        "diff",
+        0.19
+       ],
+       [
+        "tap",
+        0.19
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "mcon",
+      "below": "li1",
+      "above": "met1",
+      "size": 0.17,
+      "space": 0.19,
+      "enc_below": [
+       0.0,
+       0.0
+      ],
+      "enc_above": [
+       0.03,
+       0.06
+      ],
+      "rules": "ct.1, ct.2, ct.4, m1.4, m1.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via",
+      "below": "met1",
+      "above": "met2",
+      "size": 0.15,
+      "space": 0.17,
+      "enc_below": [
+       0.055,
+       0.085
+      ],
+      "enc_above": [
+       0.055,
+       0.085
+      ],
+      "rules": "via.1a, via.2, via.4a, via.5a, m2.4, m2.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "met2",
+      "above": "met3",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.04,
+       0.085
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via2.1a, via2.2, via2.4, via2.5, m3.4",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "met3",
+      "above": "met4",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.06,
+       0.09
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via3.1, via3.2, via3.4, via3.5, m4.3",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "met4",
+      "above": "met5",
+      "size": 0.8,
+      "space": 0.8,
+      "enc_below": [
+       0.19,
+       0.19
+      ],
+      "enc_above": [
+       0.31,
+       0.31
+      ],
+      "rules": "via4.1, via4.2, via4.4, m5.3",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "capm",
+      "metal": "met3",
+      "cut": "via3",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     },
+     {
+      "$": "Plate",
+      "name": "cap2m",
+      "metal": "met4",
+      "cut": "via4",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     }
+    ],
+    "taps": {
+     "$": "TapRule",
+     "implant": {
+      "dict": [
+       [
+        "ptap",
+        "psdm"
+       ],
+       [
+        "ntap",
+        "nsdm"
+       ]
+      ]
+     },
+     "implant_enc": 0.125,
+     "implant_width": 0.38,
+     "implant_space": 0.38,
+     "well_enc": 0.18,
+     "space": 0.27,
+     "well_space": 0.13,
+     "well_well": 1.27,
+     "well_ndiff": 0.34,
+     "latchup": 15.0
+    }
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "sky130A_mr.drc": [
+     {
+      "feol": "true",
+      "beol": "true",
+      "offgrid": "true"
+     },
+     {
+      "feol": "false",
+      "beol": "true",
+      "offgrid": "true"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "run_mode": "deep",
+    "lvs_sub": "VSS",
+    "scale": "true"
+   },
+   "magic_file": "sky130A.magicrc",
+   "netgen_file": "sky130A_setup.tcl"
+  },
+  "sky130B": {
+   "profile": "sky130",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": "tap",
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.15,
+      "space": 0.21,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.075
+       ],
+       [
+        "tap",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "li1",
+      "width": 0.17,
+      "space": 0.17,
+      "area": 0.0561,
+      "wide": [],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met1",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.083,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met2",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.0676,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met3",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met4",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met5",
+      "width": 1.6,
+      "space": 1.6,
+      "area": 4.0,
+      "wide": [],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "diff",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.06
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.5a, licon.5c, licon.11, li.5",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "tap",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.12
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.7, li.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "poly",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.05,
+       0.08
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.8, licon.8a, licon.14, licon.15, li.5, npc.1, npc.2, licon.13",
+      "extra": [
+       [
+        "npc",
+        0.1,
+        0.27,
+        0.27
+       ]
+      ],
+      "away": [
+       [
+        "diff",
+        0.19
+       ],
+       [
+        "tap",
+        0.19
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "mcon",
+      "below": "li1",
+      "above": "met1",
+      "size": 0.17,
+      "space": 0.19,
+      "enc_below": [
+       0.0,
+       0.0
+      ],
+      "enc_above": [
+       0.03,
+       0.06
+      ],
+      "rules": "ct.1, ct.2, ct.4, m1.4, m1.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via",
+      "below": "met1",
+      "above": "met2",
+      "size": 0.15,
+      "space": 0.17,
+      "enc_below": [
+       0.055,
+       0.085
+      ],
+      "enc_above": [
+       0.055,
+       0.085
+      ],
+      "rules": "via.1a, via.2, via.4a, via.5a, m2.4, m2.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "met2",
+      "above": "met3",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.04,
+       0.085
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via2.1a, via2.2, via2.4, via2.5, m3.4",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "met3",
+      "above": "met4",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.06,
+       0.09
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via3.1, via3.2, via3.4, via3.5, m4.3",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "met4",
+      "above": "met5",
+      "size": 0.8,
+      "space": 0.8,
+      "enc_below": [
+       0.19,
+       0.19
+      ],
+      "enc_above": [
+       0.31,
+       0.31
+      ],
+      "rules": "via4.1, via4.2, via4.4, m5.3",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "capm",
+      "metal": "met3",
+      "cut": "via3",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     },
+     {
+      "$": "Plate",
+      "name": "cap2m",
+      "metal": "met4",
+      "cut": "via4",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     }
+    ],
+    "taps": {
+     "$": "TapRule",
+     "implant": {
+      "dict": [
+       [
+        "ptap",
+        "psdm"
+       ],
+       [
+        "ntap",
+        "nsdm"
+       ]
+      ]
+     },
+     "implant_enc": 0.125,
+     "implant_width": 0.38,
+     "implant_space": 0.38,
+     "well_enc": 0.18,
+     "space": 0.27,
+     "well_space": 0.13,
+     "well_well": 1.27,
+     "well_ndiff": 0.34,
+     "latchup": 15.0
+    }
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "sky130B_mr.drc": [
+     {
+      "feol": "true",
+      "beol": "true",
+      "offgrid": "true"
+     },
+     {
+      "feol": "false",
+      "beol": "true",
+      "offgrid": "true"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "run_mode": "deep",
+    "lvs_sub": "VSS",
+    "scale": "true"
+   },
+   "magic_file": "sky130B.magicrc",
+   "netgen_file": "sky130B_setup.tcl"
+  },
+  "sky130a": {
+   "profile": "sky130",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": "tap",
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.15,
+      "space": 0.21,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.075
+       ],
+       [
+        "tap",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "li1",
+      "width": 0.17,
+      "space": 0.17,
+      "area": 0.0561,
+      "wide": [],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met1",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.083,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met2",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.0676,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met3",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met4",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met5",
+      "width": 1.6,
+      "space": 1.6,
+      "area": 4.0,
+      "wide": [],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "diff",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.06
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.5a, licon.5c, licon.11, li.5",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "tap",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.12
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.7, li.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "poly",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.05,
+       0.08
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.8, licon.8a, licon.14, licon.15, li.5, npc.1, npc.2, licon.13",
+      "extra": [
+       [
+        "npc",
+        0.1,
+        0.27,
+        0.27
+       ]
+      ],
+      "away": [
+       [
+        "diff",
+        0.19
+       ],
+       [
+        "tap",
+        0.19
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "mcon",
+      "below": "li1",
+      "above": "met1",
+      "size": 0.17,
+      "space": 0.19,
+      "enc_below": [
+       0.0,
+       0.0
+      ],
+      "enc_above": [
+       0.03,
+       0.06
+      ],
+      "rules": "ct.1, ct.2, ct.4, m1.4, m1.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via",
+      "below": "met1",
+      "above": "met2",
+      "size": 0.15,
+      "space": 0.17,
+      "enc_below": [
+       0.055,
+       0.085
+      ],
+      "enc_above": [
+       0.055,
+       0.085
+      ],
+      "rules": "via.1a, via.2, via.4a, via.5a, m2.4, m2.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "met2",
+      "above": "met3",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.04,
+       0.085
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via2.1a, via2.2, via2.4, via2.5, m3.4",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "met3",
+      "above": "met4",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.06,
+       0.09
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via3.1, via3.2, via3.4, via3.5, m4.3",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "met4",
+      "above": "met5",
+      "size": 0.8,
+      "space": 0.8,
+      "enc_below": [
+       0.19,
+       0.19
+      ],
+      "enc_above": [
+       0.31,
+       0.31
+      ],
+      "rules": "via4.1, via4.2, via4.4, m5.3",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "capm",
+      "metal": "met3",
+      "cut": "via3",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     },
+     {
+      "$": "Plate",
+      "name": "cap2m",
+      "metal": "met4",
+      "cut": "via4",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     }
+    ],
+    "taps": {
+     "$": "TapRule",
+     "implant": {
+      "dict": [
+       [
+        "ptap",
+        "psdm"
+       ],
+       [
+        "ntap",
+        "nsdm"
+       ]
+      ]
+     },
+     "implant_enc": 0.125,
+     "implant_width": 0.38,
+     "implant_space": 0.38,
+     "well_enc": 0.18,
+     "space": 0.27,
+     "well_space": 0.13,
+     "well_well": 1.27,
+     "well_ndiff": 0.34,
+     "latchup": 15.0
+    }
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "sky130a_mr.drc": [
+     {
+      "feol": "true",
+      "beol": "true",
+      "offgrid": "true"
+     },
+     {
+      "feol": "false",
+      "beol": "true",
+      "offgrid": "true"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "run_mode": "deep",
+    "lvs_sub": "VSS",
+    "scale": "true"
+   },
+   "magic_file": "sky130a.magicrc",
+   "netgen_file": "sky130a_setup.tcl"
+  },
+  "sky130C": {
+   "profile": "sky130",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": "tap",
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.15,
+      "space": 0.21,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.075
+       ],
+       [
+        "tap",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "li1",
+      "width": 0.17,
+      "space": 0.17,
+      "area": 0.0561,
+      "wide": [],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met1",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.083,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met2",
+      "width": 0.14,
+      "space": 0.14,
+      "area": 0.0676,
+      "wide": [
+       [
+        3.0,
+        0.28
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met3",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met4",
+      "width": 0.3,
+      "space": 0.3,
+      "area": 0.24,
+      "wide": [
+       [
+        3.0,
+        0.4
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "met5",
+      "width": 1.6,
+      "space": 1.6,
+      "area": 4.0,
+      "wide": [],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "diff",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.06
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.5a, licon.5c, licon.11, li.5",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.055
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "tap",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.04,
+       0.12
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.7, li.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "licon1",
+      "below": "poly",
+      "above": "li1",
+      "size": 0.17,
+      "space": 0.17,
+      "enc_below": [
+       0.05,
+       0.08
+      ],
+      "enc_above": [
+       0.0,
+       0.08
+      ],
+      "rules": "licon.1, licon.2, licon.8, licon.8a, licon.14, licon.15, li.5, npc.1, npc.2, licon.13",
+      "extra": [
+       [
+        "npc",
+        0.1,
+        0.27,
+        0.27
+       ]
+      ],
+      "away": [
+       [
+        "diff",
+        0.19
+       ],
+       [
+        "tap",
+        0.19
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "mcon",
+      "below": "li1",
+      "above": "met1",
+      "size": 0.17,
+      "space": 0.19,
+      "enc_below": [
+       0.0,
+       0.0
+      ],
+      "enc_above": [
+       0.03,
+       0.06
+      ],
+      "rules": "ct.1, ct.2, ct.4, m1.4, m1.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via",
+      "below": "met1",
+      "above": "met2",
+      "size": 0.15,
+      "space": 0.17,
+      "enc_below": [
+       0.055,
+       0.085
+      ],
+      "enc_above": [
+       0.055,
+       0.085
+      ],
+      "rules": "via.1a, via.2, via.4a, via.5a, m2.4, m2.5",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "met2",
+      "above": "met3",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.04,
+       0.085
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via2.1a, via2.2, via2.4, via2.5, m3.4",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "met3",
+      "above": "met4",
+      "size": 0.2,
+      "space": 0.2,
+      "enc_below": [
+       0.06,
+       0.09
+      ],
+      "enc_above": [
+       0.065,
+       0.065
+      ],
+      "rules": "via3.1, via3.2, via3.4, via3.5, m4.3",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "met4",
+      "above": "met5",
+      "size": 0.8,
+      "space": 0.8,
+      "enc_below": [
+       0.19,
+       0.19
+      ],
+      "enc_above": [
+       0.31,
+       0.31
+      ],
+      "rules": "via4.1, via4.2, via4.4, m5.3",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "capm",
+      "metal": "met3",
+      "cut": "via3",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     },
+     {
+      "$": "Plate",
+      "name": "cap2m",
+      "metal": "met4",
+      "cut": "via4",
+      "top": "c0",
+      "bottom": "c1",
+      "also": []
+     }
+    ],
+    "taps": {
+     "$": "TapRule",
+     "implant": {
+      "dict": [
+       [
+        "ptap",
+        "psdm"
+       ],
+       [
+        "ntap",
+        "nsdm"
+       ]
+      ]
+     },
+     "implant_enc": 0.125,
+     "implant_width": 0.38,
+     "implant_space": 0.38,
+     "well_enc": 0.18,
+     "space": 0.27,
+     "well_space": 0.13,
+     "well_well": 1.27,
+     "well_ndiff": 0.34,
+     "latchup": 15.0
+    }
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "sky130C_mr.drc": [
+     {
+      "feol": "true",
+      "beol": "true",
+      "offgrid": "true"
+     },
+     {
+      "feol": "false",
+      "beol": "true",
+      "offgrid": "true"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "run_mode": "deep",
+    "lvs_sub": "VSS",
+    "scale": "true"
+   },
+   "magic_file": "sky130C.magicrc",
+   "netgen_file": "sky130C_setup.tcl"
+  },
+  "gf180mcuA": {
+   "profile": "gf180mcu",
+   "stack": {
+    "$": "Stack",
+    "diff": "comp",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.2,
+      "space": 0.24,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "comp",
+        0.3
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.23,
+      "space": 0.23,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "comp",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.15
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8",
+      "extra": [],
+      "away": [
+       [
+        "comp",
+        0.17
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.0,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V1.1, V1.2b, V1.3a, V1.3c, V1.3d, V1.4a, V1.4b, V1.4c",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [],
+    "taps": null
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "gf180mcu.drc": [
+     {
+      "metal_level": "3LM",
+      "metal_top": "30K",
+      "mim_option": "A",
+      "decks": "all,-density,-antenna,-cup"
+     },
+     {
+      "metal_level": "3LM",
+      "metal_top": "30K",
+      "mim_option": "A",
+      "decks": "all,-density,-antenna,-cup,-feol"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "metal_level": "3LM",
+    "metal_top": "30K",
+    "mim_option": "A",
+    "run_mode": "flat",
+    "combine": "true"
+   },
+   "magic_file": "gf180mcuA.magicrc",
+   "netgen_file": "gf180mcuA_setup.tcl"
+  },
+  "gf180mcuB": {
+   "profile": "gf180mcu",
+   "stack": {
+    "$": "Stack",
+    "diff": "comp",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.2,
+      "space": 0.24,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "comp",
+        0.3
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.23,
+      "space": 0.23,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.44,
+      "space": 0.46,
+      "area": 0.5625,
+      "wide": [
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "comp",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.15
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8",
+      "extra": [],
+      "away": [
+       [
+        "comp",
+        0.17
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.0,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V1.1, V1.2b, V1.3a, V1.3c, V1.3d, V1.4a, V1.4b, V1.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V2.1, V2.2b, V2.3b, V2.3c, V2.3d, V2.4a, V2.4b, V2.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V3.1, V3.2b, V3.3b, V3.3c, V3.3d, V3.4a, V3.4b, V3.4c",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "fusetop",
+      "metal": "metal3",
+      "cut": "via3",
+      "top": "B",
+      "bottom": "G",
+      "also": []
+     }
+    ],
+    "taps": null
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "gf180mcu.drc": [
+     {
+      "metal_level": "4LM",
+      "metal_top": "11K",
+      "mim_option": "B",
+      "decks": "all,-density,-antenna,-cup"
+     },
+     {
+      "metal_level": "4LM",
+      "metal_top": "11K",
+      "mim_option": "B",
+      "decks": "all,-density,-antenna,-cup,-feol"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "metal_level": "4LM",
+    "metal_top": "11K",
+    "mim_option": "B",
+    "run_mode": "flat",
+    "combine": "true"
+   },
+   "magic_file": "gf180mcuB.magicrc",
+   "netgen_file": "gf180mcuB_setup.tcl"
+  },
+  "gf180mcuC": {
+   "profile": "gf180mcu",
+   "stack": {
+    "$": "Stack",
+    "diff": "comp",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.2,
+      "space": 0.24,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "comp",
+        0.3
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.23,
+      "space": 0.23,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal5",
+      "width": 0.44,
+      "space": 0.46,
+      "area": 0.5625,
+      "wide": [
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "comp",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.15
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8",
+      "extra": [],
+      "away": [
+       [
+        "comp",
+        0.17
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.0,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V1.1, V1.2b, V1.3a, V1.3c, V1.3d, V1.4a, V1.4b, V1.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V2.1, V2.2b, V2.3b, V2.3c, V2.3d, V2.4a, V2.4b, V2.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V3.1, V3.2b, V3.3b, V3.3c, V3.3d, V3.4a, V3.4b, V3.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "metal4",
+      "above": "metal5",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V4.1, V4.2b, V4.3b, V4.3c, V4.3d, V4.4a, V4.4b, V4.4c",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "fusetop",
+      "metal": "metal4",
+      "cut": "via4",
+      "top": "B",
+      "bottom": "G",
+      "also": []
+     }
+    ],
+    "taps": null
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "gf180mcu.drc": [
+     {
+      "metal_level": "5LM",
+      "metal_top": "9K",
+      "mim_option": "B",
+      "decks": "all,-density,-antenna,-cup"
+     },
+     {
+      "metal_level": "5LM",
+      "metal_top": "9K",
+      "mim_option": "B",
+      "decks": "all,-density,-antenna,-cup,-feol"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "metal_level": "5LM",
+    "metal_top": "9K",
+    "mim_option": "B",
+    "run_mode": "flat",
+    "combine": "true"
+   },
+   "magic_file": "gf180mcuC.magicrc",
+   "netgen_file": "gf180mcuC_setup.tcl"
+  },
+  "gf180mcuD": {
+   "profile": "gf180mcu",
+   "stack": {
+    "$": "Stack",
+    "diff": "comp",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.2,
+      "space": 0.24,
+      "area": 0.0,
+      "wide": [],
+      "away": [
+       [
+        "comp",
+        0.3
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.23,
+      "space": 0.23,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.28,
+      "space": 0.28,
+      "area": 0.1444,
+      "wide": [
+       [
+        10.0,
+        0.3
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal5",
+      "width": 0.44,
+      "space": 0.46,
+      "area": 0.5625,
+      "wide": [
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "comp",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.4, CO.6, CO.6a, CO.6b, CO.7",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.15
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.22,
+      "space": 0.28,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.005,
+       0.06
+      ],
+      "rules": "CO.1, CO.2b, CO.3, CO.6, CO.6a, CO.6b, CO.8",
+      "extra": [],
+      "away": [
+       [
+        "comp",
+        0.17
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.0,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V1.1, V1.2b, V1.3a, V1.3c, V1.3d, V1.4a, V1.4b, V1.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V2.1, V2.2b, V2.3b, V2.3c, V2.3d, V2.4a, V2.4b, V2.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V3.1, V3.2b, V3.3b, V3.3c, V3.3d, V3.4a, V3.4b, V3.4c",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "metal4",
+      "above": "metal5",
+      "size": 0.26,
+      "space": 0.36,
+      "enc_below": [
+       0.01,
+       0.06
+      ],
+      "enc_above": [
+       0.01,
+       0.06
+      ],
+      "rules": "V4.1, V4.2b, V4.3b, V4.3c, V4.3d, V4.4a, V4.4b, V4.4c",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "fusetop",
+      "metal": "metal4",
+      "cut": "via4",
+      "top": "B",
+      "bottom": "G",
+      "also": []
+     }
+    ],
+    "taps": null
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "gf180mcu.drc": [
+     {
+      "metal_level": "5LM",
+      "metal_top": "11K",
+      "mim_option": "B",
+      "decks": "all,-density,-antenna,-cup"
+     },
+     {
+      "metal_level": "5LM",
+      "metal_top": "11K",
+      "mim_option": "B",
+      "decks": "all,-density,-antenna,-cup,-feol"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "metal_level": "5LM",
+    "metal_top": "11K",
+    "mim_option": "B",
+    "run_mode": "flat",
+    "combine": "true"
+   },
+   "magic_file": "gf180mcuD.magicrc",
+   "netgen_file": "gf180mcuD_setup.tcl"
+  },
+  "ihp-sg13g2": {
+   "profile": "ihp-sg13g2",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.13,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.07
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.16,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [
+       [
+        0.3,
+        0.22
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal5",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "topmetal1",
+      "width": 1.64,
+      "space": 1.64,
+      "area": 0.0,
+      "wide": [],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "topmetal2",
+      "width": 2.0,
+      "space": 2.0,
+      "area": 0.0,
+      "wide": [
+       [
+        5.0,
+        5.0
+       ]
+      ],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "diff",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.c, M1.c, M1.c1, Cnt.f",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.11
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.d, M1.c, M1.c1, Cnt.e",
+      "extra": [],
+      "away": [
+       [
+        "diff",
+        0.14
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.01,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V1.a, V1.b1, V1.c, V1.c1, M2.c, M2.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V2.a, V2.b1, V2.c, V2.c1, M3.c, M3.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V3.a, V3.b1, V3.c, V3.c1, M4.c, M4.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via4",
+      "below": "metal4",
+      "above": "metal5",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V4.a, V4.b1, V4.c, V4.c1, M5.c, M5.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "topvia1",
+      "below": "metal5",
+      "above": "topmetal1",
+      "size": 0.42,
+      "space": 0.42,
+      "enc_below": [
+       0.1,
+       0.1
+      ],
+      "enc_above": [
+       0.42,
+       0.42
+      ],
+      "rules": "TV1.a, TV1.b, TV1.c, TV1.d",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "topvia2",
+      "below": "topmetal1",
+      "above": "topmetal2",
+      "size": 0.9,
+      "space": 1.06,
+      "enc_below": [
+       0.5,
+       0.5
+      ],
+      "enc_above": [
+       0.5,
+       0.5
+      ],
+      "rules": "TV2.a, TV2.b, TV2.c, TV2.d",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [
+     {
+      "$": "Plate",
+      "name": "mim",
+      "metal": "metal5",
+      "cut": "topvia1",
+      "top": "c0",
+      "bottom": "c1",
+      "also": [
+       "vmim"
+      ]
+     }
+    ],
+    "taps": null
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "ihp-sg13g2.drc": [
+     {},
+     {
+      "no_feol": "true",
+      "no_offgrid": "false"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "run_mode": "deep"
+   },
+   "magic_file": "ihp-sg13g2.magicrc",
+   "netgen_file": "ihp-sg13g2_setup.tcl"
+  },
+  "ihp-sg13cmos5l": {
+   "profile": "ihp-sg13cmos5l",
+   "stack": {
+    "$": "Stack",
+    "diff": "diff",
+    "tap": null,
+    "poly": "poly",
+    "well": "nwell",
+    "conductors": [
+     {
+      "$": "Conductor",
+      "name": "poly",
+      "width": 0.13,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [],
+      "away": [
+       [
+        "diff",
+        0.07
+       ]
+      ]
+     },
+     {
+      "$": "Conductor",
+      "name": "metal1",
+      "width": 0.16,
+      "space": 0.18,
+      "area": 0.09,
+      "wide": [
+       [
+        0.3,
+        0.22
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal2",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal3",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "metal4",
+      "width": 0.2,
+      "space": 0.21,
+      "area": 0.144,
+      "wide": [
+       [
+        0.39,
+        0.24
+       ],
+       [
+        10.0,
+        0.6
+       ]
+      ],
+      "away": []
+     },
+     {
+      "$": "Conductor",
+      "name": "topmetal1",
+      "width": 1.64,
+      "space": 1.64,
+      "area": 0.0,
+      "wide": [],
+      "away": []
+     }
+    ],
+    "cuts": [
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "diff",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.c, M1.c, M1.c1, Cnt.f",
+      "extra": [],
+      "away": [
+       [
+        "poly",
+        0.11
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "contact",
+      "below": "poly",
+      "above": "metal1",
+      "size": 0.16,
+      "space": 0.2,
+      "enc_below": [
+       0.07,
+       0.07
+      ],
+      "enc_above": [
+       0.0,
+       0.05
+      ],
+      "rules": "Cnt.a, Cnt.b1, Cnt.d, M1.c, M1.c1, Cnt.e",
+      "extra": [],
+      "away": [
+       [
+        "diff",
+        0.14
+       ]
+      ]
+     },
+     {
+      "$": "Cut",
+      "name": "via1",
+      "below": "metal1",
+      "above": "metal2",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.01,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V1.a, V1.b1, V1.c, V1.c1, M2.c, M2.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via2",
+      "below": "metal2",
+      "above": "metal3",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V2.a, V2.b1, V2.c, V2.c1, M3.c, M3.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "via3",
+      "below": "metal3",
+      "above": "metal4",
+      "size": 0.19,
+      "space": 0.29,
+      "enc_below": [
+       0.005,
+       0.05
+      ],
+      "enc_above": [
+       0.005,
+       0.05
+      ],
+      "rules": "V3.a, V3.b1, V3.c, V3.c1, M4.c, M4.c1",
+      "extra": [],
+      "away": []
+     },
+     {
+      "$": "Cut",
+      "name": "topvia1",
+      "below": "metal4",
+      "above": "topmetal1",
+      "size": 0.42,
+      "space": 0.42,
+      "enc_below": [
+       0.1,
+       0.1
+      ],
+      "enc_above": [
+       0.42,
+       0.42
+      ],
+      "rules": "TV1.a, TV1.b, TV1.c, TV1.d",
+      "extra": [],
+      "away": []
+     }
+    ],
+    "plates": [],
+    "taps": null
+   },
+   "same_but_stack": true,
+   "drc_rd": {
+    "ihp-sg13cmos5l.drc": [
+     {},
+     {
+      "no_feol": "true",
+      "no_offgrid": "false"
+     }
+    ]
+   },
+   "lvs_rd": {
+    "run_mode": "deep"
+   },
+   "magic_file": "ihp-sg13cmos5l.magicrc",
+   "netgen_file": "ihp-sg13cmos5l_setup.tcl"
+  }
+ },
+ "for_family": {
+  "sky130": "sky130",
+  "gf180mcu": "gf180mcu",
+  "ihp-sg13": "ihp-sg13g2",
+  "ihp-sg13g2": "ihp-sg13g2",
+  "mystery": "generic",
+  "None": "generic"
+ },
+ "formulas": {
+  "mim_area_perimeter": {
+   "A": 2.925,
+   "P": 7.34
+  }
+ }
+}

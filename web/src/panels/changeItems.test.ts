@@ -280,6 +280,23 @@ describe("schematic re-drawing in the review", () => {
   });
 });
 
+describe("dependency operations (the project log)", () => {
+  it("names each dependency once, and a PDK change by its two PDKs", async () => {
+    await setLocale("en");
+    const dep = (d: Partial<Effect>): Effect => ({ k: "d", do: "add", name: "ip", ...d });
+    const items = groupChanges({ changes: [{ lib: "@project", ops: [
+      op([dep({})], "a buffer", { cell: null, view: null as unknown as string, op: "dep_add" }),
+      op([dep({ do: "mod" })], "newer", { cell: null, view: null as unknown as string, op: "dep_update" }),
+      op([dep({ do: "mod", name: null, pdk: ["sky130A@aaa", "sky130A@bbb"] })], null, { cell: null, view: null as unknown as string, op: "pdk_set" }),
+    ] }] });
+    expect(items.map((i) => [resolveText(i.label), i.kind, i.cell])).toEqual([["dependency ip", "add", ""], ["PDK", "mod", ""]]);
+    expect(items[0].reasons.map((r) => r.text)).toEqual(["a buffer", "newer"]);
+    expect(resolveText(describeEffect(dep({ do: "del" })))).toBe("− dependency ip");
+    expect(resolveText(describeEffect(dep({ do: "mod", name: null, pdk: [null, "fakeA"] })))).toBe("PDK ∅ → fakeA");
+    expect(resolveText(describeEffect(dep({ do: "mod", name: null })))).toBe("dependencies back as they were (project.json, undine.lock)");
+  });
+});
+
 describe("tabViewOf", () => {
   it("opens a changed item in its view, or on the cell page when it has no view tab (intent, flow)", () => {
     expect(["schematic", "symbol", "layout", "rtl"].map(tabViewOf)).toEqual(["schematic", "symbol", "layout", "rtl"]);

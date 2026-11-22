@@ -171,6 +171,36 @@ agent's next turn is told that the proposal was restored and what was taken back
 
 `GET /api/p/<project>/changesets/<id>/timeline`, `POST .../restore` with `{"to": <gseq>}`.
 
+## Dependencies in a changeset
+
+Adding, updating or removing a [library dependency](libraries.md#dependencies), and moving to another PDK, are changeset
+operations too (`dep_add`, `dep_update`, `dep_remove`, `pdk_set`): they change the working copy's `project.json` and
+`undine.lock` and install into its `.undine/deps` from the [store](libraries.md#the-store) (hard links), never into the
+design's. The proposal can then place the new cells and run checks. Each one is recorded in the working copy's project
+log (`history/@project.jsonl`, a name no library can have) with both files before and after: the timeline shows it,
+**Restore to here** takes it back (the files as they were, installed again from the store), and the review lists it
+under *project (dependencies)*. An operation fetches before it holds anything, so the proposal stays usable meanwhile.
+It is refused while someone else is writing the proposal, and a restore asked while one is still fetching is refused
+(409 `busy`) rather than waiting for it.
+
+Adopting merges `project.json` and `undine.lock` entry by entry, so two proposals that add different dependencies adopt
+in either order, and refuses (with the reason) a merge whose requirements and lock no longer fit. It then installs the
+merged lock in the project from the store. Nothing is fetched at adopt: a dependency whose files the store does not
+hold (nor the project's install) is refused before anything is written (*not in the store: fetch it first*). An
+installation that fails anyway is said in the answer (`deps_warning`) with the adopt done; `lib sync` installs it later.
+The adopt never waits for another operation on the project's dependencies (a `pkg add` fetching on the command line):
+the installation is then left pending (`deps_pending`) for `lib sync` or the next sync.
+If Undine stops between the merge and the installation, it installs when it starts again.
+
+The library browser's **Add**, **Update** and **Remove**, and the PDK badge's move to another PDK, each make such an
+operation in a small proposal of their own (titled `Add analog_ip`, ...) and adopt it in one click, so a person's change
+takes the same path as an agent's. When the design refuses the adopt (a conflict), the proposal stays open: the
+browser says so and offers to review it.
+
+`POST /api/p/<project>/changesets/<id>/deps` with `{"action": "add", "name": ..., "git": ...}` (or `update`, `remove`),
+`POST .../pdk` with `{"pdk": ...}`, and the browser's one-click `POST /api/p/<project>/deps/changeset`
+([HTTP API](../reference/api.md#changesets)).
+
 ## Check results and freshness
 
 The Changes panel compares the baseline and proposal for each changed cell that supports DRC or LVS. A result
@@ -242,8 +272,12 @@ changeset changed get their earlier values; later edits of the same objects are 
 lists them with the value now, before adopting and as adopted). Files the changeset added (a cell, a view, an intent)
 are kept as they are, since what it made may be used elsewhere since; the answer lists them (`kept`). A library the
 changeset made stays in `project.json` while it still has files, so the cells kept there, and what you added to it
-since, stay part of the project. The log gets a
-`merge` record naming the revert. It is committed (`Revert <id>: <changeset title>`, on top of HEAD) or left uncommitted as an
+since, stay part of the project. A dependency the changeset added goes (its `project.json` entry, its lock entry
+and its installed files), even when cells of the design placed since still use it: the answer names them
+(`deps_dropped`, and `deps_warning`), so you can place something else there or add the dependency again. An
+`undine.lock` the changeset created (its first dependency, or a PDK move in a project with no lock) goes too, unless
+it changed since (a conflict). The log gets
+a `merge` record naming the revert. It is committed (`Revert <id>: <changeset title>`, on top of HEAD) or left uncommitted as an
 apply is, open tabs follow it as they follow an adopt, and it needs no working copy: the commits are kept.
 
 **Discard** archives the evidence, removes the worktrees and keeps the branch.

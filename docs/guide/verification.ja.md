@@ -22,7 +22,8 @@ sky130 のデッキの読み込みはこれを呼び出しのまま残します�
 に、`cap_mim_m3_2` は `sky130_fd_pr__model__cap_mim_m4` になり、1 個あたり `A = W * L`、`P = 2 * (W + L)`(um)、`m` は `MF` から取ります。
 これで LVS はキャパシタの合計の面積と周囲長、そしてネットを比較します。2 × 3 um のユニット 2 個は `W=2 L=3 MF=2` と一致し、ユニット 1 個、
 周囲長の違うユニット(2.4 × 2.5 um)、別のネットにつながるキャパシタは一致しません。この規則は PDK プロファイルの `lvs_elements` で、
-モデル名の置き換えとパラメータの計算ができます(`server/undine/pdks/pdkprofile.py`)。
+モデル名の置き換えと、名前付きの式によるパラメータの計算ができます(`server/undine/data/profiles/` の下の `profile.toml`。式
+`mim_area_perimeter` は `server/undine/pdks/formulas.py`)。
 
 **LVS の標準セル(sky130)。** PDK の標準セルで作ったレイアウト(取り込んだ LibreLane のマクロや、手で置いたセル)は、それらの回路図と
 照合します。回路図のネットリストはセルを呼ぶだけで定義しないので、Undine は呼ばれた各セルをライブラリの SPICE ファイル

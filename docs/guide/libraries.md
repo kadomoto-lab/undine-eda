@@ -25,6 +25,14 @@ pixi run python -m undine lib sync demo --offline   # the same with no network, 
 In the browser: the package icon next to the folder icon (**New library**) in the library browser opens **Add library
 dependency**; a dependency's row shows its version (`v1.2.0 @ 2299146`) and has **Update** and **Remove**.
 
+Each of the browser's **Add**, **Update** and **Remove** (and the PDK badge's move to another PDK) runs in a small
+[changeset](changesets.md#dependencies-in-a-changeset) of its own and adopts it in one click: the change is recorded
+and adopted like any other edit, and the dependency is installed in the project from the [store](#the-store). A
+project in no git repository is made one first, as opening any changeset does. When the project refuses the adopt (a
+conflict with a change made meanwhile), the change stays in that changeset, open for review, and the browser offers to
+open it. The `lib` commands and the `/deps` routes of the [HTTP API](../reference/api.md) still change the project
+directly.
+
 - A dependency's library is a directory of cells (`<cell>.sch`, `<cell>.sym`, `<cell>.oas`) at the top of the
   repository or in `subdir`. Schematics of the project place its symbols as `<lib>/<cell>.sym`.
 - A SPICE netlist has one subcircuit per cell name. When a testbench reaches two cells of one name from different

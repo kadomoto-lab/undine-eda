@@ -35,7 +35,9 @@ and RTL used only once a person trusts it; see [Libraries and dependencies](guid
   `pkg pack` (the index line of a tagged release) and `pkg check --no-run` (the check report's checks that need no
   PDK) ([Publishing a library](guide/libraries.md#publishing-a-library)).
 - [ ] **Phase 6: PDK profiles.** Each PDK family's process knowledge as a data package that names the PDK versions it
-  supports.
+  supports. Done so far: each family's profile is data, a `profile.toml` in a profile package per ciel family built
+  into Undine (checked field by field against the Python it replaced), and `./setup.sh`, `pixi run pdk` and Undine's
+  choice of PDK version read the tested PDK versions from it ([PDK profiles](guide/pdks.md#pdk-profiles)).
 
 Later: signed index commits or package tags (until then git hashes pin the content), and DRC and LVS in the index CI
 (publishing rests on the publisher's own check report until then).

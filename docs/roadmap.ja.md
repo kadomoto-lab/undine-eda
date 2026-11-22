@@ -30,6 +30,9 @@ commit 全体と木のハッシュで固定し、確認した後に ciel で取�
   免除)と `[renames]`、`pkg init`(ライブラリから manifest の下書きを作る)、`pkg pack`(タグを付けたリリースの index の行)、
   `pkg check --no-run`(検証の報告のうち PDK の要らない検証)([ライブラリを公開する](guide/libraries.ja.md#publishing-a-library))。
 - [ ] **段階 6: PDK プロファイル。** 各 PDK family のプロセスの知識を、対応する PDK のバージョンを名前で示すデータのパッケージにする。
+  ここまでにできたもの: 各 family のプロファイルはデータになりました。Undine に組み込んだ ciel の family ごとのプロファイルの
+  パッケージにある `profile.toml` で(置き換えた Python と欄ごとに照らしてあります)、`./setup.sh`、`pixi run pdk`、Undine による
+  PDK のバージョンの選択は、動作確認した PDK のバージョンをそこから読みます([PDK のプロファイル](guide/pdks.ja.md#pdk-profiles))。
 
 後で行うこと: index の commit やパッケージのタグへの署名(それまでは git のハッシュが内容を固定する)と、index の CI での DRC と
 LVS(それまでは公開する人自身の検証の報告にもとづいて公開する)。

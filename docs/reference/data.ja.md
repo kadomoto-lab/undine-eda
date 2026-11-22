@@ -396,7 +396,8 @@ Undo は `merge` の記録で止まります。[ライブ changeset](../design/l
 key に入る入力がさらに 2 つあります。シミュレーションの `inputs.models` は、ネットリストが `.lib` と `.include` で読むすべてのファイル
 (たどった先も含み、`.lib` の行ではそのセクションのファイル)と、ngspice が読み込む OSDI モデルを、元のファイル(縮小したコピーではなく)の
 `{"path", "sha"}` として並べます。パッケージのコードブロックが include するモデルファイルが変わると、ネットリストの文面が同じでも
-そのジョブは古くなります。`inputs.profile` は、そのジョブが使う PDK プロファイルの項目です。KLayout の DRC では `drc_options`(デッキの既定値)と
+そのジョブは古くなります。相対パスは、ngspice が動く `runs/` の下のジョブ自身のディレクトリから読みます。OSDI モデルは PDK が今持って
+いるものをもう一度探すので、別の場所でコンパイルし直したモデルでもジョブは古くなります。`inputs.profile` は、そのジョブが使う PDK プロファイルの項目です。KLayout の DRC では `drc_options`(デッキの既定値)と
 `deck_vars`、KLayout の LVS では `lvs_options` と `deck_vars`、シミュレーションでは `model_lib`、`model_includes`、`osdi`、`corners` です。
 ほかのジョブはどちらも記録しません。
 

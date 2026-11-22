@@ -163,6 +163,7 @@ def _plain(v):
 DRC_PROFILE = ("drc_options", "deck_vars")
 LVS_PROFILE = ("lvs_options", "deck_vars")
 SIM_PROFILE = ("model_lib", "model_includes", "osdi", "corners")
+LATER = ("models", "profile")               # inputs recorded since phase 4: a job from before has neither
 
 
 def profile_fields(pdk, fields, deck: str | None = None) -> dict:
@@ -301,9 +302,18 @@ def recompute(srv, project: str, inp: dict) -> dict:
            "deck": deck_entry(prj.pdk, d["kind"], d["name"]) if d and prj.pdk else d,
            "tools": {n: tools.version(n) for n in inp.get("tools", {})}, "options": inp.get("options", {})}
     # only what the job recorded: a job from before models and profile were recorded stays comparable (not unknown).
-    # The same model files are hashed again: a netlist that reads others has another text, so its own entry changes
+    # The same model files are hashed again: a netlist that reads others has another text, so its own entry changes.
+    # Not so for the OSDI models, which .spiceinit loads, not the netlist: those are the PDK's as found now
+    # (Pdk.osdi_files picks the first that exists), so a model compiled again elsewhere is seen
     if "models" in inp:
-        out["models"] = model_entries(m["path"] for m in inp["models"] or [])
+        paths = [m["path"] for m in inp["models"] or []]
+        osdi = [p for p in paths if p.endswith(".osdi")]
+        if osdi and prj.pdk and prj.pdk.profile.osdi:
+            try:
+                osdi = [str(f) for f in prj.pdk.osdi_files()]
+            except (OSError, ValueError):
+                pass
+        out["models"] = model_entries([p for p in paths if not p.endswith(".osdi")] + osdi)
     if "profile" in inp:
         out["profile"] = profile_fields(prj.pdk, list(inp["profile"] or {}), (d or {}).get("name"))
     return out

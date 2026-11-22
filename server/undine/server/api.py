@@ -812,7 +812,8 @@ class Server:
                    **({"save": "all"} if save_all else {})}
         # what ngspice reads besides the netlist, by hash: the original files its .lib / .include lines name (not the
         # reduced copy it gets), transitively, and the OSDI models; and the profile's model fields
-        read = modellib.files_read(text, prj.path)
+        # relative paths from where ngspice runs: a job's own directory under runs/ (not made yet)
+        read = modellib.files_read(text, self.jobs.runs_dir(prj.path) / ".next")
         if prj.pdk and prj.pdk.profile.osdi:
             read += [str(f) for f in prj.pdk.osdi_files()]
         inp = provenance.inputs([entry, *ext_entries], prj.pdk, ["ngspice"], None, options,
@@ -972,6 +973,9 @@ class Server:
                                  # a target's density / antenna runs of the same deck are other checks
                                  and ((j.get("inputs") or {}).get("options") or {}).get("decks") == run.inputs["options"].get("decks")),
                                 None)
+            if prev and not same and prev.get("inputs") and prev.get("key") == provenance.key(
+                    {k: v for k, v in run.inputs.items() if k in prev["inputs"] or k not in provenance.LATER}):
+                same = prev                              # recorded before models / profile were: the same run
             if prev:
                 if same:
                     changed = []

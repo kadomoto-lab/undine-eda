@@ -399,7 +399,9 @@ the whole library). The inputs are those of the netlist as generated, so the cop
 Two more inputs are in the key. A simulation's `inputs.models` lists every file its netlist reads through `.lib` and
 `.include`, transitively (for a `.lib` line the files of that section), and the OSDI models ngspice loads, each as
 `{"path", "sha"}` of the original file (not the reduced copy): a model file that a package's code block includes
-outdates the run when it changes, even though the netlist text stays the same. `inputs.profile` holds the fields of
+outdates the run when it changes, even though the netlist text stays the same. A relative path is read from the job's
+own directory under `runs/`, where ngspice runs. The OSDI models are looked up again as the PDK has them now, so a
+model compiled again elsewhere outdates the run too. `inputs.profile` holds the fields of
 the PDK profile the run uses: `drc_options` (the deck's defaults) and `deck_vars` for KLayout DRC, `lvs_options` and
 `deck_vars` for KLayout LVS, `model_lib`, `model_includes`, `osdi` and `corners` for a simulation. Other jobs record
 neither.

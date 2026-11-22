@@ -419,6 +419,11 @@ def _file_units(path: str, stamp: tuple[int, int]) -> tuple:
         return ()
 
 
+# what files_read takes as "cannot read this" rather than refusing: Path.resolve raises RuntimeError on a link loop,
+# lstat ValueError on a NUL
+_UNREADABLE = (Unsupported, OSError, RuntimeError, ValueError)
+
+
 def files_read(text: str, cwd: Path | None = None) -> list[str]:
     """Every file a netlist reads through .include and .lib, transitively (resolved paths, relative ones from `cwd`, in
     the order met): for `.lib <file> <section>` the files of that section with what it includes (section()), or, when
@@ -427,7 +432,16 @@ def files_read(text: str, cwd: Path | None = None) -> list[str]:
     the same (its hash then says it is missing). What provenance hashes of a simulation's models: the original files,
     whatever reduced copy ngspice gets (reduce)."""
     out: dict[str, None] = {}
-    todo = _units(text, cwd or Path.cwd())
+    base = cwd or Path.cwd()
+    try:
+        todo = list(_units(text, base))
+    except _UNREADABLE:                        # one line it cannot read: the others, line by line
+        todo = []
+        for line in text.splitlines():
+            try:
+                todo.extend(_units(line, base))
+            except _UNREADABLE:
+                continue
     seen: set = set()                          # (path, section) taken
     whole: set = set()                         # files walked whole
     while todo:
@@ -439,15 +453,18 @@ def files_read(text: str, cwd: Path | None = None) -> list[str]:
             try:
                 out.update(dict.fromkeys(section(Path(p), sec).files))
                 continue
-            except Unsupported:
+            except _UNREADABLE:
                 pass
         out.setdefault(p)
         if p in whole:
             continue
         whole.add(p)
-        stamp = _stat(Path(p))
-        if stamp[0] >= 0:
-            todo.extend(_file_units(p, stamp))
+        try:
+            stamp = _stat(Path(p))
+            if stamp[0] >= 0:
+                todo.extend(_file_units(p, stamp))
+        except _UNREADABLE:                    # a link loop, a NUL in a path: listed, not followed
+            continue
     return list(out)
 
 

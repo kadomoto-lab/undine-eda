@@ -265,3 +265,57 @@ def test_evidence_manifest_lists_packages_and_pdk(tmp_path):
         assert about["profile"] == {"family": "sky130", "source": "built-in", "undine": tools.undine_version()}
     finally:
         shutil.rmtree(root)
+
+
+# ------------------------------------------------------------------ regressions from the review
+
+
+def test_signoff_takes_a_drc_run_from_before_profiles_as_the_same_run(tmp_path):
+    """A run recorded before `profile` entered the inputs has another key; signoff takes it as the same run when
+    everything it recorded is the same, not as one that "ran with other settings"."""
+    pdk = _fake_pdk(tmp_path)
+    root = tmp_path / "projects"
+    srv = Server(root, {pdk.id: pdk}, [root])
+    lib = srv.store.create("p", pdk.id).create_library("l")
+    ly = kdb.Layout()
+    ly.create_cell("top")
+    layoutstore.write(lib.path, ly, {})
+    run = srv.prepare_drc("p", "l", "top", "sky130A_mr.drc")
+    old = copy.copy(run)
+    old.inputs = {k: v for k, v in run.inputs.items() if k != "profile"}
+    _fake_job(srv.project("p").path, "20260101-000000-drc", old)
+    row = next(c for c in srv.signoff("p", "l", "top") if c.get("kind") == "drc" and c.get("job"))
+    assert row["fresh"] is True and row["changed"] == []
+    # a run whose recorded design differs is still not the same
+    old2 = copy.copy(run)
+    old2.inputs = {**old.inputs, "options": {**old.inputs["options"], "other": 1}}
+    _fake_job(srv.project("p").path, "20260102-000000-drc", old2)
+    row = next(c for c in srv.signoff("p", "l", "top") if c.get("kind") == "drc" and c.get("job"))
+    assert row["job"] == "20260102-000000-drc" and row["fresh"] is False
+
+
+def test_files_read_never_raises_and_resolves_from_the_run_directory(tmp_path):
+    d = tmp_path / "prj" / "runs" / ".next"
+    (tmp_path / "prj" / "models").mkdir(parents=True)
+    (tmp_path / "prj" / "models" / "m.spice").write_text("* m\n")
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    got = modellib.files_read(f".include ../../models/m.spice\n.include {loop}\n.include bad\x00name\n", d)
+    assert str((tmp_path / "prj" / "models" / "m.spice").resolve()) in got
+
+
+def test_recompute_takes_the_osdi_models_the_pdk_has_now(tmp_path, monkeypatch):
+    """OSDI models are loaded by .spiceinit, not the netlist: a model compiled again elsewhere is seen."""
+    old, new = tmp_path / "old.osdi", tmp_path / "new.osdi"
+    old.write_bytes(b"1")
+    new.write_bytes(b"2")
+    pdk = _fake_pdk(tmp_path)
+    monkeypatch.setattr(type(pdk.profile), "osdi", property(lambda self: ["psp103"]), raising=False)
+    monkeypatch.setattr(Pdk, "osdi_files", lambda self: [new])
+
+    class S:
+        def project(self, name):
+            return type("P", (), {"pdk": pdk, "path": tmp_path})()
+    inp = {"design": [], "pdk": pdk.id, "deck": None, "tools": {}, "options": {},
+           "models": provenance.model_entries([str(old)])}
+    assert provenance.recompute(S(), "p", inp)["models"] == provenance.model_entries([str(new)])

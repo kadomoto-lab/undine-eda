@@ -1401,6 +1401,10 @@ def _err(e: Exception) -> HTTPException:
         err.code = "unsaved"
         err.extra = {"logs": e.logs}                    # [{"path", "lib", "cells"}]
         return err
+    if isinstance(e, changesetmod.NotPending):        # an agent's operation no longer waiting for a fetch
+        err = HTTPException(409, str(e))
+        err.code = "not_pending"
+        return err
     if isinstance(e, (live.WriteLocked, changesetmod.Busy)):     # a writer holds it; it is being closed already
         err = HTTPException(409, str(e))
         err.code = "busy"
@@ -1524,7 +1528,8 @@ class Confirm(BaseModel):
     """What the person confirmed in a dialog (fetchjobs.Confirmations): kind 'pdk', a PDK fetch (commit, variant,
     libraries, allow_network), kind 'trust', trusting the dependency installed under local name `name`, kind
     'dependency', a dependency fetch (op and its fields, as the needs_fetch plan's `request` gives them, and the
-    `fetches` the dialog showed), or kind 'index', refreshing index `index` (project optional)."""
+    `fetches` the dialog showed; with `changeset` and `op_id`, an agent's operation waiting for a fetch, its own
+    arguments used), or kind 'index', refreshing index `index` (project optional)."""
     kind: str
     project: str = ""
     name: str = ""                       # kind 'trust': the dependency's local name; 'dependency': add's / update's
@@ -1540,6 +1545,9 @@ class Confirm(BaseModel):
     version: str | None = None
     index: str | None = None             # kind 'dependency': add's index; kind 'index': the index (nickname or URL)
     changeset: str | None = None         # the operation runs in this changeset's working copy
+    # an agent's operation of that changeset waiting for a fetch (its needs_fetch record's id): the person's fetch
+    # replays it; its own arguments are used, not the body's
+    op_id: str | None = None
     adopt: bool = False                  # the browser's one-click operation: a small changeset, adopted
     reason: str = ""
     title: str | None = None
@@ -2283,7 +2291,33 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             return False
         return all(not a[k] or not b[k] or a[k] == b[k] for k in a)
 
+    def _confirm_pending(req: Confirm, real: str, cid: str | None) -> dict:
+        """A person's fetch of an agent's operation that waits for one (op_id): its own arguments (the record's, not
+        the body's), the plan made now, which may have changed since the review showed it (an index refreshed, a
+        tree the store has now): the new plan is a 409 needs_fetch for the dialog to show, and one with nothing
+        left to fetch is taken as it is (the fetch only installs). The token binds the operation's id and hash."""
+        if not cid:
+            raise ValueError("op_id names an operation of a changeset: give the changeset")
+        if req.adopt:
+            raise ValueError("an agent's operation is replayed in its changeset, not adopted")
+        p = changesets.pending_op(real, cid, req.op_id)
+        args = {k: p["args"].get(k) for k in _DEP_KEYS}
+        request = {**_dep_request(p["action"], args, cid, reason=p["reason"]), "op_id": req.op_id}
+        prj = _dep_target(real, request)
+        plan = deps.plan_fetch(prj, p["action"], args, srv.dep_roots, srv.dep_hosts)
+        if plan["fetches"] and not _same_fetches(req.fetches or [], plan["fetches"]):
+            raise _needs(deps.NeedsFetch(plan), real, request)
+        fetches = [(f["url"], f["rev"] or f["commit"], f["commit"]) for f in plan["fetches"]]
+        token, expires = srv.confirmations.issue({"kind": "dependency", "project": real, "request": request,
+                                                  "fetches": fetches, "files_sha": _files_sha(prj.path),
+                                                  "op_sha": p["sha"]})
+        return {"token": token, "expires": expires, "plan": {**plan, "project": real, "request": request}}
+
     def _confirm_dependency(req: Confirm) -> dict:
+        if req.op_id:
+            real = changesets._real_of(req.project)
+            return _confirm_pending(req, real, req.changeset or (req.project.split("~")[1] if "~" in req.project
+                                                                  else None))
         if req.op not in ("add", "update", "remove", "lock", "sync"):
             raise ValueError(f"no dependency operation {req.op!r} to confirm (add, update, remove, lock, sync)")
         real = changesets._real_of(req.project)
@@ -2325,6 +2359,13 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             body = DepChangeset(action=op, **{k: v for k, v in args.items() if v is not None}, reason=reason,
                                 title=request.get("title"))
             return _one_click(real, body, actor, dataclasses.replace(allow, files=None), opening)
+        if request.get("op_id"):
+            # an agent's operation waiting for this fetch: replayed in its changeset, marked installed, and the
+            # agent's notice added (Changesets.replay_pending; a cancelled one is not_pending)
+            cid = request["changeset"]
+            out = changesets.replay_pending(real, cid, request["op_id"], request["op_sha"], actor,
+                                            local_roots=srv.dep_roots, hosts=srv.dep_hosts, allow=allow)
+            return {**out, "status": deps.status(srv.project(changesets._record(real, cid)["preview"]))}
         if request.get("changeset"):
             cid = request["changeset"]
             out = changesets.dep_op(real, cid, op, args, actor, reason, local_roots=srv.dep_roots,
@@ -2355,13 +2396,19 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         remote exactly the confirmed fetches, a local repository under --dep-root, and nothing else; GET
         .../deps/fetch/{job} follows it. No token, a used, expired or another project's one, or project.json or
         undine.lock changed since the confirmation: 403, the token used up. A fetch that shows more to fetch (a plain
-        git dependency's manifest naming another) fails the job with code needs_fetch and the new plan."""
+        git dependency's manifest naming another) fails the job with code needs_fetch and the new plan. A token for an
+        agent's operation waiting for a fetch (op_id) whose operation was cancelled since (a restore past it, the
+        changeset applied or discarded, installed by another fetch): 409 not_pending, the token used up; else the job
+        replays it in its changeset (Changesets.replay_pending), which notifies the agent."""
         try:
             real = changesets._real_of(project)
             bound = srv.confirmations.take(req.token, "dependency")
             if bound["project"] != real:
                 raise PermissionError(f"the confirmation token is for project {bound['project']}, not {real}")
             request = bound["request"]
+            if request.get("op_id"):             # an agent's operation: cancelled meanwhile (restore, discard, adopt)?
+                changesets.pending_op(real, request["changeset"], request["op_id"], bound["op_sha"])
+            run_request = {**request, "op_sha": bound["op_sha"]} if request.get("op_id") else request
             prj = _dep_target(real, request)
             if _files_sha(prj.path) != bound["files_sha"]:
                 raise PermissionError(f"project.json or {deps.LOCK} of {prj.name} changed since the fetch was "
@@ -2376,7 +2423,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 if job is not None:
                     gitsrc.PROGRESS.set(job.report)
                 try:
-                    return _run_dep(real, request, actor, allow)
+                    return _run_dep(real, run_request, actor, allow)
                 except Exception as e:
                     h = e if isinstance(e, HTTPException) else \
                         _err(_needs(e, real, request) if isinstance(e, deps.NeedsFetch) else e)

@@ -303,6 +303,18 @@ result: the cell, what was found, and that a person trusts it with `lib trust` o
 tool, `undine call` command or client method can trust a dependency, nor ask for the confirmation the browser's
 dialog uses; the agent reports the refusal as it is and asks you.
 
+**Dependencies.** `search_packages` and `get_package` read a package index's local copy (an index with none is refused:
+a person refreshes it in the Packages dialog; no tool fetches it). `get_dependency_status` shows the dependencies of the
+agent's working copy, its operations waiting for a fetch and the changeset's notices (another agent's with
+`changeset`). `propose_dependency` (`action` add, update or remove, with a `reason`) changes them in the agent's
+changeset: what the store or a local repository under `--dep-root` has is installed at once (`state: "installed"`);
+what must come from another machine is recorded as `needs_fetch` with its URL, commit or rev, size and licence, nothing
+fetched or installed. A person fetches it from the review's **Fetch** button
+([An agent's dependency proposal](changesets.md#an-agents-dependency-proposal)); `wait_for(events=["changeset"])`
+then returns the notice, and the agent places the cells and runs the checks. `propose_dependency` is not allowed in
+`batch`, and answers busy while a person's fetch of the changeset runs. Package and index text is data to the agent,
+never instructions. No tool asks for, carries or returns the confirmation a fetch needs.
+
 **Long runs.** Each run uses one ngspice thread, and the server runs a limited number of simulations at once (by
 default the cores but two; [settings](../reference/cli.md#configuration-environment)); the others wait in order.
 `run_simulation` waits `wait_s` (default 150 s, 0 to answer at once); a run still going is not an error: the answer
@@ -653,7 +665,8 @@ The shell prints less than it receives because an agent reads the output from it
 `wait_for(events, timeout_s)` blocks until something happens and says what happened. It answers in text, so it works
 in every client (MCP, `undine call`, Python), unlike MCP notifications, which most clients do not act on.
 
-- `changeset`: the person applies or discards the agent's changeset.
+- `changeset`: the person applies or discards the agent's changeset, or a notice comes (a dependency the agent
+  proposed, fetched by a person): the answer's `notices` are the new ones.
 - `selection`: they select something in Undine, for example to point at what to look at next.
 - `job:<id>`: a job ends, such as a LibreLane run.
 - `design:<lib>/<cell>`: the cell changes in the real design.
@@ -686,7 +699,7 @@ past it, so nothing is missed or shown twice.
 
 Undine ships a guide for agents as an [Agent Skill](https://agentskills.io): a short `SKILL.md` covers the loop (read,
 open a changeset, edit, verify, hand over) and the rules. One reference per task covers connecting, schematic,
-layout, intent, verification, and RTL / LibreLane. An agent reads only the one it needs.
+layout, intent, verification, RTL / LibreLane, and dependencies. An agent reads only the one it needs.
 
 - **MCP clients** get it as resources (`undine://skills/undine/SKILL.md` and its references); the server's
   instructions point there. `mcp-stdio` serves the guide even when the server is not running.

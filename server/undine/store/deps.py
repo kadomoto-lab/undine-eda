@@ -207,12 +207,14 @@ class Allow:
     index is never fetched (index.IndexNotFetched). `plan_only`: stop once the plan is known (Planned): staging is
     looked at too (what it stages is removed again), nothing is written. `files`: the files_sha the confirmation was
     for; an operation checks it once it holds the project's dependency lock (FilesChanged). `locked`: the caller holds
-    that lock already (a flock is not re-entrant): the operation does not take it. An operation given no Allow (None:
-    the command line) fetches what it needs."""
+    that lock already (a flock is not re-entrant): the operation does not take it. `wait` False: an agent's proposal
+    (Changesets.propose_dep), which does not wait behind another operation holding that lock (a person's fetch, minutes
+    long) but is DepsBusy. An operation given no Allow (None: the command line) fetches what it needs."""
     fetches: frozenset = frozenset()
     plan_only: bool = False
     files: str | None = None              # files_sha the person confirmed for (checked under the deps lock)
     locked: bool = False                  # the caller holds the project's dependency lock already (not taken again)
+    wait: bool = True                     # False: DepsBusy rather than waiting for the project's dependency lock
 
     @property
     def urls(self) -> frozenset:
@@ -249,9 +251,9 @@ def _held(prj, allow: Allow | None, wait: bool | None = None):
 
 
 def _waits(allow: Allow | None) -> bool:
-    """Whether an operation waits for the project's dependency lock: a plan only (plan_fetch, a confirmation) does
-    not wait behind a running fetch, it is DepsBusy."""
-    return allow is None or not allow.plan_only
+    """Whether an operation waits for the project's dependency lock: a plan only (plan_fetch, a confirmation) and an
+    agent's proposal (Allow.wait False) do not wait behind a running fetch, they are DepsBusy."""
+    return allow is None or (not allow.plan_only and allow.wait)
 
 
 # ------------------------------------------------------------------ files
@@ -2185,7 +2187,7 @@ def remove(prj, name: str, guard=None, allow: Allow | None = None) -> dict:
     files checked under the dependency lock this removal holds, before anything is written (FilesChanged)."""
     _dep_spec(prj, name)
     allow = as_allow(allow)
-    with _held(prj, allow, True):
+    with _held(prj, allow, allow is None or allow.wait):
         _check_files(prj, allow)
         with _committing(prj, guard):
             _dep_spec(prj, name)                              # removed meanwhile?

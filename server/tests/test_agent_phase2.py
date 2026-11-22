@@ -37,6 +37,12 @@ def test_no_tool_client_method_or_call_reaches_trust_or_a_confirmation():
             assert word not in text, (f.name, word)
     from undine.agents.client import Undine
     assert not [m for m in dir(Undine) if "trust" in m.lower() or "confirm" in m.lower()]
+    # phase 4: the dependency tools take, name and return no token, and every array of theirs says its items
+    for name in ("search_packages", "get_package", "get_dependency_status", "propose_dependency"):
+        t = T.BY_NAME[name]
+        text = (t["description"] + str(t["input_schema"])).lower()
+        assert "token" not in text and "confirm" not in text and "trusted" not in text, name
+    assert T.BY_NAME["propose_dependency"]["write"] and "propose_dependency" in T.BATCH_EXCLUDED
 
 
 def test_the_prompt_says_trusting_a_dependency_is_a_persons_action():

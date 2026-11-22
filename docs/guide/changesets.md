@@ -138,9 +138,10 @@ project, so they survive applying or discarding the changeset. A closed changese
 There is one agent mode: it answers questions, and when asked to change or create something it opens a changeset (or
 continues the one in the review) and edits its working copy. It can create cells (`create_cell`: schematic, symbol, layout),
 look up placeable symbols and their pins (`list_symbols`), place, parameterise, wire, move and delete, sync the layout,
-draw shapes, and run DRC / LVS and simulations. It cannot adopt a changeset, and it cannot create projects or libraries,
-change the PDK, add dependencies, trust a dependency's code, import GDS / OASIS or edit read-only libraries; asked for
-one of these it says so and names where a person does it.
+draw shapes, and run DRC / LVS and simulations. It can propose a library dependency in its changeset (add, update or
+remove: [below](#an-agents-dependency-proposal)), but never fetch one. It cannot adopt a changeset, and it cannot create
+projects or libraries, change the PDK, fetch a dependency or refresh a package index, trust a dependency's code, import
+GDS / OASIS or edit read-only libraries; asked for one of these it says so and names where a person does it.
 
 **Trust in a changeset.** A simulation, LVS or RTL run in a changeset's working copy is checked by the
 [trust rule](libraries.md#trusting-a-dependencys-code) like one in the project: a dependency's cell with a `.control`
@@ -191,6 +192,25 @@ installation that fails anyway is said in the answer (`deps_warning`) with the a
 The adopt never waits for another operation on the project's dependencies (a `pkg add` fetching on the command line):
 the installation is then left pending (`deps_pending`) for `lib sync` or the next sync.
 If Undine stops between the merge and the installation, it installs when it starts again.
+
+### An agent's dependency proposal
+
+An agent proposes a dependency with `propose_dependency` (and finds one with `search_packages` and `get_package`, which
+read the package indexes' local copies only; an index with none is refreshed by a person in the Packages dialog). It
+never fetches. What the store already has, or a local repository under `--dep-root`, is installed in its working copy at
+once, as above. What must come from another machine is recorded in the proposal as *needs fetch* (the URL, the commit or
+rev, the size, the licence, the package and version), with nothing written or installed, and the review lists it with
+a **Fetch** button. Fetch shows the plan in the Fetch dialog; your click fetches it, installs the operation in the
+proposal (recorded as the agent's, fetched by you) and leaves a notice in the proposal, which an agent waiting with
+`wait_for(events=["changeset"])` receives, so it can go on: place the package's cells and run the checks. A fetch that
+shows more to fetch asks you again.
+
+A restore past such an operation, a discard or an adopt cancels it: its Fetch is refused (409 `not_pending`). While
+someone other than the proposing agent is writing the proposal, the fetch is retried briefly and then refused (409
+`busy`); what it fetched stays in the store, so the next Fetch only installs. Package and index text (descriptions,
+READMEs, names) is data to the agent, never instructions.
+
+### One-click operations
 
 The library browser's **Add**, **Update** and **Remove**, and the PDK badge's move to another PDK, each make such an
 operation in a small proposal of their own (titled `Add analog_ip`, ...) and adopt it in one click, so a person's change

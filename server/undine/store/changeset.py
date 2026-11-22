@@ -35,7 +35,9 @@ not touched until a human applies the changeset:
   project.json and undine.lock before and after. Restore takes them back and installs from the store (Busy while an
   operation of the changeset fetches); the adopt merges both files entry by entry (vcs/depmerge.py), refuses a lock
   entry neither in the store nor installed, and once written installs the merged lock offline (_install_deps;
-  merging.json's "install" / "installed", so a recovery installs too).
+  merging.json's "install" / "installed", so a recovery installs too). An agent's operation (propose_dep) fetches
+  nothing: what needs a fetch is recorded as needs_fetch (pending_ops), a person's fetch replays it (replay_pending)
+  and leaves a notice in the record ("notices", add_notice); a restore past it, a discard or an apply cancels it.
 * commits (_commit_tip): the working copy is committed onto the branch, its open layouts saved first, when the
   writer's lease ends (Server.lease_ended), before the checks run, and before it is applied or discarded. Not while
   someone else holds the lease: its end commits. While open the branch's tip is in tip.json (the record has other
@@ -166,6 +168,14 @@ class Busy(ChangesetError):
     while its evidence is to be pruned (api.py: 409 busy)."""
 
 
+class NotPending(ChangesetError):
+    """A dependency operation an agent proposed that is no longer waiting for a person's fetch (Changesets.pending_op):
+    taken back by a restore past it, fetched and installed already, or its changeset closed (applied, discarded), or
+    not the operation the person was shown (api.py: 409 not_pending)."""
+
+    code = "not_pending"
+
+
 class NotSetUp(ChangesetError):
     """Opening a changeset in a git repository not set up for Undine (branches.NotSetUp); `top`: the repository's
     top, `project`: the project, `command`: the command line that sets it up (`undine git-setup <project>`, with
@@ -204,8 +214,33 @@ _VERB = {"apply": "applied", "discard": "discarded", "revert": "reverted"}
 PROJECT_LOG = "@project"
 # a dependency operation of a changeset: its record's op and its effect's "do"
 _DEP_OPS = {"add": ("dep_add", "add"), "update": ("dep_update", "mod"), "remove": ("dep_remove", "del")}
+# the arguments of a dependency operation, as a needs_fetch plan's request names them (api.py's _DEP_KEYS)
+_DEP_KEYS = ("name", "git", "rev", "subdir", "package", "version", "index")
+REPLAY_RETRY_S = 3.0          # how long a person's fetch retries while another writer holds the changeset's lease
 OLD_FORM = ("changeset {cid} is a copy made before changesets were git branches: it can be reviewed and discarded; "
             "to apply it, open the proposal again as a new changeset")
+
+
+def _owner_hash(owner: str | None) -> str | None:
+    """What a pending dependency operation keeps of the write lease's owner (an MCP session's id is not written into
+    the log): a hash, compared with the lease's owner when a person's fetch replays it."""
+    return hashlib.sha256(owner.encode()).hexdigest()[:24] if owner else None
+
+
+def _op_sha(p: dict) -> str:
+    """What a dependency fetch confirmation binds of a pending operation: its id, operation, arguments, gseq and
+    needs."""
+    body = {k: p.get(k) for k in ("op_id", "op", "action", "args", "gseq", "needs")}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _needs_text(needs: list[dict]) -> str:
+    """The fetches of a pending operation in words: "amp 1.0.0 from https://host/amp.git"."""
+    out = []
+    for f in needs:
+        what = f"{f['package']} {f['version']}" if f.get("package") and f.get("version") else (f.get("package") or "")
+        out.append(f"{what} from {f.get('url')}" if what else str(f.get("url")))
+    return ", ".join(out) or "nothing (the store had it)"
 
 
 def branch_of(project: str, cid: str) -> str:
@@ -659,9 +694,12 @@ class _DepGuard:
     restore or an apply never waits for one."""
 
     def __init__(self, cs: "Changesets", project: str, cid: str, op: str, args: dict, actor: str, reason: str,
-                 do: str, name: str | None):
+                 do: str, name: str | None, replays: dict | None = None):
         self.cs, self.project, self.cid = cs, project, cid
         self.op, self.args, self.actor, self.reason, self.do, self.name = op, args, actor, reason, do, name
+        # a person's fetch replaying an agent's operation that needs one ({op_id, sha, by}): checked to be still
+        # pending under the locks, and its record says so ("replays", "fetched_by"), also when nothing changed
+        self.replays = replays
         self.depth = 0
         self.records: list[dict] = []
 
@@ -679,6 +717,8 @@ class _DepGuard:
                     self.log.guard()
                     self.path = srv.project(meta["preview"]).path
                     self.before = _dep_files(self.path)
+                    if self._replaying:              # restored away, or installed by another fetch meanwhile?
+                        self.cs._still_pending(meta, self.replays["op_id"], self.replays["sha"])
             except BaseException:
                 srv.lock.release()
                 raise
@@ -694,18 +734,26 @@ class _DepGuard:
             self.depth -= 1
             if self.depth == 0 and et is None:
                 after = _dep_files(self.path)
-                if after != self.before:
+                if after != self.before or self._replaying:
                     e = {"k": "d", "do": self.do, "name": self.name, "before": self.before, "after": after,
                          "state": "installed"}
                     if self.op == "pdk_set":
                         e["pdk"] = [self.before["project"].get("pdk"), after["project"].get("pdk")]
-                    self.records.append(self.log.append({
-                        "op": self.op, "args": self.args, "actor": self.actor, "reason": self.reason,
-                        "changeset": self.cid, "cell": None, "view": None, "effects": [e]}))
+                    rec = {"op": self.op, "args": self.args, "actor": self.actor, "reason": self.reason,
+                           "changeset": self.cid, "cell": None, "view": None, "effects": [e]}
+                    if self._replaying:              # the first record only: the operation is installed now
+                        e["op_id"] = self.replays["op_id"]
+                        rec |= {"replays": self.replays["op_id"], "fetched_by": self.replays["by"]}
+                        self.replays = {**self.replays, "done": True}
+                    self.records.append(self.log.append(rec))
         finally:
             srv.lock.release()
             srv.changeset_lock.release()
         return False
+
+    @property
+    def _replaying(self) -> bool:
+        return self.replays is not None and not self.replays.get("done")
 
     def public(self) -> dict | None:
         """The operation as recorded ({gseq, opid} of its last record); None: it changed nothing."""
@@ -1800,7 +1848,7 @@ class Changesets:
         in effect, the assistant turns they belong to, and the points it can be restored to."""
         meta = self._load(project, cid)
         if meta["status"] != "open":
-            return {"ops": [], "turns": {}, "checkpoints": []}
+            return {"ops": [], "turns": {}, "checkpoints": [], "notices": []}
         libs = self._log_names(meta)
         net = {(lib, r["seq"]) for lib in libs for r in self._records(meta["preview"], lib)}
         logs = {lib: {x["seq"]: x for x in self._own(meta["preview"], lib)} for lib in libs}
@@ -1832,7 +1880,9 @@ class Changesets:
             elif (orig := logs[lib].get(r.get("of"))):
                 o["of"] = {"gseq": orig.get("gseq"), "op": orig["op"], "cell": orig.get("cell")}
         turns = {t: self._turn_info(project, t) for t in {o["turn"] for o in ops if o["turn"]}}
-        return {"ops": ops, "turns": turns, "checkpoints": [0] + [o["last"] for o in ops[:-1]]}
+        # the notices (add_notice: a person's fetch of a dependency an agent proposed), in order: no restore point
+        return {"ops": ops, "turns": turns, "checkpoints": [0] + [o["last"] for o in ops[:-1]],
+                "notices": list(meta.get("notices") or [])}
 
     def _turn_info(self, project: str, tid: str) -> dict:
         from undine.agents import llm
@@ -1916,7 +1966,8 @@ class Changesets:
                         deleted.setdefault((lib, "layout", e["cell"]), r["gseq"])
         for lib, r in reversed([x for x in recs if x[1]["gseq"] > to]):
             if lib == PROJECT_LOG:                 # no editor: project.json and undine.lock as they were (_undo_deps)
-                dep_undo += [e for e in reversed(r.get("effects") or []) if e.get("k") == "d"]
+                # an operation waiting for a person's fetch changed no file: it is only cancelled (pending_ops)
+                dep_undo += [e for e in reversed(r.get("effects") or []) if e.get("k") == "d" and "before" in e]
                 continue
             remade: list[dict] = []
             if r["op"] == "undo":
@@ -1952,7 +2003,10 @@ class Changesets:
             key = (lib, "layout", None) if view == "layout" else (lib, view, orig.get("cell") or r.get("cell"))
             groups.setdefault(key, []).extend(eff)
         m = {"op": "restore", "args": {"to": to}, "to": to, "actor": actor, "reason": f"restore to checkpoint {to}", "changeset": cid}
-        if dep_undo:                                   # before anything changes: a dependency operation running?
+        cancelled = [x["op_id"] for x in self.pending_ops(meta) if (x["gseq"] or 0) > to]
+        if cancelled:                                  # agents' operations waiting for a fetch: no fetch replays them now
+            m["cancelled"] = cancelled
+        if dep_undo:                                  # before anything changes: a dependency operation running?
             try:
                 deps.deps_idle(self.srv.project(work).path)
             except deps.DepsBusy as e:
@@ -2105,19 +2159,22 @@ class Changesets:
             raise PermissionError("the proposal baseline is read-only: change the dependencies in its working copy")
         return project.split("~", 1)[0]
 
-    def _writable(self, project: str, cid: str) -> tuple[dict, object]:
+    def _writable(self, project: str, cid: str, lease: bool = True) -> tuple[dict, object]:
         """(the record, the working copy) of a changeset a dependency operation may change: open, on git, no
-        interrupted merge, no other writer (checked again at the commit: _DepGuard)."""
+        interrupted merge, no other writer (checked again at the commit: _DepGuard). `lease` False (a person's fetch
+        replaying an agent's operation): the write lease only at the commit, so what a person confirmed is fetched
+        into the store even while another writer holds it, and a later Fetch only installs."""
         meta = self._load(project, cid)
         self._check_open(meta)
         if not meta.get("git"):
             raise ChangesetError(OLD_FORM.format(cid=cid))
         self._check_merging(project, cid)
-        self.srv.oplog(meta["preview"], PROJECT_LOG).guard()       # the write lease (409 busy): before any fetch
+        if lease:
+            self.srv.oplog(meta["preview"], PROJECT_LOG).guard()   # the write lease (409 busy): before any fetch
         return meta, self.srv.project(meta["preview"])
 
     def dep_op(self, project: str, cid: str, action: str, args: dict, actor: str = "user", reason: str = "", *,
-               local_roots: list[Path] | None = None, hosts=(), allow=None) -> dict:
+               local_roots: list[Path] | None = None, hosts=(), allow=None, replays: dict | None = None) -> dict:
         """A dependency operation in the changeset's working copy (docs/design/packages.md, Changesets and evidence):
         `action` "add" (args: name, git, rev, subdir, package, version, index), "update" (name, rev, version) or
         "remove" (name), run by deps.add / update / remove on the working copy, never on the project nor the
@@ -2127,7 +2184,8 @@ class Changesets:
         deps.add's (serve --dep-root, --dep-host). Returns {changeset, op: {gseq, opid} (None: nothing changed),
         result: what the deps call returned}. Refusals are the deps ones (ResolveError, NotDirect, DepError ...),
         nothing changed. `allow` (deps.Allow; phase 4, over HTTP): what may be fetched from a remote, a person's
-        confirmation; anything else is deps.NeedsFetch, nothing fetched or recorded."""
+        confirmation; anything else is deps.NeedsFetch, nothing fetched or recorded. `replays` ({op_id, sha, by}): a
+        person's fetch replaying an agent's pending operation (replay_pending), its record marked so."""
         project = self._real_of(project)
         if action not in _DEP_OPS:
             raise ChangesetError(f"unknown dependency operation {action!r} (add, update, remove)")
@@ -2136,10 +2194,10 @@ class Changesets:
             raise ChangesetError("a dependency operation names the dependency (name)")
         if action == "add" and not args.get("git") and not args.get("package"):
             raise ChangesetError("give `git` (a repository) or `package` (a package from an index)")
-        meta, prj = self._writable(project, cid)
+        meta, prj = self._writable(project, cid, lease=replays is None)
         op, do = _DEP_OPS[action]
         guard = _DepGuard(self, project, cid, op, {k: v for k, v in args.items() if v is not None}, actor, reason,
-                          do, name)
+                          do, name, replays)
         if action == "add":
             result = deps.add(prj, name, args.get("git"), args.get("rev"), args.get("subdir"), guard=guard,
                               local_roots=local_roots, package=args.get("package"), version=args.get("version"),
@@ -2149,6 +2207,9 @@ class Changesets:
                                  version=args.get("version"), hosts=hosts, allow=allow)
         else:
             result = {"ok": True, **deps.remove(prj, name, guard=guard, allow=allow)}
+        if guard._replaying:                           # it changed nothing: the pending operation is done all the same
+            with guard:
+                pass
         self.srv.deps_changed(meta["preview"])         # packages it moved under names already open
         return {"changeset": cid, "op": guard.public(), "result": result}
 
@@ -2165,6 +2226,170 @@ class Changesets:
         self._forget(project, cid)
         old, new = move
         return {"changeset": cid, "op": guard.public(), "old": old, "new": new, "created": move.created}
+
+    # ------------------------------------------------------------------ an agent's dependency proposals (phase 4)
+
+    def propose_dep(self, project: str, cid: str, action: str, args: dict, actor: str, reason: str, *,
+                    local_roots: list[Path] | None = None, hosts=()) -> dict:
+        """An agent's dependency operation (docs/design/packages.md, Changesets and evidence: agents propose, never
+        fetch): dep_op with nothing from a remote allowed and without waiting for the working copy's dependency lock
+        (deps.DepsBusy while another operation, a person's fetch, holds it). What needs no fetch (the store has it, a
+        local repository under --dep-root) is installed at once in the working copy: {changeset, state: "installed",
+        op, result}. On deps.NeedsFetch nothing is fetched, written or installed: the operation is recorded in the
+        working copy's project log as needing a fetch (_record_needs), which a person's Fetch in the review replays
+        (replay_pending): {changeset, state: "needs_fetch", op, op_id, needs}.
+
+        Lock order: deps.lock before the changesets' lock, everywhere. This holds no lock of the changesets while the
+        deps call runs (that call takes the working copy's dependency lock without waiting, then, to commit, the
+        changesets' lock in _DepGuard), and records the need under the changesets' lock only after the deps call let
+        its lock go. A person's replay holds that dependency lock and then waits for the changesets' lock, so a
+        caller must not hold the changesets' lock around this (the agents' intent writes do; propose_dependency does
+        not)."""
+        try:
+            out = self.dep_op(project, cid, action, args, actor, reason, local_roots=local_roots, hosts=hosts,
+                              allow=deps.Allow(wait=False))
+        except deps.NeedsFetch as e:
+            return self._record_needs(self._real_of(project), cid, action, args, actor, reason, e.plan)
+        return {"changeset": cid, "state": "installed", "op": out["op"], "result": out["result"]}
+
+    def _record_needs(self, project: str, cid: str, action: str, args: dict, actor: str, reason: str,
+                      plan: dict) -> dict:
+        """Appends the pending operation to the working copy's project log, under the changesets' lock and the
+        server's with the changeset checked again (as _DepGuard): {op, args, actor, reason, changeset, cell: null,
+        view: null, plan, effects: [{k: "d", do, name, state: "needs_fetch", op_id, action, needs, owner}]}; `plan`
+        the NeedsFetch plan with the project and the request a person's confirmation takes ({op, ...args,
+        changeset, op_id, reason}); `owner` a hash of the write lease's owner (live.writer), so a person's fetch can
+        install while the proposing agent still holds the lease (replay_pending). Nothing else is written."""
+        op, do = _DEP_OPS[action]
+        op_id = "dep-" + uuid.uuid4().hex[:10]
+        clean = {k: v for k, v in args.items() if v not in (None, "")}
+        request = {"op": action, **{k: clean[k] for k in _DEP_KEYS if k in clean}, "changeset": cid, "op_id": op_id,
+                   **({"reason": reason} if reason else {})}
+        needs = [dict(f) for f in plan.get("fetches") or []]
+        e = {"k": "d", "do": do, "name": clean.get("name"), "state": "needs_fetch", "op_id": op_id, "action": action,
+             "needs": needs, "owner": _owner_hash(live.writer())}
+        srv = self.srv
+        with srv.changeset_lock, srv.lock:
+            meta = self._record(project, cid)
+            self._check_open(meta)
+            self._check_merging(project, cid)
+            log = srv.oplog(meta["preview"], PROJECT_LOG)
+            log.guard()
+            rec = log.append({"op": op, "args": clean, "actor": actor, "reason": reason, "changeset": cid,
+                              "cell": None, "view": None,
+                              "plan": {**plan, "project": project, "request": request}, "effects": [e]})
+        return {"changeset": cid, "state": "needs_fetch", "op": {"gseq": rec.get("gseq"), "opid": rec.get("opid")},
+                "op_id": op_id, "needs": needs}
+
+    def pending_ops(self, meta: dict) -> list[dict]:
+        """The dependency operations of an open changeset still waiting for a person's fetch, oldest first: those its
+        project log records as needing one, still in effect (a restore past one takes it back: cancelled) and not
+        replayed by a fetch since (a restore past that fetch makes it pending again). Each {op_id, sha (what a
+        confirmation binds), action, op, name, args, actor, reason, gseq, t, needs, plan, owner}."""
+        if meta.get("status") != "open" or not meta.get("git"):
+            return []
+        try:
+            net = self._records(meta["preview"], PROJECT_LOG)
+        except (KeyError, ValueError):
+            return []
+        found: dict[str, dict] = {}
+        done: set[str] = set()
+        for r in net:
+            if r.get("replays"):
+                done.add(r["replays"])
+            for e in r.get("effects") or []:
+                if e.get("k") == "d" and e.get("state") == "needs_fetch" and e.get("op_id"):
+                    found[e["op_id"]] = {
+                        "op_id": e["op_id"], "action": e.get("action"), "op": r["op"], "name": e.get("name"),
+                        "args": dict(r.get("args") or {}), "actor": r.get("actor"), "reason": r.get("reason") or "",
+                        "gseq": r.get("gseq"), "t": r.get("t"), "needs": e.get("needs") or [], "plan": r.get("plan"),
+                        "owner": e.get("owner")}
+        out = [p for k, p in found.items() if k not in done]
+        for p in out:
+            p["sha"] = _op_sha(p)
+        return out
+
+    def pending_op(self, project: str, cid: str, op_id: str, sha: str | None = None) -> dict:
+        """The pending operation `op_id` of changeset `cid` (pending_ops); NotPending when the changeset is closed or
+        the operation is no longer pending, or (`sha`) is not the one a confirmation was given for."""
+        try:
+            meta = self._load(self._real_of(project), cid)
+        except KeyError as e:
+            raise NotPending(f"no changeset {cid}: the operation {op_id} is not waiting for a fetch") from e
+        if meta["status"] != "open":
+            raise NotPending(f"changeset {cid} is {meta['status']}: its operation {op_id} was cancelled with it")
+        return self._still_pending(meta, op_id, sha)
+
+    def _still_pending(self, meta: dict, op_id: str, sha: str | None) -> dict:
+        p = next((x for x in self.pending_ops(meta) if x["op_id"] == op_id), None)
+        if p is None:
+            raise NotPending(f"the dependency operation {op_id} of {meta['id']} is no longer waiting for a fetch "
+                             "(restored away, or fetched and installed already): nothing was fetched")
+        if sha is not None and p["sha"] != sha:
+            raise NotPending(f"the dependency operation {op_id} of {meta['id']} is not the one shown: open the fetch "
+                             "again")
+        return p
+
+    def replay_pending(self, project: str, cid: str, op_id: str, sha: str, actor: str = "user", *,
+                       local_roots: list[Path] | None = None, hosts=(), allow=None,
+                       retry_s: float | None = None) -> dict:
+        """A person's fetch of an agent's pending operation (api.py's fetch job, with what the person confirmed in
+        `allow`): the operation run again in the changeset's working copy through dep_op (the fetch under the
+        working copy's dependency lock, the commit under _DepGuard, which checks again that it is still pending),
+        recorded as installed ("replays": op_id, "fetched_by": actor; the operation's actor and reason as the agent
+        gave them), then a notice appended to the changeset (add_notice: kind "fetched"), which the agent's
+        wait_for(event='changeset') returns. A fetch that shows more to fetch is deps.NeedsFetch (another round). The
+        operation's agent still holding the write lease does not stop it (the record's owner hash matches the
+        lease's owner: the fetch acts as that owner); another writer's lease is retried for `retry_s`
+        (REPLAY_RETRY_S), then Busy: what was fetched stays in the store, so a second Fetch only installs.
+        NotPending: restored away, installed, or the changeset closed. A refusal of the operation itself (a
+        resolution) is a notice of kind "fetch_failed" too."""
+        project = self._real_of(project)
+        p = self.pending_op(project, cid, op_id, sha)
+        le = self.srv.leases.get(cid)
+        owner = le.owner if (le is not None and p.get("owner") and _owner_hash(le.owner) == p["owner"]
+                             and le.owner not in self.srv.leases.stopped()) else None
+        end = None                                     # from the first refusal: the fetch itself may take minutes
+        replays = {"op_id": op_id, "sha": sha, "by": actor}
+        try:
+            with live.acting(owner) if owner else contextlib.nullcontext(), live.operation():
+                while True:
+                    try:
+                        out = self.dep_op(project, cid, p["action"], p["args"], p["actor"] or actor, p["reason"],
+                                          local_roots=local_roots, hosts=hosts, allow=allow, replays=dict(replays))
+                        break
+                    except live.WriteLocked as e:
+                        if end is None:
+                            end = time.monotonic() + (REPLAY_RETRY_S if retry_s is None else retry_s)
+                        if time.monotonic() >= end:
+                            raise Busy(f"{e}; what was fetched stays in the store, so Fetch again installs it "
+                                       "without fetching") from e
+                        time.sleep(0.25)
+        except (deps.NeedsFetch, deps.FilesChanged, deps.DepsBusy, NotPending, Busy):
+            raise
+        except (deps.DepError, ChangesetError) as e:
+            self.add_notice(project, cid, {"kind": "fetch_failed", "op_id": op_id, "name": p["name"],
+                                           "text": f"{actor}'s fetch for the dependency {p['name']} ({p['op']}) "
+                                                   f"ended refused: {e}"})
+            raise
+        notice = self.add_notice(project, cid, {
+            "kind": "fetched", "op_id": op_id, "name": p["name"],
+            "text": f"{actor} fetched {_needs_text(p['needs'])}, and the dependency {p['name']} ({p['op']}) is "
+                    f"installed in the working copy: its cells can be placed now (list_symbols lib={p['name']}); "
+                    "run_checks after placing them"})
+        return {**out, "state": "installed", "op_id": op_id, "notice": notice}
+
+    @_serialized
+    def add_notice(self, project: str, cid: str, notice: dict) -> dict:
+        """Appends `notice` ({kind: "fetched" | "fetch_failed", op_id, name, text}) to the changeset's record
+        ("notices", each with its time "at"): what an agent's wait_for(event='changeset') returns when their count
+        grows. Returns the notice."""
+        real = self._real_of(project)
+        meta = self._record(real, cid)
+        n = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **notice}
+        meta["notices"] = [*(meta.get("notices") or []), n]
+        self._save(real, meta)
+        return n
 
     # ------------------------------------------------------------------ several edits as one step (batch)
 
@@ -2288,6 +2513,9 @@ class Changesets:
         meta["writer"] = le.public() if le else None
         if meta["status"] == "open":
             meta["activity"] = self._activity(meta)
+            # agents' dependency operations waiting for a person's fetch: the review's Fetch replays each
+            meta["pending_deps"] = [{k: v for k, v in x.items() if k not in ("owner", "sha")}
+                                    for x in self.pending_ops(meta)]
         return {**meta, **git}
 
     def _applied_changes(self, project: str, meta: dict) -> list[dict]:

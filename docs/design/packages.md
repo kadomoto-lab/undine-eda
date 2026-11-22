@@ -681,6 +681,30 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   fetch, the review marks the operation *unchecked* (no cell of the package was placed or checked in the changeset).
   When the person's fetch ends, the agent's changeset gets a notice (an agent waiting with `wait_for` sees it), the
   operation becomes *installed*, and the agent can place the cells and run checks.
+  *Implemented (phase 4, store/changeset.py: Changesets.propose_dep, pending_ops, replay_pending, add_notice):* an
+  agent's operation runs dep_op with nothing allowed from a remote and without waiting for the working copy's dependency
+  lock (`deps.Allow(wait=False)`: busy while a person's fetch holds it). What needs no fetch is installed at once. On
+  `NeedsFetch` the project log gets a record `{op, args, actor, reason, plan, effects: [{k: "d", do, name, state:
+  "needs_fetch", op_id, action, needs, owner}]}` (`needs` the plan's rows: URL, commit or rev, size, licence, package,
+  version; `plan` with the request a confirmation takes back, `changeset` and `op_id` in it; `owner` a hash of the
+  write lease's owner), nothing written or installed. An operation is *pending* while that record is in effect (a
+  restore past it takes it back: cancelled, and the restore record lists it in `cancelled`) and no later record replays
+  it; a restore never undoes files for it. The review (`pending_deps` in the changeset's GET) shows it with a Fetch
+  button. The person's confirmation (kind `dependency` with `changeset` and `op_id`) uses the record's arguments, plans
+  again (a changed plan is a 409 `needs_fetch` for the dialog, one with nothing left to fetch is taken as it is) and
+  binds the token to the operation's id and a hash of its record; the confirmation and `POST /deps/fetch` refuse an
+  operation no longer pending (409 `not_pending`: restored away, installed, the changeset applied or discarded). The job
+  replays it through dep_op, the write lease checked at the commit only (what was fetched stays in the store) and the
+  pending state checked again under the changesets' lock in `_DepGuard`, records it installed (`replays`, `fetched_by`;
+  the agent's actor and reason), and appends a notice to the changeset's record (`notices: [{at, kind: fetched |
+  fetch_failed, op_id, name, text}]`). While the proposing agent still holds the lease (it waits with `wait_for`), the
+  job acts as that owner (the hash matches); another writer's lease is retried about three seconds, then 409 `busy`,
+  and the next Fetch only installs. A fetch that shows more to fetch is another round. `wait_for(event='changeset')`
+  compares the status and the number of notices, and returns the new notices; the assistant's next turn hears of them
+  (`agent._since`). Lock order: deps.lock before the changesets' lock everywhere; the agent's tool takes no changesets'
+  lock around the operation (unlike the intent writes), so it never waits for the dependency lock while holding the
+  lock a replay waits for. The review's Fetch row is minimal (the URL, size and licence, and the button); the full
+  review of a dependency change is the next slice.
 - **Evidence** already hashes `project.json` and `undine.lock`. Job inputs additionally record, outside `key` (for
   information, so evidence names exact contents): each `package@version` and tree used by the job's cells, the PDK
   commit, and the profile package and version. Outdated detection stays on what the job reads: the cells' content
@@ -806,6 +830,15 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   never as instructions. `agent.py`'s system prompt and `docs/guide/changesets.md` change from "cannot add
   dependencies" to "can propose them"; the skill gets a short reference on dependencies (today it does not mention
   them).
+  *Implemented (phase 4, agents/agent_tools.py):* `search_packages {query?, index?, limit?}` and `get_package {name,
+  index?}` read an index's local copy (`packages.search` / `info` with `fetch=False`; an index with none is a tool error
+  saying a person refreshes it in the Packages dialog), at most 50 packages and 20 versions; `get_dependency_status`
+  (also another's changeset with `changeset`) is `deps.status` with the newer versions of the local copies, the
+  operations waiting for a fetch and the notices; `propose_dependency {action, name, package?, version?, index?, git?,
+  rev?, subdir?, reason}` (a write, refused in `batch`) runs `Changesets.propose_dep` and answers `state: installed` or
+  `needs_fetch` with the needs. Each result carries `data_rule`. The system prompt, the MCP instructions and the skill
+  (`references/dependencies.md`) carry the DATA rule for package and index text. No tool, `undine call` command, client
+  method or agent code asks for, carries or returns a token (`test_api_phase1.py`, `test_agent_phase2.py`).
 
 ## Migration
 
@@ -1308,9 +1341,23 @@ HTTP; a changeset's and the one-click operation through the token; the command l
 `test_api_phase1.py`, and the web tests `FetchConfirmDialog.test.tsx`, `PackagesDialog.test.tsx`,
 `App.phase2.test.tsx`.
 
-Still to build in phase 4: the review of a dependency change (the lock diff, licences, size, code blocks and RTL), an
-agent's *needs fetch* recorded in its changeset with the review's Fetch button and the notice after the person's fetch,
-agent tools, and `dep_update`'s refresh of layout copies.
+Built: agent tools for packages and dependencies, an agent's operation recorded as *needs fetch* in its changeset, the
+person's Fetch from the review replaying it, and the notice after it (store/changeset.py `propose_dep`, `pending_ops`,
+`replay_pending`, `add_notice`; agents/agent_tools.py `search_packages`, `get_package`, `get_dependency_status`,
+`propose_dependency`; `POST /api/confirmations {kind: "dependency", changeset, op_id}`; the review's Fetch row in
+web/src/panels/ChangesPanel.tsx; see [Changesets and evidence](#changesets-and-evidence),
+[UI, CLI, HTTP, agent tools](#ui-cli-http-agent-tools) and the
+[HTTP API](../reference/api.md#an-agents-operation-waiting-for-a-fetch)). Tests: `test_pkg_agents.py` (an agent's add
+records *needs fetch* and never fetches; it continues after the person's fetch: the notice through `wait_for`, then a
+package cell placed and `run_checks`; no tool returns a token; the index reads refuse without a local copy and never
+fetch; the refusals; a dependency the store has is installed at once; another's changeset read; a restore, a discard
+and an adopt cancel a pending operation and its token is refused; the token binds the operation, its fields come from
+the record, a changed plan is shown again; another writer's lease is busy and the next Fetch only installs; propose and
+replay do not deadlock; the DATA rule in the prompt, the instructions and the skill), the guards in
+`test_api_phase1.py` and `test_agent_phase2.py`, and the web test `ChangesPanel.test.tsx`.
+
+Still to build in phase 4: the review of a dependency change (the lock diff, licences, size, code blocks and RTL), and
+`dep_update`'s refresh of layout copies.
 
 ### Phase 5 status
 

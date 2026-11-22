@@ -68,6 +68,7 @@ export function describeEffect(e: Effect): UiText {
   if (e.k === "l") return msg("review:effect.library", { mark, lib: e.lib ?? "" });
   if (e.k === "d") {             // a dependency operation (the project log): a PDK change, or a restore of both files
     if (e.pdk) return msg("review:effect.pdk", { from: e.pdk[0] ?? "∅", to: e.pdk[1] ?? "∅" });
+    if (e.name && e.state === "needs_fetch") return msg("review:effect.dependencyNeedsFetch", { mark: e.do === "mod" ? "~" : mark, name: e.name });
     return e.name ? msg("review:effect.dependency", { mark: e.do === "mod" ? "~" : mark, name: e.name })
       : msg("review:effect.dependencies");
   }

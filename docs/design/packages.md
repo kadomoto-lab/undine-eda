@@ -1181,8 +1181,10 @@ repository and index local, none touching GitHub):
   walking up to its `project.json`, or `PROJECT/LIBRARY` under `--root`; a dependency's or a PDK's library is refused.
   The tag is `v<version>`, or `<name>-v<version>` when HEAD holds more than one `undine-package.toml`. `at_tag` wants
   no tracked or untracked change under the package's subdirectory (the rest of the repository is not looked at) and
-  HEAD at the tag (an annotated one too), with the manifest committed there (an ignored one is in no `git status`).
-  `served` reads the tag's commit from the repository URL (`git ls-remote`). `tree` reads the include set from git's blobs into the store, as a consumer's fetch does, and sums the files' bytes.
+  HEAD at the tag (an annotated one too), with the manifest committed there and byte for byte the working copy read
+  (an ignored file, or one marked skip-worktree or assume-unchanged, is in no `git status`). `served` reads the tag's
+  commit from the repository URL (`git ls-remote`). `tree` reads the include set from git's blobs into the store, as
+  a consumer's fetch does, and sums the files' bytes.
 - **`pkg init LIBRARY [--name] [--version] [--license] [--repository] [--force]`** writes the manifest: the library's
   name, version 0.1.0, the cells with a symbol exported, the include list of the example, `[pdk]` from the project's
   PDK (its family and variant; `commits` and `built_with` its full commit, from the installed PDK, else the lock's

@@ -1148,8 +1148,8 @@ index もすべて手元のもの。GitHub に触れるテストはありませ�
   たどってプロジェクトを見つける)か、`--root` の下の `PROJECT/LIBRARY` です。依存や PDK のライブラリは拒否します。タグは
   `v<version>`、HEAD に `undine-package.toml` が 2 つ以上あれば `<name>-v<version>` です。`at_tag` は、パッケージの
   サブディレクトリに追跡しているものの変更も追跡していないファイルもなく(リポジトリのほかの部分は見ない)、HEAD がタグ
-  (注釈つきのタグでもよい)にあり、manifest がそこにコミットされていること(無視されたファイルは `git status` に出ない)を
-  求めます。`served` はタグの commit をリポジトリの URL から読みます(`git ls-remote`)。
+  (注釈つきのタグでもよい)にあり、manifest がそこにコミットされていて、読んだ作業コピーとバイト単位で等しいこと(無視された
+  ファイルや、skip-worktree や assume-unchanged の印を付けたファイルは `git status` に出ない)を求めます。`served` はタグの commit をリポジトリの URL から読みます(`git ls-remote`)。
   `tree` は include の集合を、利用する側の取得と同じように git の blob からストアに読み込み、ファイルのバイト数を合計します。
 - **`pkg init LIBRARY [--name] [--version] [--license] [--repository] [--force]`** は manifest を書きます。ライブラリの名前、
   バージョン 0.1.0、シンボルのあるセルを公開、例の include の一覧、プロジェクトの PDK からの `[pdk]`(family と variant。

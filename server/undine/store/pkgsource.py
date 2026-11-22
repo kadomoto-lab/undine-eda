@@ -174,12 +174,18 @@ def at_tag(src: Src) -> tuple[str, str]:
     if tagged != head:
         raise PackageSourceError(f"{src.where}: tag {tag} is {tagged[:12]}, HEAD is {head[:12]}: check out {tag}, "
                                  "or raise [package] version and tag HEAD with it")
+    # The manifest read is the working copy (locate): it must be the committed one byte for byte. `git status` misses
+    # an ignored file, and one marked skip-worktree or assume-unchanged, so the commit itself is read.
     rel = f"{src.subdir}/{mf.MANIFEST}" if src.subdir else mf.MANIFEST
     try:
-        gitsrc._run(None, "-C", str(top), "cat-file", "-e", f"{head}:{rel}")
-    except gitsrc.GitSourceError:                # an ignored file is in no `git status`: look in the commit itself
+        committed = gitsrc._run(None, "-C", str(top), "cat-file", "blob", f"{head}:{rel}")
+    except gitsrc.GitSourceError:
         raise PackageSourceError(f"{src.where}: {rel} is not committed at {tag} (is it matched by .gitignore?): "
                                  "commit it (git add -f), then tag that commit") from None
+    if committed != (src.lib.path / mf.MANIFEST).read_bytes():
+        raise PackageSourceError(f"{src.where}: {rel} differs from the one committed at {tag}, though git status "
+                                 "shows no change (skip-worktree or assume-unchanged?): `git update-index "
+                                 f"--no-skip-worktree --no-assume-unchanged {rel}`, then commit it and tag that commit")
     return tag, head
 
 

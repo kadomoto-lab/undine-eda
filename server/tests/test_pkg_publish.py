@@ -540,3 +540,38 @@ def test_an_index_url_with_a_password_or_a_local_path_is_not_published(tmp_path,
     assert checkreport.public_url("ssh://git:pw@host/x.git") == "ssh://host/x.git"
     assert checkreport.public_url("git@github.com:me/idx.git") == "git@github.com:me/idx.git"
     assert checkreport.public_url("file:///srv/idx") == "<local index>"
+
+
+@pytest.mark.parametrize("flag, version", [("--skip-worktree", "2.0.0"), ("--skip-worktree", "1.0.0"),
+                                           ("--assume-unchanged", "1.0.0")])
+def test_pack_and_check_refuse_a_manifest_that_differs_from_the_committed_one(tmp_path, capsys, flag, version):
+    store, prj, d = _library(tmp_path)
+    _manifest(d, _basic(repository=str(prj.path)))
+    _release(prj, tag="v1.0.0")
+    rel = f"libs/analog_ip/{mf.MANIFEST}"
+    _git(prj.path, "update-index", flag, rel)
+    _manifest(d, _basic(version=version, repository=str(prj.path), more='[dependencies]\nsar = "^1.2"\n'))
+    if version != "1.0.0":
+        _git(prj.path, "commit", "--allow-empty", "-qm", "v2")
+        _git(prj.path, "tag", f"v{version}")
+    assert _git(prj.path, "status", "--porcelain", "--untracked-files=all") == ""      # git status sees nothing
+    for cmd in (["pack", str(d)], ["check", str(d), "--no-run", "--offline"]):
+        assert _cli(store, *cmd) == 1
+        assert f"{rel} differs from the one committed at v{version}, though git status shows no change" in \
+            capsys.readouterr().out
+    assert not (prj.path / ".undine" / "check" / f"analog_ip-{version}").exists()
+
+
+@pytest.mark.parametrize("raw", [".", "..", "~", "./i", "1"])
+def test_a_short_relative_index_value_is_published_on_its_row_only(tmp_path, capsys, raw):
+    store, prj, d = _library(tmp_path)
+    _manifest(d, _basic(repository="https://example.org/me/analog_ip.git",
+                        more=f'[dependencies]\nx = {{ index = "{raw}", package = "x_ip", version = "~1.2" }}\n'))
+    _release(prj, tag="v1.0.0")
+    assert _cli(store, "check", str(d), "--no-run", "--offline") == 1
+    rep = _report_of(prj)
+    assert (rep["package"]["version"], rep["package"]["tag"], rep["package"]["repository"]) == (
+        "1.0.0", "v1.0.0", "https://example.org/me/analog_ip.git")
+    assert rep["dependencies"][0]["req"] == "~1.2" and set(rep["cells"]) == {"inv", "unit"}
+    assert rep["dependencies"][0]["index"] == ("1" if raw == "1" else "<local index>")
+    assert "<local index>" not in json.dumps({k: v for k, v in rep.items() if k != "dependencies"})

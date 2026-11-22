@@ -356,19 +356,24 @@ def _path_subs(src) -> list[tuple[re.Pattern, str]]:
     return [(re.compile(re.escape(s) + _PATH_END), label) for s, label in sorted(out.items(), key=lambda x: -len(x[0]))]
 
 
-def _scrub(obj, subs: list[tuple[re.Pattern, str]], exact: dict[str, str]):
-    """Every string with the machine's paths replaced by a placeholder, the raw URLs in `exact` by their public form,
-    and a user and password dropped from any URL: the report is published."""
+def _private(raw: str) -> bool:
+    """Whether a dependency's index or git value as written must not appear anywhere in a report: an absolute path,
+    a file: URL, or a URL with a user or password. A short relative value ("." or "~") is not one: it names no machine
+    path, and replacing it in other strings would rewrite versions, requirements and names."""
+    return raw.startswith(("/", "file:")) or bool(re.match(r"^[A-Za-z]:[\\/]", raw)) or bool(_USERINFO.search(raw))
+
+
+def _scrub(obj, subs: list[tuple[re.Pattern, str]]):
+    """Every string with the machine's paths and private values (`subs`, each matched only as a whole path or URL)
+    replaced by a placeholder, and a user and password dropped from any URL: the report is published."""
     if isinstance(obj, str):
-        for a, b in exact.items():
-            obj = obj.replace(a, b)
         for rx, b in subs:
-            obj = rx.sub(b, obj)
+            obj = rx.sub(lambda _: b, obj)
         return _USERINFO.sub(r"\1", obj)
     if isinstance(obj, list):
-        return [_scrub(x, subs, exact) for x in obj]
+        return [_scrub(x, subs) for x in obj]
     if isinstance(obj, dict):
-        return {k: _scrub(v, subs, exact) for k, v in obj.items()}
+        return {k: _scrub(v, subs) for k, v in obj.items()}
     return obj
 
 
@@ -395,14 +400,17 @@ def build(src, tag: str, commit: str, *, index_url: str, offline: bool = False, 
                    "specs_changed": [], "passed": False},
         "code": s["code"], "warnings": r.warnings, "problems": r.problems, "passed": not r.problems,
     }
-    exact: dict[str, str] = {}                       # an index or git URL as written -> as published
+    private: dict[str, str] = {}                     # an index or git value as written -> as published
     for row in report["dependencies"]:
         for key, local in (("index", "<local index>"), ("git", "<local repository>")):
             raw = row.get(key)
             if isinstance(raw, str) and (pub := public_url(raw, local)) != raw:
-                exact[raw] = row[key] = pub
-    exact = dict(sorted(exact.items(), key=lambda x: -len(x[0])))
-    return _scrub(report, _path_subs(src), exact)
+                row[key] = pub                       # the row itself: always the public form
+                if _private(raw):                    # elsewhere (a message quoting it): only a path or secret URL
+                    private[raw] = pub
+    subs = [(re.compile(r"(?<![\w.~/-])" + re.escape(raw) + _PATH_END), pub)
+            for raw, pub in sorted(private.items(), key=lambda x: -len(x[0]))]
+    return _scrub(report, subs + _path_subs(src))
 
 
 def dumps(report: dict) -> bytes:

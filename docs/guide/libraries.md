@@ -208,11 +208,19 @@ is another, `index` when it is not the default index):
   acme = "git@github.com:acme/undine-index.git"
   ```
 
+  `pkg index add acme git@github.com:acme/undine-index.git` writes that line for you (`--project demo`: into the
+  project's `project.json`).
+
   `--index acme` (or `"index": "acme"`) takes a package from it. A dependency a package names without `index` comes
   from that package's own index (cargo's rule): a package from `acme` that needs `sar_common` gets acme's, never one
   someone published under that name elsewhere. One package name from two indexes in one project is refused. Access
   is git's: ssh keys or a credential helper. Each index is fetched once into the store and again only by `pkg index
   update`, `pkg update`, or a resolution that finds no version it needs; `pkg index list` says when each was fetched.
+- **From git to the index.** A dependency added from git before its package was in an index keeps working.
+  `pkg migrate demo analog_ip` turns it into a package from the index when the index lists the version installed and
+  that version's files equal the installed ones; it writes the requirement `=VERSION`, which `pkg update demo
+  analog_ip --version ^VERSION` loosens, and names the files no longer installed (those outside the manifest's
+  `[files] include`). `pkg remove demo NAME` removes a dependency, as `lib remove` does.
 
 ### Packages in the browser
 

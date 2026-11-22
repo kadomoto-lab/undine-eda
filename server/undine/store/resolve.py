@@ -221,7 +221,7 @@ def resolve(root: str, direct: dict[str, Requirement], read: Reader, *, fixed: d
     breadth first. `fixed`: locked nodes not re-resolved, by id; a requirement naming one's git, rev and subdir takes
     it without reading. `reserved`: {casefolded name: what it is} that no local name may be. pdk_check(node): why a
     node with a [pdk] does not fit the project's PDK, or None. cells(resolution): the cell-name problems, run last.
-    index_pin: how a manifest's index requirement becomes a git one (None: refused, as before the index). Raises
+    index_pin: how a manifest's index requirement becomes a git one (None: no index, refused). Raises
     ResolveError once, with every problem, after every reachable manifest has been read."""
     return _Walk(root, read, fixed or {}, reserved or {}, index_pin).run(direct, pdk_check, cells)
 
@@ -427,7 +427,7 @@ class _Walk:
         index = f", index {dep.index}" if dep.index else ""
         self.problem("index_dependency",
                      f"{text}: {mf.MANIFEST}: dependencies.{dep.local}: an index requirement ({dep.package} "
-                     f"{dep.version}{index}), which comes with the package index (phase 3): name its git repository, "
+                     f"{dep.version}{index}), which this resolution has no index to pin: name its git repository, "
                      f"{dep.local} = {{ {', '.join(keys)} }}", [text])
 
     def link(self, req: Requirement, node: Node) -> None:

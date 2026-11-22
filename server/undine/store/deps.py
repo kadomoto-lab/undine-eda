@@ -1658,7 +1658,7 @@ def _dep_spec(prj, name: str) -> dict:
 
 
 def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list[Path] | None = None, *,
-           version: str | None = None, hosts=()) -> dict:
+           version: str | None = None, hosts=(), replace: dict | None = None, expect: dict | None = None) -> dict:
     """Moves a dependency to `rev` (default: its rev again, e.g. a branch that moved), hashed as the lock's format says
     (a format 2 lock's entry gets a `tree` and loses its `sha`; a package moves onto its [files] include set). Its
     packages are resolved again with it, every other locked package held as locked; a package no longer reached is
@@ -1666,18 +1666,30 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
     names, from, to, changed} per entry moved, added or dropped) and `used_by` over every local name of each. A
     name only a package places is NotDirect. `local_roots` and `hosts`: as add's. A package from an index moves to
     the newest version its requirement (or `version`, written to project.json) accepts, with its index fetched again
-    first; the packages only it reaches move with it."""
+    first; the packages only it reaches move with it. `replace` (migrate): a git dependency's requirement replaced by
+    this index one, resolved and installed in the same way. `expect` (migrate): {spec, entry, commit, tree}, what the
+    caller checked: refused when project.json's requirement or the lock entry is no longer that, or when the
+    resolution chose another commit or tree."""
     _dep_spec(prj, name)
     with _deps_lock(prj.path):
         _reread(prj)
         base = _dep_spec(prj, name)                      # as the operation before this one left it
         lock = read_lock(prj.path)                       # a lock this Undine cannot write: refused before fetching
         indexed = is_index_spec(base)
-        if indexed and rev:
-            raise DepError(f"{name} is a package from an index: give a version, not a rev")
-        if not indexed and version:
-            raise DepError(f"{name} is a git dependency: give a rev, not a version")
-        spec = dict(base, **({"rev": rev} if rev else {}), **({"version": version} if version else {}))
+        if expect is not None and (base != expect["spec"] or
+                                   (lock or {}).get("libraries", {}).get(name) != expect["entry"]):
+            raise DepError(f"{name} was changed meanwhile (an update, a sync or an adopt): nothing changed, run the "
+                           "command again")
+        if replace is not None:
+            if indexed:
+                raise DepError(f"{name} is a package from an index already")
+            spec, indexed = dict(replace), True
+        else:
+            if indexed and rev:
+                raise DepError(f"{name} is a package from an index: give a version, not a rev")
+            if not indexed and version:
+                raise DepError(f"{name} is a git dependency: give a rev, not a version")
+            spec = dict(base, **({"rev": rev} if rev else {}), **({"version": version} if version else {}))
         _own_dir(prj.path, name)
         g = _Graph(prj, lock, local_roots, f"lib update {prj.name} {name}", hosts)
         if indexed:
@@ -1692,6 +1704,10 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
             target = g.graph.direct.get(name)
             res = g.run(direct, g.fixed(keys, {target} if target else set()))
             libs, pkgs, installs = g.tables(res)
+            got = libs.get(name) or {}
+            if expect is not None and (got.get("commit"), got.get("tree")) != (expect["commit"], expect["tree"]):
+                raise DepError(f"{name}: the index now names another commit for it ({str(got.get('commit'))[:12]}, "
+                               f"compared {expect['commit'][:12]}): nothing changed, run the command again")
             staged = g.stage(installs)
             walked = [*keys, name]
             try:
@@ -1715,6 +1731,88 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
                 for st in staged.values():
                     shutil.rmtree(st, ignore_errors=True)
     return report
+
+
+def migrate(prj, name: str, index: str | None = None, guard=None, *, dry: bool = False) -> dict:
+    """`pkg migrate` (docs/design/packages.md, Migration): turns the git dependency `name` into a package from an
+    index, when the index lists the installed version (its local copy fetched again once when it does not) and that
+    version's files (those its manifest includes, the manifest too) equal the installed ones, compared file by file.
+    The git commit usually predates the index entry and a format 1 `sha` covers the whole subdir, so the hashes are
+    not compared. The requirement written is `=VERSION`
+    (the version installed; `pkg update --version` loosens it), from `index` (a nickname or URL; default: the default
+    index); the dependency is installed again with the manifest's file set, through update(). Needs lock format 2.
+    Returns update()'s report and {package, version, index, dropped_files: installed files outside the include set}.
+    Refused, with nothing changed, when it is not installed as locked, has no manifest, the index lists no such
+    version or a file differs. `dry`: every check, a format 1 lock allowed, nothing written; returns the same fields
+    without update()'s report (the CLI checks first, then converts the lock, then migrates). The checks run without the
+    dependency lock; update() refuses when what they compared changed meanwhile (`expect`)."""
+    base = _dep_spec(prj, name)
+    _own_dir(prj.path, name)
+    if is_index_spec(base):
+        raise DepError(f"{name} is a package from an index already")
+    lock = read_lock(prj.path)
+    if not lock or (lock_format(lock) < 2 and not dry):
+        raise NeedsFormat2(f"{name}: a package from an index needs lock format 2: run `python -m undine lib lock "
+                           f"{prj.name} --format 2`, then migrate again; nothing was changed")
+    want = (lock.get("libraries") or {}).get(name)
+    if not isinstance(want, dict) or _stale({name: base}, lock, prj.meta):
+        raise DepError(f"{name}: not locked as project.json names it: run `python -m undine lib lock {prj.name}` "
+                       "first; nothing was changed")
+    if not _current(prj.path, name, want):
+        raise DepError(f"{name}: not installed as locked: run `python -m undine lib sync {prj.name}` first; nothing "
+                       "was changed")
+    try:
+        m = locked.manifest_of(prj.path, name, want)
+    except (locked.NotAvailable, mf.ManifestError) as e:
+        raise DepError(f"{name}: {e}") from None
+    if m is None:
+        raise DepError(f"{name}: its files have no {mf.MANIFEST}, which every version in an index has: update it to "
+                       f"a commit with one (`python -m undine lib update {prj.name} {name} --rev ...`) first; nothing "
+                       "was changed")
+    url = ix.url_of(index, prj.meta)
+    nick = ix.nickname(url, prj.meta)
+    idx = ix.Index(url)
+    try:
+        line = next((x for x in idx.versions(m.name) if x.vers == m.version), None)
+        if line is None and idx.fetched():               # not in the local copy: fetched again once, as a resolution
+            idx.update()
+            line = next((x for x in idx.versions(m.name) if x.vers == m.version), None)
+        lines = idx.versions(m.name)
+    except ix.IndexReadError as e:
+        raise DepError(str(e)) from None
+    if line is None:
+        listed = ", ".join(str(x.vers) for x in lines) or "none"
+        raise DepError(f"{name}: {nick} lists no {m.name} {m.version}, the version installed (it lists {listed}): "
+                       f"update it to a listed version first, or `pkg index update`; nothing was changed")
+    spec = {"git": line.git, **({"subdir": line.subdir} if line.subdir else {})}
+    with cas.store_lock(shared=True):
+        files = _stored("tree", line.tree)
+        if files is None:
+            _check_spec(spec)
+            _check_commit(name, line.commit)
+            try:
+                _, files, tree = _read_commit(name, spec, line.commit, None, "tree", False, "include")
+            except mf.ManifestError as e:
+                raise DepError(str(e)) from None
+            if tree != line.tree:
+                raise DepError(f"{name}: {m.name} {m.version}: the index line and the repository disagree (tree "
+                               f"{line.tree[:19]}, the commit's files {tree[:19]}); nothing was changed")
+    d = dep_dir(prj.path, name)
+    installed = {rel: cas._hash_file(p) for rel, p, st in cas._walk_files(d) if stat.S_ISREG(st.st_mode)}
+    differ = sorted(p for p, (_, h) in files.items() if installed.get(p) != h)
+    if differ:
+        more = f" and {len(differ) - 10} more" if len(differ) > 10 else ""
+        raise DepError(f"{name}: the files of {m.name} {m.version} in {nick} differ from the installed ones: "
+                       f"{', '.join(differ[:10])}{more}: it is not the same release; nothing was changed")
+    going = sorted(set(installed) - set(files))
+    req = {"version": f"={m.version}"} | ({"package": m.name} if m.name != name else {}) | (
+        {"index": index} if index else {})
+    out = {"package": m.name, "version": str(m.version), "index": url, "dropped_files": going}
+    if dry:
+        return out
+    r = update(prj, name, guard=guard, replace=req,
+               expect={"spec": base, "entry": want, "commit": line.commit, "tree": line.tree})
+    return r | out
 
 
 def _untrust(meta: dict, names: list[str]) -> list[str]:

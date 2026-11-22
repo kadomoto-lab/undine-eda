@@ -4,15 +4,21 @@ Pure: no git, no network, no writes. Every error reads `<where>: undine-package.
 where `where` names the package or the requirement that led to it, so one refusal can list the problems of several
 manifests.
 
-Until the package index (phase 3) every dependency a manifest names is a git requirement:
+A dependency a manifest names is a git requirement:
 
     [dependencies]
     sar_common = { git = "https://example.org/sar.git", rev = "v1.3.1", version = "^1.3" }
     bias = { git = "https://example.org/bias.git", rev = "v0.3.2", subdir = "lib", package = "bias_gen" }
     common = { subdir = "common" }       # a sibling: same repository and commit, subdir from the repository root
 
-Index forms (a string, or a table with neither git nor subdir) are kept as IndexDep so that a manifest written for
-phase 3 parses; the resolver refuses them.
+or one from a package index (phase 3), a string or a table with neither git nor subdir, kept as IndexDep:
+
+    [dependencies]
+    sar_common = "^1.3"
+    bias = { package = "bias_gen", version = "~0.3", index = "acme" }
+
+The resolver pins an index requirement through the index (deps._Graph.index_pin, store/index.py); a resolution made
+without an index refuses it.
 """
 from __future__ import annotations
 
@@ -80,7 +86,7 @@ class GitDep:
 
 @dataclass
 class IndexDep:
-    """A requirement in the package index's form (phase 3). Parsed so a newer manifest reads; resolution refuses it."""
+    """A requirement from a package index (phase 3): pinned through the index (deps._Graph.index_pin)."""
     local: str
     package: str
     version: str

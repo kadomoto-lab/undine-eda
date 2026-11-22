@@ -1,9 +1,10 @@
 # Packages and PDKs (design)
 
 Status: design, decided on 2026-11-05 ([Decisions](#decisions)).
-**Phases 0, 1** (the store and lock format 2) **and 2** (manifests, transitive dependencies, PDK compatibility
-and the trust rule) **are done**; **phases 3 to 6 are not implemented**. [Phases](#phases) says what each phase delivers and, per phase, what exists
-today; what a user can do with PDKs now is in the [PDKs guide](../guide/pdks.md), and with dependencies and packages
+**Phases 0, 1** (the store and lock format 2), **2** (manifests, transitive dependencies, PDK compatibility and the
+trust rule) **and 3** (packages from an index, the remote-host policy, licences and vendoring, the library browser's
+Packages section) **are done**; **phase 4** (changesets and agents) **is in progress**; **phases 5 and 6 are not
+implemented**. [Phases](#phases) says what each phase delivers and, per phase, what exists today; what a user can do with PDKs now is in the [PDKs guide](../guide/pdks.md), and with dependencies and packages
 in [Libraries and dependencies](../guide/libraries.md).
 
 The document has several baselines. [Today](#today) describes the code when this design was written, and its line
@@ -680,7 +681,12 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   covers the whole subdir while the index `tree` covers only the included files plus the manifest, so the two hashes
   are not compared. Migrate reinstalls with the manifest's file set and reports the change: the manifest that comes and
   the files outside `include` that go. Lock format 1 is read; format 2 is written by `pkg migrate` (see
-  [Lockfile](#lockfile)).
+  [Lockfile](#lockfile)). *Implemented (phase 3, deps.migrate):* the version compared is the one installed (its
+  manifest's), looked up in the index's local copy, which is fetched again once when it does not list it; the
+  requirement written is `=VERSION` (`pkg update --version ^VERSION` loosens it), and the dependency is installed again
+  through `lib update`'s path, so the trust of the entry goes as for any update. A dependency with no manifest, a
+  version the index does not list or any included file that differs is refused with nothing changed. A format 1 lock
+  is converted first (`pdkops.upgrade`, as `lib lock --format 2`).
 - **PDK ids**: a 12-character id (`sky130A@8afc8346a57f`) is expanded to the full commit from the installed PDKs (a
   unique prefix), else from `ciel ls-remote` when the person allows the network. A PDK is verified against the tree
   hashes its profile package lists for that commit. A commit the profile does not list is locked by the hashes found
@@ -1108,7 +1114,9 @@ Done (store/index.py, the index parts of store/deps.py and store/resolve.py, und
   `{package?, version, index?}`. A stale entry (another index or package, or a version the requirement no longer
   accepts) is resolved by `lib lock`; `sync` installs from the lock without reading the index. Format 2 only.
 - **Yank**: skipped by new resolutions, kept where locked; `status` warns from the local copy.
-- **Commands**: `pkg search / info / add / update / outdated / tree / why / lock / index list / index update`.
+- **Commands**: `pkg search / info / add / update / outdated / tree / why / lock / remove / migrate / index list /
+  index update / index add` (`index add` writes `~/.undine/config.toml`, or project.json with `--project`, the rest of
+  the file kept as written).
 
 The default index repository, [`kadomoto-lab/undine-index`](https://github.com/kadomoto-lab/undine-index), exists
 (created on 2026-11-20, `config.json` only, no package yet).

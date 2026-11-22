@@ -42,8 +42,9 @@ SKY130 で、その PCell コードを Undine はもう実行しません([サ�
 ./setup.sh pdk
 ```
 
-`ciel enable --pdk-family sky130 8afc8346a57fe1ab7934ba5a6056ea8b43078e71` を実行し、PDK を `$PDK_ROOT`(既定は `~/.ciel`)に
-ダウンロードして有効にします。そのバージョンがすでに入っていれば飛ばし、最後に `./setup.sh` のチェックを実行します。
+Undine で動作確認したバージョンで `ciel enable --pdk-family sky130` を実行します。そのバージョンは組み込みの
+[プロファイル](#pdk-profiles)が挙げています(`pixi run python -m undine pdk tested sky130` が表示します:
+`8afc8346a57fe1ab7934ba5a6056ea8b43078e71`)。これで PDK を `$PDK_ROOT`(既定は `~/.ciel`)にダウンロードして有効にします。そのバージョンがすでに入っていれば飛ばし、最後に `./setup.sh` のチェックを実行します。
 
 別のバージョンを入れるには、open_pdks のコミットを `PDK_VERSION` で指定します:
 
@@ -54,26 +55,34 @@ PDK_VERSION=<open_pdks commit> ./setup.sh pdk
 
 !!! note "`pixi run pdk`"
 
-    `pixi run pdk` は、動作確認した SKY130 のバージョンを `ciel enable` するだけです。`PDK_VERSION` も `PDK_FAMILY` も読まず、
+    `pixi run pdk`(`python -m undine pdk enable sky130`)は、動作確認した SKY130 のバージョンを `ciel enable` するだけです。`PDK_VERSION` も `PDK_FAMILY` も読まず、
     入っているバージョンも飛ばさず、最後のチェックもしません。それ以外のことをするときは `./setup.sh pdk` を使います。
 
 <a id="gf180mcu-and-ihp-sg13g2"></a>
 ### GF180MCU と IHP SG13G2
 
-動作確認したバージョンを ciel で入れます:
+動作確認したバージョンを ciel で入れます(`./setup.sh pdk` と `pdk enable` は、バージョンを指定しなければ、family の組み込みの
+プロファイルから取ります):
+
+=== "setup.sh"
+
+    ```sh
+    PDK_FAMILY=gf180mcu ./setup.sh pdk
+    PDK_FAMILY=ihp-sg13 ./setup.sh pdk
+    ```
+
+=== "pdk enable"
+
+    ```sh
+    pixi run python -m undine pdk enable gf180mcu
+    pixi run python -m undine pdk enable ihp-sg13
+    ```
 
 === "ciel"
 
     ```sh
     pixi run ciel enable --pdk-family gf180mcu 792ef67037d74c8c51811eab3ce23cf793491296
     pixi run ciel enable --pdk-family ihp-sg13 89d42ee6d2fd9b50b86a1aada6fee6673c3e6008
-    ```
-
-=== "setup.sh"
-
-    ```sh
-    PDK_FAMILY=gf180mcu PDK_VERSION=792ef67037d74c8c51811eab3ce23cf793491296 ./setup.sh pdk
-    PDK_FAMILY=ihp-sg13 PDK_VERSION=89d42ee6d2fd9b50b86a1aada6fee6673c3e6008 ./setup.sh pdk
     ```
 
 `ihp-sg13` ファミリーを入れると、SG13G2 と SG13CMOS5L の両方が入ります。続けて:
@@ -486,13 +495,26 @@ PDK のファミリーごとに **プロファイル** があります。PDK の
 Undine には SKY130、GF180MCU、IHP SG13G2、IHP SG13CMOS5L のプロファイルがあります。最初の 3 つは動作確認したバージョンの PDK
 で実行して確かめましたが、SG13CMOS5L のものはまだです。プロファイルのないファミリーの PDK には汎用のプロファイル
 *Unknown process* を使い、これは何も知りません。そうした PDK も一覧に出て、プロジェクトを固定することもできますが、DRC、LVS、
-シミュレーションのモデル、PCell は使えません。プロファイルは PDK ではなく Undine の一部なので、新しいプロファイルは Undine の
-新しいバージョンと一緒に入ります。サーバーの中でプロファイルがどこにあるかは
-[アーキテクチャと開発](../development.ja.md)にあります。
+シミュレーションのモデル、PCell は使えません。
+
+プロファイルはデータです。ciel の family ごとに 1 つの **プロファイルのパッケージ**(`profile_sky130`、`profile_gf180mcu`、
+2 つの IHP のプロセスを持つ `profile_ihp_sg13`)にある `profile.toml` です。それぞれは Undine で動作確認した PDK のバージョンも
+挙げています。`./setup.sh pdk`、`pixi run pdk`、`pdk enable` はその最初のものを入れ、PDK の名前だけ(`sky130A`)で作った
+プロジェクトは、そのバージョンが入っていればそれになります。表示するには:
+
+```sh
+pixi run python -m undine pdk tested gf180mcu         # 792ef67037d74c8c51811eab3ce23cf793491296
+```
+
+Undine は、プロファイルのうち知っているものだけを読みます。知らないキー、Undine が持つ式とスタックの生成関数以外の計算、
+PDK の外を指すパスは拒否します。今のところプロファイルのパッケージは Undine に組み込まれている(`server/undine/data/profiles/`)
+ので、新しいプロファイルは Undine の新しいバージョンと一緒に入ります。Undine のテストがプロファイルを実行したかどうか
+(プロファイルの *verified* の印。PDK の状態ではありません)は、プロファイルではなく Undine 自身の記録です。
+サーバーの中でプロファイルがどこにあるかは[アーキテクチャと開発](../development.ja.md)にあります。
 
 !!! note "予定"
 
-    ライブラリと PDK のパッケージの仕組み(データとして公開するプロファイルと、PDK を *検証済み* にするハッシュ)は
+    ライブラリと PDK のパッケージの仕組み(index でパッケージとして公開するプロファイルと、PDK を *検証済み* にするハッシュ)は
     [パッケージと PDK](../design/packages.ja.md) で設計しています。今あるものは[段階](../design/packages.ja.md#phases)に書いてあります。
     PDK をファイルで固定することと、ciel で取得することは、もうできます。
 

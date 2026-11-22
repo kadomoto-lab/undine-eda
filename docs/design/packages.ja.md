@@ -520,13 +520,13 @@ index 側の CI(Undine がワークフローのファイルを用意する)は�
 
 ## パッケージとしての PDK プロファイル
 
-`pdkprofile.py` をデータにします。family ごとに 1 つのパッケージ(`profile_sky130`、`profile_gf180mcu`、`profile_ihp_sg13g2`)を
+`pdkprofile.py` をデータにします。ciel の family ごとに 1 つのパッケージ(`profile_sky130`、`profile_gf180mcu`、`profile_ihp_sg13`)を
 作り、今の `Profile` が持つもの(レイヤー、メタル、deck とそのオプション、Magic / Netgen のファイル、モデルとコーナー、PCell
 ライブラリ、スタックの規則、LVS の素子、制限)を `profile.toml` に書きます。さらに次を加えます。
 
 ```toml
 schema = 1                 # プロファイルの形式。それを知らない Undine はプロファイルを拒否する
-undine = ">=0.2"           # このプロファイルを読める Undine のバージョン
+undine = ">=0.1.0"         # このプロファイルを読める Undine のバージョン
 
 [[pdk]]
 commit = "8afc8346a57fe1ab7934ba5a6056ea8b43078e71"
@@ -545,6 +545,32 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 プロファイルの変更(deck のオプション、モデルのパス)はプロファイルのパッケージの更新で、ほかの更新と同じくレビューします。
 ジョブが使うプロファイルの欄はジョブの入力に入るので([evidence](#changesets-and-evidence)を参照)、変わった欄を使った結果は
 古くなり、ほかの結果は古くなりません。
+
+*実装(段階 6、pdks/profiledata.py、pdks/formulas.py、pdks/tested.py):* パッケージはプロセスごとではなく ciel の family
+ごとに 1 つです(決定事項)。`profile_ihp_sg13` の `profile.toml` は SG13G2 と SG13CMOS5L にそれぞれ `[[profile]]` を持ち、
+それぞれが扱う PDK の variant を挙げます。Undine の組み込みの写しは undine-eda の `server/undine/data/profiles/<package>/` に
+あります。`undine-package.toml`(パッケージの名前とバージョン。今は 1.0.0。`[files] include = ["profile.toml"]`)と
+`profile.toml` で、index の行の `subdir` がそこを指せ、組み込みの代替は公開するパッケージとバイト単位で同じになります。
+キーはその名前の `Profile` の欄で(`name` は `Profile.family`)、欄の型注釈で変換します。リストはタプルに、表は dataclass に、
+float の欄の整数は float になります。型のない表(`drc_options`、`lvs_options`、`rename`)は TOML の型のままです。deck には
+`str(value)` が渡るからです。次のものは、それぞれのキーのパスを示して拒否します(`<where>: profile.toml:
+profile[0].stack.cuts[2].name: ...`)。知らないキー(`verified` と `magic_drc` も。ヒントつき)、1 より大きい `schema`、
+この Undine を含まない `undine` の範囲、Undine にない式やスタックの生成関数、知らない `drc_switches`、その欄が埋めない
+テンプレートの置き場所(`{name.attr}` も)、コンパイルできない正規表現、絶対パスか `..` を含むパス、モジュール・関数・
+ライブラリがドットでつないだ名前でないか、環境が Undine のもの(`pcell`、`pcell-gf180`)でない PCell ライブラリ、2 つの
+`[[profile]]` にあるか別の family の variant、2 回挙げた `[[pdk]]` の commit、別の family のタグ、`sha256:<64 桁の 16 進>` で
+ない木の値。名前付きの式のほかに、スタックは名前とバージョンのついた生成関数で作ってもよく(決定事項)、GF180 と IHP の
+スタックはそうしています。`[profile.stack] generator = "gf180_stack@1"` とし、引数をその横に書きます(`thin`、`top`、`plate`。
+`ihp_stack@1` は `thin` と `tops`)。規則が変わったら、生成関数の新しいバージョンにします。`verified`(Undine のテストが
+そのプロファイルを実行した)と `magic_drc` は、Undine の表(`pdks/tested.py`)から family、プロファイルのバージョン、
+プロファイルの名前で引きます。表にないバージョンは verified でなく、`magic_drc` は表にある最新のバージョンのものを引き継ぎます
+(決定事項)。組み込みの `[[pdk]]` は動作確認した commit(sky130 `8afc8346a57f`、gf180mcu `792ef67037d7`、ihp-sg13
+`89d42ee6d2fd`)とそのライセンスです。`compat` と `tree` は読んで確かめますが、組み込みのプロファイルにはまだありません。
+TOML のファイルは Python のプロファイルから書き出し、`test_profile_data.py` が、読み込んだプロファイルを、Python を消す前に
+保存した golden のデータ(`server/tests/data/profiles_golden.json`。意図した変更の後は `profile_golden.py` で書き直す)と、
+型も含めて欄ごとに比べます。`pcell.SUPPORTED` はなくなりました。`profiledata.tested_commits(family)` が family の動作確認した
+commit を返し、`pick_pdk` は PDK の名前だけが指定されたときにそれを優先し(今は GF180 と IHP でも)、`pixi run pdk`
+(`python -m undine pdk enable sky130`)と `setup.sh`(`python -m undine pdk tested FAMILY`)は自分では commit を書きません。
 
 <a id="licences"></a>
 
@@ -827,7 +853,7 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 | 3. index | index の形式、複数の index、既定の index を作る(`kadomoto-lab/undine-index`)、`pkg search / info / add / update / lock / outdated / tree / why`、バージョン範囲、yank、リモートのホストの方針と取得の大きさの上限、ライブラリブラウザのパッケージ欄。`pkg licenses`、`pkg vendor`(テープアウトの書き出しも実行する)、`pkg sync --from-vendor` | 一時ディレクトリの `file://` の index。yank したものは飛ばすが、固定済みなら残す。`project.json` に書いた private な index。`index` のない依存が、それを書いたパッケージの index から来る。2 つの index からの同じ名前を拒否する。一覧にないホストは、HTTP からは確認なしに拒否する。大きさの上限を超えた取得を止める。パッケージのリポジトリを消し、ストアを空にしても、vendor したバンドルから `sync --from-vendor` でオフラインに、固定した木のとおり install し直せる。手で変えた vendor のファイルを拒否する。テープアウトのバンドルに `vendor/` があり、`report.json` がそれを一覧にする | **済み**、[段階 3 の状況](#phase-3-status)を参照 |
 | 4. changeset とエージェント | changeset での依存の操作、依存の変更のレビュー(コードブロックと RTL の一覧)、確認のトークン、取得の後の通知、DATA の規則つきのエージェントのツール、git のマージドライバでの `project.json` と `undine.lock` のマージの規則(`merge.md` も直す)、`key` の外のパッケージと PDK の情報と、`key` の中のモデルのファイルとプロファイルの欄を含む evidence | changeset で追加、採用、元に戻す。エージェントの追加は *取得が必要* を記録し、取得せず、人の取得の後に続けられる。トークンを返すツールはない。別々のパッケージを追加する 2 つの changeset を、どちらの順でも採用できる。両立しない要求は採用のときに拒否する。1 つのセルを変える更新は、そのセルを使う結果だけを古くする。README の変更では何も古くならない | **進行中**、[段階 4 の状況](#phase-4-status)を参照 |
 | 5. 公開 | `pkg init / check / pack / publish / yank`、`[checks]`、検証の報告と、index の行と PR からのそのリンク、semver の報告、報告に入るスペックの結果、`[renames]`、セル単位の更新の報告、レイアウトのコピーの更新、index の CI のワークフロー(DRC / LVS なし) | この木について通った報告がなければ publish は拒否し、PR の本文は報告をその SHA-256 とともにリンクする。SHA-256、commit、木が行と違う報告を index の CI が拒否する。改名したセルが改名として報告され、参照が書き換わる。ピンを消したりレイアウトのピンを動かしたりするとメジャーバージョンが要る。免除した規則は `check` に通り、示される。リポジトリが渡さない木の publish を拒否する。2 つのパッケージを持つリポジトリでのタグ `<name>-v<version>`。更新の後、コピーしたセルが changeset の中で新しくなり、その LVS が古くなる。編集したコピーは置き換えず、示す | **予定** |
-| 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、レイヤーの色を変えても古くならない | **予定** |
+| 6. PDK プロファイル | `schema` と `undine` を持つ family ごとの `profile.toml`、式の登録、期待する PDK の木のハッシュを持つ index のプロファイルのパッケージ、互換性タグ。`pcell.SUPPORTED`、`pixi.toml`、`setup.sh` はそこから読む | データのプロファイルが、sky130、GF180、IHP で今の `Profile` と等しい。知らない欄を拒否する。deck のオプションを変えると DRC の結果が古くなり、どのジョブも読まないプロファイルの欄(`label`、`limits`)を変えても古くならない | **作業中**。[段階 6 の状況](#phase-6-status)を参照 |
 
 <a id="phase-0-status"></a>
 ### 段階 0 の状況
@@ -1109,6 +1135,23 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 採用の後の install)、そのレビュー、エージェントの *needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、
 パッケージと PDK の情報を持つ evidence。
 
+<a id="phase-6-status"></a>
+### 段階 6 の状況
+
+できたもの: `profile.toml` とその読み込み、式とスタックの生成関数の登録、3 つの組み込みのプロファイルのパッケージ、それを
+返す `pdkprofile.py`(Python のプロファイルは消しました)、`verified` と `magic_drc` の Undine の表、そして動作確認した
+commit をプロファイルから読む `pick_pdk`、PCell のコードのヒント、`pixi run pdk`、`setup.sh` と 2 つのコマンド
+`pdk tested FAMILY [--all]`、`pdk enable FAMILY [COMMIT]`([パッケージとしての PDK プロファイル](#pdk-profiles-as-packages)を
+参照)。テスト: `test_profile_data.py`(読み込んだプロファイルが、Python のものから作った golden のデータと、プロセスごと・
+variant ごとに型も含めて等しく、`pdkprofile` が返すもの全体(deck の `-rd` の値、Magic と Netgen のファイル、family の規則、
+MIM の式)も等しい。拒否はどれもキーのパスを示す。動作確認したプロファイルのバージョンとしていないバージョンについての
+Undine の表。動作確認した commit、2 つのコマンド、commit を書かない `pixi.toml` と `setup.sh`、動作確認した commit に
+wafer.space の GF180 の commit が入っていること)。
+
+段階 6 でこれから作るもの: index のプロファイルのパッケージと lock の `profile` キー(バージョンの選択、`sync`、`vendor`)、
+`[[pdk]]` の期待する木のハッシュと `verified_by`(PDK の状態 *verified*)、プロファイルから読む互換性タグ、ジョブが使う
+プロファイルの欄をその入力に入れること(段階 4 の evidence と一緒に)、プロファイルからの PDK のライセンス。
+
 <a id="decisions"></a>
 <a id="open-questions"></a>
 
@@ -1142,6 +1185,21 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
 13. **時間がたってからの入手: 選択肢 (b)。** `pkg vendor` が固定した内容を、`pkg licenses` と一緒にテープアウトのバンドルに
     書きます([取得とストア](#fetch-and-store))。テープアウトの evidence が、公開する人がリポジトリを保ち続けることに頼らなくなり、
     写しのためのサービスを運用する必要もありません。
+
+2026-11-22 に、段階 6 についてユーザーと決めました。
+
+14. **プロファイルのパッケージは ciel の family ごとに 1 つ**(`profile_sky130`、`profile_gf180mcu`、SG13G2 と SG13CMOS5L を
+    持つ `profile_ihp_sg13`)。互換性タグ(`ihp-sg13/...`)、ライセンス、ciel の取得は family ごとなので、1 つのパッケージが
+    2 つの IHP のプロセスのためにそれを定義します。
+15. **プロファイルのパッケージは undine-eda の中に置く。** index の行が `subdir` で示すサブディレクトリ
+    (`server/undine/data/profiles/<package>/`)です。組み込みの代替は、公開するパッケージとバイト単位で同じになります。
+16. **この Undine が動作確認したものより新しいプロファイルのバージョンは verified でなく、`magic_drc` を動作確認した最新の
+    バージョンから引き継ぐ。** index からのプロファイルの更新で Magic DRC が止まることはありません。
+17. **メタルスタックは、そのまま書いたデータのほかに、名前とバージョンのついた少数のスタックの生成関数でも作れる**
+    (`gf180_stack@1`、`ihp_stack@1`)。GF180 と IHP のスタックを書き出すと、規則の名前が型どおりに並ぶ長い一覧になります。
+    規則が変わったら生成関数の新しいバージョンにするので、プロファイルは前と同じように描き続けます。
+18. **受け入れのテスト「レイヤーの色を変えても何も古くならない」を「どのジョブも読まないプロファイルの欄(`label`、`limits`)を
+    変えても何も古くならない」にする。** プロファイルは色を持ちません。色は PDK の `.lyp` から来ます。
 
 <a id="later"></a>
 

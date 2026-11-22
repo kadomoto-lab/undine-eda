@@ -528,13 +528,13 @@ variant names: putting them in would rename every existing variant for nothing w
 
 ## PDK profiles as packages
 
-`pdkprofile.py` becomes data: one package per family (`profile_sky130`, `profile_gf180mcu`, `profile_ihp_sg13g2`) with
-`profile.toml` holding what `Profile` holds today (layers, metals, decks and options, Magic / Netgen files, models and
-corners, PCell library, stack rules, LVS elements, limits) and:
+`pdkprofile.py` becomes data: one package per ciel family (`profile_sky130`, `profile_gf180mcu`, `profile_ihp_sg13`)
+with `profile.toml` holding what `Profile` holds today (layers, metals, decks and options, Magic / Netgen files, models
+and corners, PCell library, stack rules, LVS elements, limits) and:
 
 ```toml
 schema = 1                 # the profile format; an Undine that does not know it refuses the profile
-undine = ">=0.2"           # the Undine versions that read this profile
+undine = ">=0.1.0"         # the Undine versions that read this profile
 
 [[pdk]]
 commit = "8afc8346a57fe1ab7934ba5a6056ea8b43078e71"
@@ -553,6 +553,34 @@ they record what Undine's own tests have run, not facts about the PDK. Undine sh
 the fallback with no index. A profile change (a deck option, a model path) is an update of the profile package,
 reviewed like any other; the profile fields a job uses are in its inputs (see [evidence](#changesets-and-evidence)),
 so results that used a changed field become outdated, and the others do not.
+
+*Implemented (phase 6, pdks/profiledata.py, pdks/formulas.py, pdks/tested.py):* one package per ciel family, not per
+process (decided): `profile_ihp_sg13`'s `profile.toml` has a `[[profile]]` for SG13G2 and one for SG13CMOS5L, each
+naming the PDK variants it describes. Undine's built-in copies are in undine-eda at
+`server/undine/data/profiles/<package>/`: an `undine-package.toml` (the package's name and version, 1.0.0 now, and
+`[files] include = ["profile.toml"]`) and the `profile.toml`, so that an index line's `subdir` can point at them and the
+built-in fallback is the published package byte for byte. A key is the `Profile` field of its name (`name` is
+`Profile.family`) and is converted by the field's annotation: a list becomes a tuple, a table a dataclass, an integer
+in a float field a float; an untyped table (`drc_options`, `lvs_options`, `rename`) keeps the TOML types, since a deck
+gets `str(value)`. Refused, each with its key path (`<where>: profile.toml: profile[0].stack.cuts[2].name: ...`): an
+unknown key (`verified` and `magic_drc` too, with a hint), a `schema` above 1, an `undine` range that leaves this Undine
+out, a formula or stack generator Undine does not have, an unknown `drc_switches`, a template placeholder the field
+does not fill (`{name.attr}` included), a regex that does not compile, a path that is absolute or has a `..` part, a
+PCell library whose module, function or library is not a dotted name or whose environment is not one of Undine's
+(`pcell`, `pcell-gf180`), a variant in two `[[profile]]` tables or of another family, a `[[pdk]]` commit listed twice,
+a tag of another family and a tree value that is not `sha256:<64 hex>`. Besides the named formula, a stack may come
+from a named, versioned generator (decided), as GF180's and IHP's do: `[profile.stack] generator = "gf180_stack@1"`
+with its arguments beside it (`thin`, `top`, `plate`; `ihp_stack@1` takes `thin` and `tops`); a changed rule is a new
+version of the generator. `verified` (Undine's tests ran the profile) and `magic_drc` come from Undine's table
+(`pdks/tested.py`) by family, profile version and profile name; a version it does not list is not verified and takes
+`magic_drc` from the newest version listed (decided). The built-in `[[pdk]]` entries are the tested commits (sky130
+`8afc8346a57f`, gf180mcu `792ef67037d7`, ihp-sg13 `89d42ee6d2fd`) with their licence; `compat` and `tree` are read and
+checked, and no built-in profile has them yet. The TOML files were written from the Python profiles, and
+`test_profile_data.py` compares the loaded profiles field by field, types included, with golden data saved from the
+Python before it was removed (`server/tests/data/profiles_golden.json`, rewritten by `profile_golden.py` after a
+deliberate change). `pcell.SUPPORTED` is gone: `profiledata.tested_commits(family)` gives a family's tested commits;
+`pick_pdk` prefers one of them for a bare PDK name (for GF180 and IHP too now), and `pixi run pdk` (`python -m undine
+pdk enable sky130`) and `setup.sh` (`python -m undine pdk tested FAMILY`) name no commit of their own.
 
 ## Licences
 
@@ -848,7 +876,7 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
 | 3. Index | index format, several indexes, the default index created (`kadomoto-lab/undine-index`), `pkg search / info / add / update / lock / outdated / tree / why`, version ranges, yank, remote-host policy and fetch size limit, library browser Packages section; `pkg licenses`, `pkg vendor` (also run by the tapeout export) and `pkg sync --from-vendor` | a `file://` index in a temporary directory; yanked skipped but kept when locked; private index named in `project.json`; a dependency without `index` comes from the declaring package's index; one name from two indexes refused; an unlisted host refused over HTTP without confirmation; a fetch over the size limit stopped; a vendored bundle, with the package repository deleted and the store emptied, installs the project again offline through `sync --from-vendor` with the locked trees; a vendored file changed by hand is refused; the tapeout bundle has `vendor/` and `report.json` lists it | **Done**, see [Phase 3 status](#phase-3-status) |
 | 4. Changesets and agents | dependency operations in changesets, review of a dependency change (code blocks and RTL listed), the confirmation token, the notice after a fetch, agent tools with the DATA rule, the merge rule for `project.json` and `undine.lock` in the git merge driver (`merge.md` updated), evidence with package and PDK information outside `key` and model files and profile fields inside it | add in a changeset, adopt, restore; an agent's add records *needs fetch*, never fetches, and continues after the person's fetch; no tool returns a token; two changesets adding different packages adopt in either order; conflicting requirements are refused at adopt; an update that changes one cell outdates only results that use that cell; a README change outdates nothing | **In progress**, see [Phase 4 status](#phase-4-status) |
 | 5. Publishing | `pkg init / check / pack / publish / yank`, `[checks]`, the check report and its link in the index line and PR, semver report, spec results in the report, `[renames]`, cell-level update report, refreshed layout copies, index CI workflow (no DRC / LVS) | publish refuses without a passing report for this tree, and the PR body links the report with its SHA-256; the index CI refuses a report whose SHA-256, commit or tree differs from the line; a renamed cell is reported as renamed and references rewritten; a removed pin or a moved layout pin needs a major version; a waived rule passes `check` and is shown; publish refuses a tree the repository does not serve; tag `<name>-v<version>` in a repository of two packages; after an update the copied cell is refreshed in the changeset and its LVS is outdated, and an edited copy is listed, not replaced | **Planned** |
-| 6. PDK profiles | `profile.toml` per family with `schema` and `undine`, formula registry, profile packages in the index with expected PDK tree hashes, compatibility tags, `pcell.SUPPORTED` / `pixi.toml` / `setup.sh` read from them | data profile equals today's `Profile` for sky130, GF180, IHP; an unknown field is refused; a changed deck option outdates DRC results and a changed layer colour does not | **Planned** |
+| 6. PDK profiles | `profile.toml` per family with `schema` and `undine`, formula registry, profile packages in the index with expected PDK tree hashes, compatibility tags, `pcell.SUPPORTED` / `pixi.toml` / `setup.sh` read from them | data profile equals today's `Profile` for sky130, GF180, IHP; an unknown field is refused; a changed deck option outdates DRC results and a changed profile field no job reads (`label`, `limits`) does not | **In progress**, see [Phase 6 status](#phase-6-status) |
 
 ### Phase 0 status
 
@@ -1143,6 +1171,22 @@ Still to build in phase 4: dependency operations in changesets (`dep_add` / `dep
 in the working copy, installed after the adopt), their review, an agent's *needs fetch* and the person's fetch with
 the confirmation token and the notice, agent tools, and evidence with package and PDK information.
 
+### Phase 6 status
+
+Built: `profile.toml` and its reader, the registry of formulas and stack generators, the three built-in profile
+packages, `pdkprofile.py` serving them with its Python profiles removed, Undine's table of `verified` and `magic_drc`,
+and the tested commits read from the profiles by `pick_pdk`, the PCell code's hint, `pixi run pdk`, `setup.sh` and two
+commands, `pdk tested FAMILY [--all]` and `pdk enable FAMILY [COMMIT]` (see [PDK profiles as
+packages](#pdk-profiles-as-packages)). Tests: `test_profile_data.py` (the loaded profiles equal the golden data from
+the Python ones, per process and per variant, types included, and so does everything `pdkprofile` serves: deck `-rd`
+values, Magic and Netgen files, the family rule, the MIM formula; each refusal names its key path; Undine's table for a
+tested and an untested profile version; the tested commits, the two commands, `pixi.toml` and `setup.sh` naming no
+commit, wafer.space's GF180 commit among the tested ones).
+
+Still to build in phase 6: profile packages in the index and the lock's `profile` key (choosing a version, `sync`,
+`vendor`), expected tree hashes in `[[pdk]]` and `verified_by` (the PDK state *verified*), compatibility tags read from
+the profile, the profile fields a job uses in its inputs (with phase 4's evidence), and PDK licences from the profile.
+
 ## Decisions
 
 Decided with the user on 2026-11-05. Each item gives the decision and why.
@@ -1175,6 +1219,21 @@ Decided with the user on 2026-11-05. Each item gives the decision and why.
 13. **Availability: option (b).** `pkg vendor` writes the pinned contents into the tapeout bundle together with
     `pkg licenses` ([Fetch and store](#fetch-and-store)). The tapeout evidence then does not depend on publishers
     keeping their repositories, with no mirror service to run.
+
+Decided with the user on 2026-11-22, for phase 6:
+
+14. **One profile package per ciel family** (`profile_sky130`, `profile_gf180mcu`, and `profile_ihp_sg13` holding
+    SG13G2 and SG13CMOS5L). Compatibility tags (`ihp-sg13/...`), licences and ciel's fetches are per family, so one
+    package defines them for both IHP processes.
+15. **Profile packages live inside undine-eda**, as subdirectories that index lines name with `subdir`
+    (`server/undine/data/profiles/<package>/`). The built-in fallback is then the published package byte for byte.
+16. **A profile version newer than this Undine has tested is not verified and inherits `magic_drc` from the newest
+    tested version.** A profile update from an index then does not turn Magic DRC off.
+17. **Metal stacks may come from a few named, versioned stack generators** (`gf180_stack@1`, `ihp_stack@1`) besides
+    literal data. GF180's and IHP's stacks written out are long lists whose rule names follow patterns; a changed rule
+    is a new generator version, so a profile keeps drawing as it did.
+18. **The acceptance test "a changed layer colour outdates nothing" becomes "a changed profile field no job reads
+    (`label`, `limits`) outdates nothing".** Profiles hold no colours: they come from the PDK's `.lyp`.
 
 ### Later
 

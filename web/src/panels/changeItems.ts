@@ -66,6 +66,11 @@ export function describeEffect(e: Effect): UiText {
   if (e.k === "g") return msg("symbolcheck:drawingChanged", { kind: e.id ?? "" });
   if (e.k === "n") return msg("review:effect.intent", { mark: e.do === "mod" ? "~" : mark, entry: e.id ?? "" });
   if (e.k === "l") return msg("review:effect.library", { mark, lib: e.lib ?? "" });
+  if (e.k === "d") {             // a dependency operation (the project log): a PDK change, or a restore of both files
+    if (e.pdk) return msg("review:effect.pdk", { from: e.pdk[0] ?? "∅", to: e.pdk[1] ?? "∅" });
+    return e.name ? msg("review:effect.dependency", { mark: e.do === "mod" ? "~" : mark, name: e.name })
+      : msg("review:effect.dependencies");
+  }
   if (e.k === "r" && e.id?.startsWith("flow:")) return msg("review:effect.flow", { mark: flowMark(e), file: e.file ?? e.id.slice(5) });
   if (e.k === "o") {
     const [before, after] = (e.changes?.ports ?? [[], []]) as [string[], string[]];
@@ -75,9 +80,11 @@ export function describeEffect(e: Effect): UiText {
 }
 
 const tag = (e: Effect): string =>
-  e.id ? `${e.k}|${e.id_after ?? e.id}` : e.inst ? `${e.k}|${e.inst}` : `${e.k}|${e.layer ?? ""}|${e.s ?? e.child ?? e.cell ?? e.lib ?? ""}`;
+  e.k === "d" ? `d|${e.pdk ? "@pdk" : e.name ?? ""}`
+    : e.id ? `${e.k}|${e.id_after ?? e.id}` : e.inst ? `${e.k}|${e.inst}` : `${e.k}|${e.layer ?? ""}|${e.s ?? e.child ?? e.cell ?? e.lib ?? ""}`;
 
 function label(e: Effect, view: ViewKind, cell: string): UiText {
+  if (e.k === "d") return e.pdk ? msg("review:item.pdk") : e.name ? msg("review:item.dependency", { name: e.name }) : msg("review:item.dependencies");
   if (e.k === "g") return msg("symbolcheck:drawingChanged", { kind: e.id ?? "" });
   if (e.k === "n") return msg("review:item.intent", { entry: e.id ?? "" });
   if (e.k === "v") return msg("review:item.view", { view: viewLabel(view), cell });

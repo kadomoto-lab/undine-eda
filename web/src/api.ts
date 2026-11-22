@@ -119,6 +119,28 @@ export interface DepRemove {
   removed_packages?: { package: string | null; version: string | null; commit: string | null; names: string[] }[];
   kept?: { name: string; placed_by: string[] }[];
 }
+/** The changeset log's name for the dependency operations (server/undine/store/changeset.py PROJECT_LOG): no library. */
+export const PROJECT_LOG = "@project";
+/** The browser's own Add, Update, Remove and Set PDK (POST /deps/changeset): the operation in a small changeset of its
+ * own, adopted at once ("applied"; "open" when asked in a changeset's preview, which gets the operation). `result` is
+ * what the direct route returns; `deps` what the adopt installed, `deps_warning` what it could not (said, the adopt
+ * done), `deps_dropped` the dependencies that went and the cells that still place them. */
+export interface DepChangeset<T> {
+  changeset: string; status: "applied" | "open"; result: T; git_setup?: boolean;
+  deps?: { name: string; action: string; commit: string | null; package?: string; warning?: string }[];
+  deps_warning?: string;
+  deps_dropped?: { name: string; used_by: string[] }[];
+}
+/** A dependency operation in a changeset's working copy (POST /changesets/{id}/deps). */
+export type ChangesetDepBody =
+  | { action: "add"; name: string; git?: string | null; rev?: string | null; subdir?: string | null; package?: string;
+      version?: string; index?: string; reason?: string }
+  | { action: "update"; name: string; rev?: string | null; version?: string; reason?: string }
+  | { action: "remove"; name: string; reason?: string };
+/** The changeset an adopt refused left open for review (a one-click operation's 409 carries it); null otherwise. */
+export function keptChangesetOf(e: unknown): string | null {
+  return e instanceof ApiError && typeof e.params?.changeset === "string" ? e.params.changeset : null;
+}
 
 // ------------------------------------------------------------------ trust (server/undine/store/trust.py)
 
@@ -422,12 +444,14 @@ export interface Waveform {
 }
 
 export interface Effect {
-  // n: a design intent entry (intent.py); l: a library created; o: the port order; r: a file's text (RTL, a flow configuration)
-  k: "i" | "w" | "t" | "s" | "c" | "v" | "g" | "n" | "l" | "o" | "r";
+  // n: a design intent entry (intent.py); l: a library created; o: the port order; r: a file's text (RTL, a flow configuration);
+  // d: a dependency operation (the project log, PROJECT_LOG): name the dependency (null: a restore), pdk [from, to]
+  k: "i" | "w" | "t" | "s" | "c" | "v" | "g" | "n" | "l" | "o" | "r" | "d";
   do: "add" | "del" | "mod";
   id?: string; id_after?: string; cell?: string; layer?: string; t?: string; s?: string; child?: string; inst?: string; trans?: string;
   lib?: string;
   file?: string;    // r of a flow configuration: flows/<name>.yaml
+  name?: string | null; pdk?: [string | null, string | null];   // d
   kept?: boolean;   // a layout cell taken out with its content recorded (delete_unused_cells, delete_cell), or brought back
                     // with it; a schematic / symbol file deleted with its text (k "v", do "del": delete_cell)
   text?: string; obj?: Record<string, unknown>; changes?: Record<string, [unknown, unknown]>;
@@ -846,6 +870,28 @@ export const api = {
   refreshIndex: (name: string, project?: string) =>
     req<IndexWhere>(`/api/indexes/${enc(name)}/refresh${project ? `?project=${enc(project)}` : ""}`, {}),
   depRemove: (p: string, name: string) => req<DepRemove>(`${P(p)}/deps/${enc(name)}/remove`, {}),
+  // the browser's own operations, each in a small changeset adopted at once (DepChangeset): refusals as the direct
+  // routes', and an adopt refused (409 merge_conflict ...) with params.changeset, left open (keptChangesetOf)
+  addDepInChangeset: (p: string, name: string, git: string, rev?: string, subdir?: string, pkg?: string) =>
+    req<DepChangeset<DepAdd>>(`${P(p)}/deps/changeset`, { action: "add", name, git, rev: rev || null,
+      subdir: subdir || null, ...(pkg ? { package: pkg } : {}) }),
+  addPackageInChangeset: (p: string, name: string, pkg: string, version?: string, index?: string) =>
+    req<DepChangeset<DepAdd>>(`${P(p)}/deps/changeset`, { action: "add", name, package: pkg,
+      ...(version ? { version } : {}), ...(index ? { index } : {}) }),
+  updateDepInChangeset: (p: string, name: string, rev?: string, version?: string) =>
+    req<DepChangeset<DepUpdate>>(`${P(p)}/deps/changeset`, { action: "update", name, rev: rev || null,
+      ...(version ? { version } : {}) }),
+  removeDepInChangeset: (p: string, name: string) =>
+    req<DepChangeset<DepRemove>>(`${P(p)}/deps/changeset`, { action: "remove", name }),
+  setPdkInChangeset: (p: string, pdk: string) =>
+    req<DepChangeset<{ from: string | null; to: string; created?: boolean }>>(`${P(p)}/deps/changeset`, { action: "pdk", pdk }),
+  // a dependency operation or a PDK change in an open changeset's working copy, recorded there (not adopted)
+  changesetDep: (p: string, id: string, body: ChangesetDepBody) =>
+    req<{ changeset: string; op: { gseq: number; opid: string } | null; result: unknown; status: DepsStatus }>(
+      `${P(p)}/changesets/${enc(id)}/deps`, body),
+  changesetPdk: (p: string, id: string, pdk: string, reason?: string) =>
+    req<{ changeset: string; op: { gseq: number; opid: string } | null; old: string | null; new: string; created: boolean }>(
+      `${P(p)}/changesets/${enc(id)}/pdk`, { pdk, ...(reason ? { reason } : {}) }),
   // offline: install from the store only (null / left out: the server's UNDINE_OFFLINE)
   depsSync: (p: string, opts: { offline?: boolean | null } = {}) =>
     req<{ libraries: { name: string; action: "ok" | "installed" | "removed"; commit: string | null;

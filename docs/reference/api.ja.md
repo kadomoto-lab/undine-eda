@@ -41,6 +41,7 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 | `POST /api/p/{project}/deps/lock` | `lib lock`: project.json の指定どおりに undine.lock が固定していないものを取得し、インストールして固定し(add と同じく `--dep-root` の規則のもとで)、今使っているツールのバージョンを記録する(format 1 の lock では PDK の id も)。状態に `resolved: [{name, git, rev?, subdir?, commit, sha または tree}]` を加えて返す。lock はその形式のまま書く。format 2 にするのはコマンドラインの役目(`lib lock --format 2`、`pdk verify --pin`) |
 | `POST /api/p/{project}/deps/{name}/update` `{rev?, version?}` | 依存関係を `rev` に移す(既定はもう一度同じ rev)。インデックスのパッケージは、要求が受け付ける最新のバージョンに移す(`version`: 新しい要求で、project.json に書く)。`{name, from, to, rev, changed, used_by, packages_changed}` を返す: 変わったファイルと、それを使うセル、そして動いた、連れてきた(`from` が null)、もう要らない(`to` が null)エントリごとの `packages_changed: [{package, names, from, to, changed}]`。動いたものの信頼は project.json から取り除く |
 | `POST /api/p/{project}/deps/{name}/remove` | 依存関係を、もう何も必要としないパッケージと一緒に削除。`{ok, name, removed_packages: [{package, version, commit, names}], kept: [{name, placed_by}]}` を返す(通常の依存関係では `package` は null。`kept`: ほかの依存関係がまだ配置しているパッケージ) |
+| `POST /api/p/{project}/deps/changeset` `{action, name?, git?, rev?, subdir?, package?, version?, index?, pdk?, title?, reason?}` | ブラウザの追加、更新、削除、PDK の変更: 小さな changeset を開き(題名は `title`、既定は `Add NAME`、`Update NAME`、`Remove NAME`、`Set the PDK to PDK`。git リポジトリにないプロジェクトは、どの [changeset](../guide/changesets.md) を開くときとも同じく、まずリポジトリにします)、その作業コピーで操作を行い(`action` は上のルートのフィールドを持つ `add`、`update`、`remove`、または `pdk` を持つ `pdk`)、それを採用して、プロジェクトにストアからインストールします。`{changeset, status: "applied", result, git_setup, deps?, deps_warning?, deps_dropped?}` を返します: `result` は直接のルートが返すもの(`POST /deps`、`/deps/{name}/update`、`/deps/{name}/remove`、または `POST /pdk` と同じ `{from, to, created}`)、残りは採用の [Merge](#changesets) と同じです。操作が拒否されたときは直接のルートと同じ答えで、changeset は破棄します。採用が拒否されたとき(409 の `merge_conflict` など)は本文と `params` に `changeset` があり、changeset はレビューのために開いたままです。プレビュー(`{project}~{id}`)では、操作はその changeset に入り、採用はしません: `status: "open"`。上の直接のルートはこれまでどおり動きます |
 | `GET /api/packages?q=&index=&project=` | [パッケージ欄](../guide/libraries.ja.md#packages-in-the-browser): インデックスのパッケージのうち、名前か説明に `q` を含むもの(空ならすべて)について、yank されていない最新のバージョン: `{index, index_name, commit, packages: [{name, version, description, license, yanked, fits}]}`。`index`: 略称か URL(既定は既定のインデックス)。`project`: その project.json が示す略称のためと、`fits`(`{ok, reason}`: そのバージョンがプロジェクトの PDK を受け付けるか。`project` がなければ null)のため。インデックスは最初に読むときに取得し、そのあとは取得し直すまで手元の写しを読む |
 | `GET /api/packages/{name}?index=&project=` | パッケージのすべてのバージョン(新しい順): `{index, index_name, commit, name, newest, locked, versions: [{name, version, description, license, yanked, fits, git, subdir, commit, tree, size, pdk, exports, deps: [{name, package, req, index, index_name}]}]}`。`newest`: yank されていない最新のもの。`locked`: プロジェクトがこのインデックスから固定しているバージョン、なければ null。インデックスにそのパッケージがなければ 404 |
 | `GET /api/indexes?project=` | ここで、またプロジェクトが知っているインデックス: `{indexes: [{name, url, commit}]}`(最初の取得の前は `commit` が null) |
@@ -86,7 +87,9 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
   それを解決します。
 - **オフラインで、ストアにない。** `offline`(または `UNDINE_OFFLINE=1`)の `/deps/sync` は、固定した依存関係がストアにも残した
   リポジトリにもなければ拒否します: `offline, and not in the store: analog_ip @ 229914698b1f (sha e6d28176...): run the sync with
-  the network ...`。
+  the network ...`。changeset の採用も同じように、持ち込む lock のエントリのファイルがストアにもプロジェクトのインストールにも
+  なければ拒否します(409 の `merge_conflict`、undine.lock の衝突): `analog_ip @ 229914698b1f (...) is not in the store:
+  fetch it first`。
 - **ブラウザが読めないインデックス。** `GET /api/packages`、`/api/packages/{name}`、`/api/indexes/{name}/refresh` は、
   git の依存関係と同じ規則でインデックスを読む: ローカルのインデックスは `--dep-root` の下だけ、リモートのものは設定した
   インデックスのホストか `--dep-host` で指定したホストだけ。それ以外は、何も取得する前に拒否する(400)。
@@ -185,6 +188,8 @@ changeset は、プロジェクトの git ブランチ `undine/<project>/<id>` �
 | `POST /api/p/{project}/changesets/{id}/apply` | ブランチをプロジェクトにマージします(全か無か)。`"applied"`(下記)付きの記録を返します。衝突は 409 の `merge_conflict`(下記)で、何も書き込まず、changeset は開いたままです。以前の changeset(新しい changeset として作り直します)、書き込み中の主体がいるとき、その changeset の中断したマージがまだ終わっていないとき(下記)は 400。changeset は一度に一つずつ閉じます: 別の changeset の採用・破棄・取り消しの間は待ちます(その `closing` は `waiting`)。この changeset を閉じる処理がすでに動いているときは 409 の `busy` です(破棄と取り消しも同じ) |
 | `POST /api/p/{project}/changesets/{id}/revert` | 採用した changeset を逆向きのマージで取り消します(追加したファイルは残します)。`"reverted"` 付きの記録を返します。変えたものへの後からの編集は 409 の `merge_conflict` です。changeset が git ブランチになる前に採用したものと、中断したマージがまだ終わっていないときは 400 |
 | `POST /api/p/{project}/changesets/{id}/discard` | 証拠を保存し、worktree を削除し、ブランチを残します。`"discarded"` 付きの記録を返します(`X-Undine-Actor`)。中断したマージがまだ終わっていないときは 400 |
+| `POST /api/p/{project}/changesets/{id}/deps` `{action, name, git?, rev?, subdir?, package?, version?, index?, reason?}` | 作業コピーでの依存関係の操作(`action` は `add`、`update`、`remove`。フィールドは `POST /deps` と `/deps/{name}/update` と同じ): 作業コピー自身の依存関係ロックのもとで取得し、そこに書いてインストールします(プロジェクトにもベースラインにも書きません。ベースラインは 403)。作業コピーのプロジェクトログ(`history/@project.jsonl`。どのライブラリも持てない名前)に、前後の project.json と undine.lock と一緒に記録します。タイムラインに表示し、復元で取り消し(ストアからインストールします)、採用でマージしてインストールします。`{changeset, op: {gseq, opid} | null (何も変わらなかった), result: 直接のルートが返すもの, status: 作業コピーの deps の状態}` を返します。拒否は直接のルートと同じで、ほかの主体が書き込みのリースを持つ間は 409 の `busy` |
+| `POST /api/p/{project}/changesets/{id}/pdk` `{pdk, reason?}` | 作業コピーを別の PDK に固定し、同じように記録します(`pdk_set`): `{changeset, op, old, new, created}`。`POST /pdk` と同じく 409 の `pdk_incompatible` |
 | `GET .../changesets/{id}/timeline`、`POST .../restore`、`GET .../activity`、`POST .../writer/stop` | タイムライン、チェックポイントの復元、書き込み中の主体の追跡、その停止([ライブ changeset](../design/live-changesets.md)) |
 
 ```text
@@ -217,7 +222,11 @@ Merge        {"t", "by", "commit": sha | null (ユーザーのブランチ上の
               POST .../git/first-commit で作れます。"changes": プロジェクトにほかの未コミットの変更があった。"failed": コミットに
               失敗した、またはその前に Undine が止まった。コミットしたときは null、以前の記録にはありません),
               "paths": [書いたファイル], "tip": 採用したコミット (apply),
-              "kept": [残した、changeset が追加したファイル] (revert)}
+              "kept": [残した、changeset が追加したファイル] (revert),
+              "deps"?: [インストールの行。POST /deps/sync と同じ] (undine.lock か project.json の依存関係を変えたマージは、
+              それをストアからオフラインでインストールします。採用のときには何も取得しません),
+              "deps_warning"?: インストールできなかったこと (伝えるだけで、マージは済んでいます。後で lib sync がインストール
+              します)、またはセルがまだ配置しているのに外れた依存関係, "deps_dropped"?: [{"name", "used_by": ["lib/cell"]}]}
 409          {"detail", "code": "merge_conflict", "params": {},
               "files": [{"path" (プロジェクトのディレクトリから), "kind": schematic | symbol | layout | netlist |
                          intent | log | text, "conflicts": [Conflict]}]}

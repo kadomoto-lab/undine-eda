@@ -8,9 +8,12 @@ import { PackagesDialog } from "./PackagesDialog";
 // The Packages section of the library browser (docs/design/packages.md, UI): search an index, read a package's
 // versions and PDK fit, add it by name and requirement; refresh fetches the index again.
 vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), api: {
-  indexes: vi.fn(), packages: vi.fn(), packageInfo: vi.fn(), refreshIndex: vi.fn(), depAddPackage: vi.fn(),
+  indexes: vi.fn(), packages: vi.fn(), packageInfo: vi.fn(), refreshIndex: vi.fn(), addPackageInChangeset: vi.fn(),
 } }));
-const mocked = api as unknown as Record<"indexes" | "packages" | "packageInfo" | "refreshIndex" | "depAddPackage", ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as Record<"indexes" | "packages" | "packageInfo" | "refreshIndex" | "addPackageInChangeset",
+  ReturnType<typeof vi.fn>>;
+// the add runs in a small changeset of its own, adopted at once (POST /deps/changeset)
+const adopted = (result: unknown) => ({ changeset: "cs-000001", status: "applied", result });
 
 const WHERE = { index: "https://github.com/kadomoto-lab/undine-index.git", index_name: "undine", commit: "c".repeat(40) };
 const version = (v: string, more: Partial<PackageVersion> = {}): PackageVersion => ({
@@ -56,11 +59,11 @@ it("searches, shows a package and adds it with the requirement given", async () 
 
   fireEvent.click(screen.getByText("1.0.0"));                                   // requires exactly it
   expect((screen.getByPlaceholderText("^1.1.0") as HTMLInputElement).value).toBe("=1.0.0");
-  mocked.depAddPackage.mockResolvedValue({ name: "amp", commit: "a".repeat(40), cells: ["amp"], package: "amp", version: "1.0.0" });
+  mocked.addPackageInChangeset.mockResolvedValue(adopted({ name: "amp", commit: "a".repeat(40), cells: ["amp"], package: "amp", version: "1.0.0" }));
   fireEvent.click(screen.getByRole("button", { name: t("app:packages.add", { name: "amp" }) }));
   await settle();
-  expect(mocked.depAddPackage).toHaveBeenCalledWith("p", "amp", "amp", "=1.0.0", undefined);
-  expect(onAdded).toHaveBeenCalledWith("amp", expect.objectContaining({ version: "1.0.0" }));
+  expect(mocked.addPackageInChangeset).toHaveBeenCalledWith("p", "amp", "amp", "=1.0.0", undefined);
+  expect(onAdded).toHaveBeenCalledWith("amp", expect.objectContaining({ version: "1.0.0" }), expect.objectContaining({ status: "applied" }));
 });
 
 it("adds from another index by its name, and refuses a local name the project has", async () => {
@@ -76,10 +79,24 @@ it("adds from another index by its name, and refuses a local name the project ha
   const addAmp = screen.getByRole("button", { name: t("app:packages.add", { name: "amp" }) }) as HTMLButtonElement;
   expect(addAmp.disabled).toBe(true);
   fireEvent.change(screen.getByDisplayValue("amp"), { target: { value: "amp2" } });
-  mocked.depAddPackage.mockResolvedValue({ name: "amp2", commit: "a".repeat(40), cells: [] });
+  mocked.addPackageInChangeset.mockResolvedValue(adopted({ name: "amp2", commit: "a".repeat(40), cells: [] }));
   fireEvent.click(screen.getByRole("button", { name: t("app:packages.add", { name: "amp2" }) }));
   await settle();
-  expect(mocked.depAddPackage).toHaveBeenCalledWith("p", "amp2", "amp", undefined, "acme");
+  expect(mocked.addPackageInChangeset).toHaveBeenCalledWith("p", "amp2", "amp", undefined, "acme");
+});
+
+it("hands an add whose adopt was refused to onKept: its changeset stays open", async () => {
+  const onAdded = vi.fn(), onKept = vi.fn();
+  render(<PackagesDialog project="p" readOnly={false} taken={() => false} onClose={() => {}} onAdded={onAdded} onKept={onKept} debounceMs={0} />);
+  await settle();
+  fireEvent.click(screen.getByText("amp", { selector: "b" }));
+  await settle();
+  const refused = new ApiError(409, "cannot apply cs-000002: conflict in undine.lock: ...", "merge_conflict", { changeset: "cs-000002" });
+  mocked.addPackageInChangeset.mockRejectedValue(refused);
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.add", { name: "amp" }) }));
+  await settle();
+  expect(onKept).toHaveBeenCalledWith(refused, "cs-000002");
+  expect(onAdded).not.toHaveBeenCalled();
 });
 
 it("refreshes the index and reads the search again; a refusal is shown", async () => {

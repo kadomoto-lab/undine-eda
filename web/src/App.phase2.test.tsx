@@ -23,7 +23,7 @@ vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")
   changesets: vi.fn(async () => []), live: vi.fn(async () => []),
   activity: vi.fn(async () => ({ records: [], last: 0, writer: null })),
   deps: vi.fn(),
-  depsSync: vi.fn(), depsLock: vi.fn(), depAdd: vi.fn(), setPdk: vi.fn(),
+  depsSync: vi.fn(), depsLock: vi.fn(), addDepInChangeset: vi.fn(), setPdkInChangeset: vi.fn(),
   depUpdate: vi.fn(), indexes: vi.fn(async () => ({ indexes: [] })), packageInfo: vi.fn(),
   packages: vi.fn(async () => ({ index: "u", index_name: "undine", commit: null, packages: [] })),
   trustList: vi.fn(), trustConfirm: vi.fn(), trust: vi.fn(), untrust: vi.fn(),
@@ -63,7 +63,7 @@ beforeEach(async () => {
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
   await setLocale("en");
-  for (const k of ["project", "deps", "depsLock", "depAdd", "setPdk", "trustList", "trustConfirm", "trust", "untrust"] as const) mocked[k].mockReset();
+  for (const k of ["project", "deps", "depsLock", "addDepInChangeset", "setPdkInChangeset", "trustList", "trustConfirm", "trust", "untrust"] as const) mocked[k].mockReset();
   mocked.project.mockResolvedValue({ name: "p", pdk: null, pdk_requested: null, libraries: LIBS });
   mocked.deps.mockResolvedValue(status({ libraries: ROWS }));
   location.hash = "#/p/p";
@@ -146,11 +146,13 @@ it("shows the lock dialog rows with package, version, via and trust", async () =
 });
 
 it("lists the transitive packages and the untrusted content after an add", async () => {
-  mocked.depAdd.mockResolvedValue({ name: "dac", commit: C, cells: ["dac8"], package: "dac", version: "0.1.0",
+  // the add runs in a small changeset of its own, adopted at once: the add's result in `result`
+  mocked.addDepInChangeset.mockResolvedValue({ changeset: "cs-000001", status: "applied", result: {
+    name: "dac", commit: C, cells: ["dac8"], package: "dac", version: "0.1.0",
     flagged: { spice: 2, rtl: 0, tcl: 0 }, trusted: false, resolved: [
       { name: "dac", commit: C, package: "dac", version: "0.1.0", names: ["dac"], via: [], flagged: { spice: 2, rtl: 0, tcl: 0 }, trusted: false },
       { name: "dac_common", commit: C, package: "dac_common", version: "1.0.0", names: ["dac_common"], via: ["dac"], flagged: { spice: 0, rtl: 1, tcl: 0 }, trusted: false },
-    ] });
+    ] } });
   render(<App />);
   await settle();
   fireEvent.click(screen.getByTitle(t("app:dependency.addHint")));
@@ -163,7 +165,7 @@ it("lists the transitive packages and the untrusted content after an add", async
   fireEvent.click(within(form).getByRole("button", { name: t("common:actions.add") }));
   await settle();
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-  expect(mocked.depAdd).toHaveBeenCalledWith("p", "dac", "https://example.org/dac.git", "", "", "dac");
+  expect(mocked.addDepInChangeset).toHaveBeenCalledWith("p", "dac", "https://example.org/dac.git", "", "", "dac");
   const result = screen.getByRole("dialog", { name: t("app:dependency.addedTitle", { name: "dac" }) });
   expect(result.textContent).toContain(`dac: dac 0.1.0 at ${C.slice(0, 7)}`);
   expect(result.textContent).toContain("+ dac_common 1.0.0 as dac_common, via dac");
@@ -176,7 +178,7 @@ it("shows every problem of a refused add in a dialog, the form kept open", async
     { code: "conflict", message: "sar_common: two versions: 1.3.1 and 2.0.0", chains: ["p -> analog_ip 1.2.0 -> sar_common 1.3.1", "p -> dac 0.1.0 -> sar_common 2.0.0"] },
     { code: "cell_clash", message: "comparator: analog_ip 1.2.0 and sar_common 1.3.1", chains: [] },
   ];
-  mocked.depAdd.mockRejectedValue(new ApiError(409, "2 problems with the dependencies:\n- ...\nnothing was changed", "resolution_refused", { problems }));
+  mocked.addDepInChangeset.mockRejectedValue(new ApiError(409, "2 problems with the dependencies:\n- ...\nnothing was changed", "resolution_refused", { problems }));
   render(<App />);
   await settle();
   fireEvent.click(screen.getByTitle(t("app:dependency.addHint")));
@@ -199,13 +201,37 @@ it("shows every problem of a refused add in a dialog, the form kept open", async
   expect(screen.getByRole("dialog", { name: t("app:dependency.add") })).toBeTruthy();
 });
 
+it("says the changeset stays open for review when the project refused to adopt an add", async () => {
+  mocked.addDepInChangeset.mockRejectedValue(new ApiError(409, "cannot apply cs-000002: conflict in undine.lock: dac is not in the store\nmore",
+    "merge_conflict", { changeset: "cs-000002" }));
+  render(<App />);
+  await settle();
+  fireEvent.click(screen.getByTitle(t("app:dependency.addHint")));
+  await settle();
+  const form = screen.getByRole("dialog", { name: t("app:dependency.add") });
+  const inputs = form.querySelectorAll("input");
+  fireEvent.change(inputs[0], { target: { value: "dac" } });
+  fireEvent.change(inputs[1], { target: { value: "https://example.org/dac.git" } });
+  fireEvent.click(within(form).getByRole("button", { name: t("common:actions.add") }));
+  await settle();
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  await settle();
+  expect(screen.queryByRole("dialog", { name: t("app:dependency.add") })).toBeNull();          // the form is done
+  const kept = screen.getByRole("dialog", { name: t("app:dependency.keptTitle") });
+  expect(kept.textContent).toContain(t("app:dependency.kept", { id: "cs-000002",
+    detail: "cannot apply cs-000002: conflict in undine.lock: dac is not in the store" }));
+  fireEvent.click(within(kept).getByRole("button", { name: t("app:review") }));
+  await settle();
+  expect(screen.queryByRole("dialog", { name: t("app:dependency.keptTitle") })).toBeNull();
+});
+
 it("shows the packages that do not accept the PDK when moving the PDK is refused", async () => {
   const OLD = { id: "sky130A@aaaaaaaaaaaa", name: "sky130A", family: "sky130", version: "a".repeat(40) };
   mocked.project.mockResolvedValue({ name: "p", pdk: OLD, pdk_requested: OLD.id, pdk_unsupported: "old PCell code",
     pdk_upgrade: "sky130A@bbbbbbbbbbbb", libraries: LIBS });
   const packages = [{ name: "analog_ip", package: "analog_ip", version: "1.2.0", chain: "p -> analog_ip 1.2.0 (v1.2.0 @ 229914698b1f)",
     reason: "bbbbbbbbbbbb is not among commits aaaaaaaaaaaa", family: "sky130", variants: ["sky130A"], commits: ["a".repeat(40)], compat: [], built_with: null }];
-  mocked.setPdk.mockRejectedValue(new ApiError(409, "the PDK sky130A@bbbbbbbbbbbb is not accepted by 1 locked package(s):\n- ...",
+  mocked.setPdkInChangeset.mockRejectedValue(new ApiError(409, "the PDK sky130A@bbbbbbbbbbbb is not accepted by 1 locked package(s):\n- ...",
     "pdk_incompatible", { packages }));
   render(<App />);
   await settle();
@@ -214,7 +240,7 @@ it("shows the packages that do not accept the PDK when moving the PDK is refused
   await settle();
   fireEvent.click(screen.getByRole("button", { name: t("app:pdk.move", { to: "sky130A@bbbbbbbbbbbb" }) }));
   await settle();
-  expect(mocked.setPdk).toHaveBeenCalledWith("p", "sky130A@bbbbbbbbbbbb");
+  expect(mocked.setPdkInChangeset).toHaveBeenCalledWith("p", "sky130A@bbbbbbbbbbbb");
   const refused = screen.getByRole("dialog", { name: t("app:refusal.pdk") });
   expect(refused.textContent).toContain(t("app:refusal.pdkIntro", { pdk: "sky130A@bbbbbbbbbbbb", count: 1 }));
   expect(within(refused).getByTestId("refusal-list").textContent)

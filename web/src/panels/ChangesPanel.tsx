@@ -10,6 +10,7 @@ import {
 import { hashParam } from "../App";
 import {
   api, ChangeOp, ChangesetConflictFile, ChangesetInfo, ChangesetMerge, CheckRow, EvidenceSizes, GitConflict, GitDiff, ViewKind,
+  PROJECT_LOG,
 } from "../api";
 import { Splitter } from "../layout";
 import { ChangeItem, checkResultLabel, describeEffect, followText, formatChangeValue, groupChanges, viewLabel } from "./changeItems";
@@ -459,7 +460,8 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
         <b className="mono">{resolveText(it.label)}</b>
         {nested && <span className="dim small mono">{resolveText(followText(it))}</span>}
         <span className="grow" />
-        <span className="dim small mono">{it.cell ? `${it.lib}/${it.cell} · ${resolveText(viewLabel(it.view))}` : it.lib}</span>
+        <span className="dim small mono">{it.cell ? `${it.lib}/${it.cell} · ${resolveText(viewLabel(it.view))}`
+          : it.lib === PROJECT_LOG ? t("review:projectLog") : it.lib}</span>
       </div>
       {it.fields.map((f) => <div key={f.name} className="fieldchange mono">
         {f.name}: {"before" in f && <><span className="before">{short(f.before)}</span> → </>}<span className="after">{short(f.after)}</span>
@@ -636,7 +638,8 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
                 lc.ops.forEach((o) => { const k = `${o.cell ?? "(library)"} · ${o.view}`; byCell.set(k, [...(byCell.get(k) ?? []), o]); });
                 return [...byCell].map(([k, ops]) => (
                   <div key={lc.lib + k} className="cellchanges">
-                    <div className="row"><b className="mono">{lc.lib}/{ops[0].cell ?? t("review:library")} · {resolveText(viewLabel(ops[0].view))}</b><span className="grow" /><span className="dim small">{summaryLine(ops)}</span></div>
+                    <div className="row"><b className="mono">{lc.lib === PROJECT_LOG ? t("review:projectLog")
+                      : <>{lc.lib}/{ops[0].cell ?? t("review:library")} · {resolveText(viewLabel(ops[0].view))}</>}</b><span className="grow" /><span className="dim small">{summaryLine(ops)}</span></div>
                     {ops.map((o) => (
                       <div key={o.seq} className="opblock">
                         {o.reason && <div className="opreason">“{o.reason}” <span className="dim">— {o.actor}</span></div>}

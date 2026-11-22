@@ -3,6 +3,7 @@
 The golden data (data/profiles_golden.json, profile_golden.py) was written from the Python profiles before they became
 profile.toml: the profiles loaded from the TOML files must give every value it holds, of the same type."""
 import json
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -300,8 +301,10 @@ def test_pdk_enable_runs_ciel_enable_with_the_tested_commit(tmp_path, monkeypatc
     monkeypatch.setenv("UNDINE_CIEL", str(exe))
     assert _cli("pdk", "enable", "gf180mcu")[0] == 0
     assert _cli("pdk", "enable", "sky130", "0" * 40)[0] == 0
-    assert log.read_text().splitlines() == ["enable --pdk-family gf180mcu 792ef67037d74c8c51811eab3ce23cf793491296",
-                                            "enable --pdk-family sky130 " + "0" * 40]
+    # the global --pdk-root reaches ciel, as `pdk fetch`'s does (_cli passes /nonexistent)
+    assert log.read_text().splitlines() == [
+        "enable --pdk-root /nonexistent --pdk-family gf180mcu 792ef67037d74c8c51811eab3ce23cf793491296",
+        "enable --pdk-root /nonexistent --pdk-family sky130 " + "0" * 40]
     code, out = _cli("pdk", "enable", "mystery")
     assert code == 1 and "name the commit" in out
     assert _cli("pdk", "enable", "sky130", "-rf")[0] != 0                  # never an option to ciel
@@ -330,3 +333,56 @@ def test_pick_pdk_prefers_a_tested_commit_from_the_profile(monkeypatch):
 def test_ws_pdk_is_a_tested_gf180_commit():
     from undine.checks import tapeout
     assert tapeout.WS_PDK[1] in profiledata.tested_commits("gf180mcu")
+
+
+
+# ------------------------------------------------------------------ regressions from the review
+
+
+@pytest.mark.parametrize("field, value, fragment", [
+    ("stdcells", [["sg13g2_\\w+", "../../../../tmp/evil"]], "is not a library name"),
+    ("stdcells", [["sg13g2_(\\w+)", "\\3"]], "names a group its pattern"),
+    ("stdcells", [["a{99999999999}", "x"]], "is not a regular expression"),
+    ("corners", ["tt\n.control"], "control character"),
+    ("corners", ["t t"], "is not a corner name"),
+    ("model_lib", "a.lib tt\n.control", "control character"),
+    ("model_lib", "a}x{y.lib", "brace"),
+    ("model_lib", "a}; exec touch x; set z {x", "whitespace"),
+    ("model_vars", [["X {}; exec x", "libs.tech"]], "is not a variable name"),
+    ("osdi", ["../../evil.osdi"], "has a .. part"),
+    ("osdi", ["dir/psp.osdi"], "is not a file name"),
+])
+def test_profile_strings_that_reach_a_netlist_or_tcl_are_refused(field, value, fragment):
+    base = profiledata.builtin_for("sky130")
+    doc = tomllib.loads((profiledata.BUILTIN / "profile_sky130" / profiledata.PROFILE_TOML).read_text())
+    doc["profile"][0][field] = value
+    with pytest.raises(profiledata.ProfileError, match=re.escape(fragment)):
+        profiledata._Reader("test").document(doc, "profile_sky130", "1.0.0", "0.1.0")
+    assert base is not None
+
+
+def test_a_huge_number_or_deep_nesting_is_a_profile_error():
+    doc = tomllib.loads((profiledata.BUILTIN / "profile_sky130" / profiledata.PROFILE_TOML).read_text())
+    ring = next((k for k, v in doc["profile"][0].items() if isinstance(v, dict) and "width" in v), None)
+    if ring:
+        doc["profile"][0][ring]["width"] = 10 ** 400
+        with pytest.raises(profiledata.ProfileError, match="too large"):
+            profiledata._Reader("test").document(doc, "profile_sky130", "1.0.0", "0.1.0")
+    with pytest.raises(profiledata.ProfileError, match="nested too deep"):
+        profiledata.load("x = " + "[" * 100000 + "]" * 100000, "test", "profile_sky130", "1.0.0", "0.1.0")
+
+
+def test_a_bare_pdk_name_keeps_the_version_the_lock_pins(tmp_path, monkeypatch):
+    from undine.pdks.pdk import Pdk
+    from undine.store import deps
+    from undine.store.project import ProjectStore
+    old = Pdk("gf180mcuD", "gf180mcu", "0123456789ab" + "0" * 28, tmp_path / "old")
+    new = Pdk("gf180mcuD", "gf180mcu", "792ef67037d74c8c51811eab3ce23cf793491296", tmp_path / "new")
+    pdks = {old.id: old, new.id: new}
+    prj = ProjectStore(tmp_path / "projects", pdks).create("p", None)
+    prj.meta["pdk"] = "gf180mcuD"
+    prj.save()
+    assert prj.pdk is new                                            # no lock: the tested version
+    deps.write_lock(prj.path, {"format": 2, "tools": {}, "libraries": {},
+                               "pdk": {"id": old.id, "variant": "gf180mcuD", "commit": old.version}})
+    assert ProjectStore(tmp_path / "projects", pdks).get("p").pdk is old    # the pin, not the newly preferred one

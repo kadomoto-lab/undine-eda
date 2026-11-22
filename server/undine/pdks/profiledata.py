@@ -75,6 +75,12 @@ _NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _SHA = re.compile(r"^sha256:[0-9a-f]{64}$")
 _DOTTED = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# what a path or name of a profile never holds: they reach a netlist, an xschemrc (Tcl) or a shell-free command line
+# as written, so no whitespace and nothing Tcl or SPICE reads as syntax (braces only as a template's placeholders)
+_UNSAFE = re.compile(r"[\s\[\]$\"'`;]")
+_WORD = re.compile(r"^[A-Za-z0-9_.+-]+$")            # a corner, a section, a stdcell library name
+_GROUP = re.compile(r"\\(\d+)|\\g<(\w+)>")
 
 # the placeholders a template field is formatted with (Profile.magic_file, stdcell, ...); none: not a template
 _TEMPLATES = {"magic_rc": {"name"}, "netgen_setup": {"name"}, "mismatch_section": {"corner"},
@@ -175,10 +181,15 @@ class _Reader:
         if hint is float:
             if not isinstance(v, (int, float)) or isinstance(v, bool):
                 raise self.err(path, f"{v!r} is not a number")
-            return float(v)
+            try:
+                return float(v)
+            except OverflowError:
+                raise self.err(path, f"{v!r} is too large for a number") from None
         if hint is str:
             if not isinstance(v, str):
                 raise self.err(path, f"{v!r} is not a string", "quote it")
+            if _CONTROL.search(v):
+                raise self.err(path, f"{v!r} holds a control character (a newline, a tab)", "write it on one line")
             return v
         raise self.err(path, f"no profile field has the type {hint!r}")      # a Profile field Undine cannot read
 
@@ -190,6 +201,9 @@ class _Reader:
         for k, x in v.items():
             if isinstance(x, dict):
                 out[k] = self.raw(x, path + [k])
+            elif isinstance(x, str) and _CONTROL.search(x):
+                raise self.err(path + [k], f"{x!r} holds a control character (a newline, a tab)",
+                               "write it on one line")
             elif isinstance(x, (str, bool, int, float)):
                 out[k] = x
             else:
@@ -372,18 +386,31 @@ class _Reader:
                            f"write one of {', '.join(SWITCH_MODES)}")
         for k in _PATHS:
             for j, x in _each(getattr(p, k)):
-                if (problem := _path_problem(x)):
+                if (problem := _path_problem(x)) or (k not in _TEMPLATES and ("{" in x or "}" in x)
+                                                      and (problem := "holds a brace, which only a template has")):
                     raise self.err(path + [k] + j, f"{x!r} {problem}", "write a path relative to where it is read")
-        for j, (_, rel) in enumerate(p.model_vars):
+        for j, (name, rel) in enumerate(p.model_vars):
+            if not re.fullmatch(r"[A-Za-z0-9_]+", name):     # a Tcl variable (GF180's 180MCU_MODELS)
+                raise self.err(path + ["model_vars", j, 0], f"{name!r} is not a variable name",
+                               "letters, digits and _")
             if (problem := _path_problem(rel)):
                 raise self.err(path + ["model_vars", j, 1], f"{rel!r} {problem}", "write it relative to the PDK root")
+        for j, x in _each(p.osdi):
+            if (problem := _path_problem(x)) or "/" in x:
+                raise self.err(path + ["osdi"] + j, f"{x!r} {problem or 'is not a file name'}",
+                               "name the compiled model's file, with no directory")
+        for k in ("corners",):
+            for j, x in _each(getattr(p, k)):
+                if not _WORD.match(x):
+                    raise self.err(path + [k] + j, f"{x!r} is not a corner name", "letters, digits and _ . + -")
         for k, allowed in _TEMPLATES.items():
             for j, x in _each(getattr(p, k)):
                 self.template(x, allowed, path + [k] + j)
         for j, el in enumerate(p.lvs_elements):
             self.regex(el.model, path + ["lvs_elements", j, "model"])
-        for j, (pat, _) in enumerate(p.stdcells):
-            self.regex(pat, path + ["stdcells", j, 0])
+        for j, (pat, lib) in enumerate(p.stdcells):
+            groups = self.regex(pat, path + ["stdcells", j, 0])
+            self.library(lib, groups, path + ["stdcells", j, 1])
         if p.stdcell_lvs is not None:
             s, sp = p.stdcell_lvs, path + ["stdcell_lvs"]
             for k in ("mos", "short", "physical"):
@@ -408,11 +435,23 @@ class _Reader:
                 raise self.err(path, f"{text!r}: {{{name}}} is not a placeholder of this field",
                                f"its placeholders are {', '.join('{' + a + '}' for a in sorted(allowed))}")
 
-    def regex(self, text: str, path: list) -> None:
+    def regex(self, text: str, path: list):
         try:
-            re.compile(text)
-        except re.error as e:
+            return re.compile(text)
+        except (re.error, OverflowError, RecursionError) as e:
             raise self.err(path, f"{text!r} is not a regular expression: {e}") from None
+
+    def library(self, lib: str, pattern, path: list) -> None:
+        """A stdcell library name, which may take groups of its cell pattern (\\1, \\g<name>): the groups must exist,
+        and the name with them filled must stay a name (Profile.stdcell formats it into a path in the PDK)."""
+        for num, name in _GROUP.findall(lib):
+            ok = (int(num) <= pattern.groups) if num else (name in pattern.groupindex or
+                                                            (name.isdigit() and int(name) <= pattern.groups))
+            if not ok:
+                raise self.err(path, f"{lib!r} names a group its pattern {pattern.pattern!r} does not have")
+        if not _WORD.match(_GROUP.sub("x", lib)) or lib in (".", ".."):
+            raise self.err(path, f"{lib!r} is not a library name",
+                           "letters, digits and _ . + -, or a group of the pattern")
 
     def pcell_lib(self, lib: PcellLib, path: list) -> None:
         for j, x in enumerate(lib.paths):
@@ -450,6 +489,9 @@ def _each(v):
 def _path_problem(p: str) -> str | None:
     if p.startswith(("/", "~")) or "\\" in p or re.match(r"^[A-Za-z]:", p):
         return "is not a relative / path"
+    if _UNSAFE.search(p) or _CONTROL.search(p):
+        return "holds whitespace or a character a netlist or Tcl reads as syntax"
+
     if ".." in p.split("/"):
         return "has a .. part"
     return None
@@ -469,6 +511,8 @@ def load(text: str, where: str, package: str, version: str, undine_version: str 
     Raises ProfileError for the first problem found."""
     try:
         doc = tomllib.loads(text)
+    except (RecursionError, MemoryError):
+        raise ProfileError(f"{where}: {PROFILE_TOML}: nested too deep or too large to read: write it flat") from None
     except tomllib.TOMLDecodeError as e:
         raise ProfileError(f"{where}: {PROFILE_TOML}: not valid TOML: {e}: fix the TOML at that line") from None
     return _Reader(where).document(doc, package, version, undine_version or _undine_version())

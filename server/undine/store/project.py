@@ -182,14 +182,17 @@ class PdkMove(tuple):
         return t
 
 
-def pick_pdk(pdks: dict[str, Pdk], spec: str) -> Pdk | None:
-    """A PDK by id ("sky130A@8afc8346a57f") or by name ("sky130A"); for a name, a version whose PCells Undine runs
-    comes first, of those a version Undine is tested with (the built-in profile's [[pdk]] tested = true), then the
-    order of discovery."""
+def pick_pdk(pdks: dict[str, Pdk], spec: str, pinned: str | None = None) -> Pdk | None:
+    """A PDK by id ("sky130A@8afc8346a57f") or by name ("sky130A"); for a name, the version undine.lock pins comes
+    first (`pinned`, a full commit: the pin does not move when another version becomes preferred), then a version
+    whose PCells Undine runs, of those a version Undine is tested with (the built-in profile's [[pdk]] tested =
+    true), then the order of discovery."""
     from undine.pdks import profiledata
     # a copy: the server's rescan adds and removes PDKs while requests read the dict
     match = [x for x in list(pdks.values()) if x.id == spec or x.name == spec]
-    match.sort(key=lambda x: (x.id != spec, pcell.macros_dir(x) is None,
+    pin = (pinned or "").lower()
+    match.sort(key=lambda x: (x.id != spec, not (pin and x.version and pin.startswith(str(x.version).lower())),
+                              pcell.macros_dir(x) is None,
                               not x.version or x.version not in profiledata.tested_commits(x.family)))
     return match[0] if match else None
 
@@ -232,7 +235,14 @@ class Project:
         pid = self.meta.get("pdk")
         if not pid:
             return None
-        return pick_pdk(self.pdks, pid)      # an exact id, or a bare name ("sky130A")
+        if "@" not in pid:                   # a bare name ("sky130A"): the version the lock pins, when it pins one
+            try:
+                pin = deps.lock_pdk(deps.read_lock(self.path) or {}) or {}
+            except deps.DepError:
+                pin = {}
+            if pin.get("variant") == pid and pin.get("commit"):
+                return pick_pdk(self.pdks, pid, pin["commit"])
+        return pick_pdk(self.pdks, pid)      # an exact id, or a bare name
 
     def _refuse_incompatible(self, lock: dict | None, new: Pdk) -> None:
         """IncompatiblePdk when a package the lock pins does not accept `new` (compat.locked_incompatible, the

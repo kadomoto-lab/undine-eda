@@ -613,8 +613,12 @@ def pdk_profile_command(args) -> int:
     except ciel.CielError as e:
         print(f"undine: {e}", file=sys.stderr)
         return 1
-    print(f"ciel enable --pdk-family {args.family} {commit}", flush=True)
-    return subprocess.run([str(exe), "enable", "--pdk-family", args.family, commit]).returncode
+    root = []
+    if args.pdk_root:                               # as `pdk fetch`: the first root given that ciel can install into
+        from undine.pdks import pin as pdkpin
+        root = ["--pdk-root", str(pdkpin.fetch_root(args.pdk_root))]
+    print(" ".join(["ciel enable", *root, "--pdk-family", args.family, commit]), flush=True)
+    return subprocess.run([str(exe), "enable", *root, "--pdk-family", args.family, commit]).returncode
 
 
 def _fetch(prj, args) -> int:

@@ -396,8 +396,36 @@ its netlist names, and either `reduced` (the copy it read, with `cards`: kept, o
 the whole library). The inputs are those of the netlist as generated, so the copy does not change the key
 ([PDK models](../guide/verification.md#pdk-models-in-a-simulation)).
 
+Two more inputs are in the key. A simulation's `inputs.models` lists every file its netlist reads through `.lib` and
+`.include`, transitively (for a `.lib` line the files of that section), and the OSDI models ngspice loads, each as
+`{"path", "sha"}` of the original file (not the reduced copy): a model file that a package's code block includes
+outdates the run when it changes, even though the netlist text stays the same. A relative path is read from the job's
+own directory under `runs/`, where ngspice runs. The OSDI models are looked up again as the PDK has them now, so a
+model compiled again elsewhere outdates the run too. `inputs.profile` holds the fields of
+the PDK profile the run uses: `drc_options` (the deck's defaults) and `deck_vars` for KLayout DRC, `lvs_options` and
+`deck_vars` for KLayout LVS, `model_lib`, `model_includes`, `osdi` and `corners` for a simulation. Other jobs record
+neither.
+
+Outside the key, a job records what it used (`about`, for information and the evidence):
+
+```json
+"about": {
+  "packages": [{"name": "analog_ip", "package": "analog_ip", "version": "1.2.0", "tree": "sha256:…", "index": null}],
+  "pdk":      {"id": "sky130A@8afc8346a57f", "commit": "8afc8346a57f…", "family": "sky130", "variant": "sky130A",
+               "tree": null},
+  "profile":  {"family": "sky130", "source": "built-in", "undine": "0.1.0 (3f9c2e1)"}
+}
+```
+
+`packages` are the lock entries whose installed files the job read (the schematics and symbols of its netlist, its
+model files, the library of its layout), with `tree` or `sha` as the lock pins them; `pdk.tree` is the lock's pin of
+the PDK (format 2), else null. Since `about` is not in the key, the same files from another package version are the
+same run: an update that changes one cell of a package outdates only the results that use that cell, and a changed
+README outdates nothing.
+
 `key` is a hash of all inputs: two jobs with the same key ran on the same thing. A job is **outdated** when its design,
-PDK, deck or tool versions differ from what they are now; `GET /api/p/<project>/jobs/<job>/freshness` answers
+PDK, deck, tool versions, model files or profile fields differ from what they are now (a job recorded before `models`
+and `profile` were is compared without them); `GET /api/p/<project>/jobs/<job>/freshness` answers
 `{"fresh": true | false | null, "changed": ["layout of mylib/inv changed", ...]}` (`null`: the job is from before inputs
 were recorded). The format is documented at the top of `server/undine/store/provenance.py`.
 
@@ -414,7 +442,9 @@ When a changeset is applied or discarded, its changes and check summary are capt
 from both preview projects in `<project>/changesets/<id>/evidence/`. Job `status.json` files retain `inputs`, `key`
 and output-file hashes alongside the actual results and logs, including artifacts from failed launches.
 `manifest.json` records the captured changes (with operation arguments), verification summary, archived jobs
-and file hashes. The `base/` and `work/` subdirectories retain their project settings, dependency locks and job
+(each with the job's `about` when it recorded one) and file hashes, and what each side's dependency lock pins:
+`"packages": {"base": [...], "work": [...]}` (each entry `{name, names, package, version, tree | sha, index}`) and
+`"pdk": {"base": {id, commit, family, variant, tree}, "work": ...}`. The `base/` and `work/` subdirectories retain their project settings, dependency locks and job
 directories in `runs/`. For a changeset on git the manifest is `"version": 2` and names the base commit and the tip
 that was reviewed (`"commits": {"base", "tip"}`): the design files and the full operation logs (unless the project's
 `.gitignore` leaves `history/` out of git) are in those commits, kept under `refs/undine/changesets/<project>/<id>`; an

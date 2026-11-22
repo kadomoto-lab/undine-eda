@@ -121,11 +121,9 @@ def _code(line: str) -> str:
     return re.split(r";|//|(?<=\s)\$", line, maxsplit=1)[0]
 
 
-def _includes(text: str, where: str) -> list[str]:
-    """The files `text` reads, as written: `.include <file>`, `.lib <file> <section>` (a path quoted, with blanks in
-    it, or not; a trailing comment; a CR line end), not `.lib <section>` (a section's start). Unsupported for a line
-    that reads a file it cannot tell: the names in that file would be missed."""
-    files = []
+def _reads(text: str):
+    """Each line of `text` that reads a file, as (the line, its words: [file] or [file, section] for a `.lib`, [] for
+    `.lib <section>`, a section's start; None when it cannot tell them)."""
     for m in _READS.finditer(text):
         rest, words, pos = _code(m.group(2)).strip(), [], 0
         while pos < len(rest) and (w := _WORD.match(rest, pos)):
@@ -133,8 +131,20 @@ def _includes(text: str, where: str) -> list[str]:
             pos = w.end()
         n, lib = len(words), m.group(1).lower().startswith(".lib")
         if pos < len(rest) or n not in ((1, 2) if lib else (1,)):
-            raise Unsupported(f"cannot tell the file {m.group(0).strip()[:60]!r} reads ({where})")
-        if n == (2 if lib else 1):             # not a .lib <section>
+            yield m.group(0), None
+        else:
+            yield m.group(0), words if n == (2 if lib else 1) else []
+
+
+def _includes(text: str, where: str) -> list[str]:
+    """The files `text` reads, as written: `.include <file>`, `.lib <file> <section>` (a path quoted, with blanks in
+    it, or not; a trailing comment; a CR line end), not `.lib <section>` (a section's start). Unsupported for a line
+    that reads a file it cannot tell: the names in that file would be missed."""
+    files = []
+    for line, words in _reads(text):
+        if words is None:
+            raise Unsupported(f"cannot tell the file {line.strip()[:60]!r} reads ({where})")
+        if words:
             files.append(words[0])
     return files
 
@@ -392,6 +402,70 @@ def netlist_names(text: str, cwd: Path | None, lib: Path | None = None) -> set[s
         names |= toks
         todo.extend(inc)
     return names
+
+
+def _units(text: str, base: Path) -> list[tuple[str, str | None]]:
+    """What `text` reads, as (resolved path, the section of a `.lib` line or None), relative paths from `base`; a line
+    it cannot tell is left out."""
+    return [(_paths(base, [w[0]])[0], w[1] if len(w) > 1 else None) for _, w in _reads(text) if w]
+
+
+@functools.lru_cache(maxsize=256)
+def _file_units(path: str, stamp: tuple[int, int]) -> tuple:
+    """_units of a file, read again when its `stamp` (size, mtime) changes; none when it cannot be read."""
+    try:
+        return tuple(_units(_read(Path(path)), Path(path).parent))
+    except Unsupported:
+        return ()
+
+
+# what files_read takes as "cannot read this" rather than refusing: Path.resolve raises RuntimeError on a link loop,
+# lstat ValueError on a NUL
+_UNREADABLE = (Unsupported, OSError, RuntimeError, ValueError)
+
+
+def files_read(text: str, cwd: Path | None = None) -> list[str]:
+    """Every file a netlist reads through .include and .lib, transitively (resolved paths, relative ones from `cwd`, in
+    the order met): for `.lib <file> <section>` the files of that section with what it includes (section()), or, when
+    the reducer cannot read the section, the whole file and every file it reads; for `.include <file>` the file and
+    every file it reads. It never refuses: a line it cannot tell is left out, and a file it cannot read is listed all
+    the same (its hash then says it is missing). What provenance hashes of a simulation's models: the original files,
+    whatever reduced copy ngspice gets (reduce)."""
+    out: dict[str, None] = {}
+    base = cwd or Path.cwd()
+    try:
+        todo = list(_units(text, base))
+    except _UNREADABLE:                        # one line it cannot read: the others, line by line
+        todo = []
+        for line in text.splitlines():
+            try:
+                todo.extend(_units(line, base))
+            except _UNREADABLE:
+                continue
+    seen: set = set()                          # (path, section) taken
+    whole: set = set()                         # files walked whole
+    while todo:
+        p, sec = todo.pop(0)
+        if (p, sec) in seen:
+            continue
+        seen.add((p, sec))
+        if sec is not None:
+            try:
+                out.update(dict.fromkeys(section(Path(p), sec).files))
+                continue
+            except _UNREADABLE:
+                pass
+        out.setdefault(p)
+        if p in whole:
+            continue
+        whole.add(p)
+        try:
+            stamp = _stat(Path(p))
+            if stamp[0] >= 0:
+                todo.extend(_file_units(p, stamp))
+        except _UNREADABLE:                    # a link loop, a NUL in a path: listed, not followed
+            continue
+    return list(out)
 
 
 def _own(text: str) -> bytes:

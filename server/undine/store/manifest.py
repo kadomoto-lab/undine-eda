@@ -52,6 +52,8 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 _HEXISH = re.compile(r"^[0-9a-fA-F]+$")
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 CELL_SUFFIXES = (".sch", ".sym", ".oas", ".sv", ".v")
+# the [files] include `pkg init` writes (the design's example)
+DEFAULT_INCLUDE = ("*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "rtl/**", "README.md", "LICENSE")
 _EXPORT_SUFFIXES = (".sym", ".sch", ".oas")
 
 TABLES = ("package", "pdk", "dependencies", "exports", "files", "checks", "renames")

@@ -810,3 +810,23 @@ def test_a_job_failure_with_no_code_of_its_own_keeps_its_changeset_and_kind(tmp_
     pub = j.public()
     assert pub["kind"] == "dependency" and pub["params"] == {"kind": "link_out", "library": "x"}
     shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_confirmed_one_click_waits_behind_another_operation(tmp_path, remotes):
+    # a confirmed one-click job that starts while another operation holds the project's dependency lock waits for it
+    # (plans, checks the files and opens under one hold), and ends applied; the route alone does not wait (busy)
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    prj = srv.project("p")
+    body = {"action": "add", "name": "amp", "package": "amp", "version": "^1"}
+    plan = c.post("/api/p/p/deps/changeset", json=body).json()["plan"]
+    tok = _confirm(c, plan).json()["token"]
+    with deps._deps_lock(prj.path):
+        assert c.post("/api/p/p/deps/changeset", json=body).json()["code"] == "busy"
+        job = c.post("/api/p/p/deps/fetch", json={"token": tok}).json()["job"]
+        time.sleep(0.5)
+        r = c.get(f"/api/p/p/deps/fetch/{job['id']}").json()
+        assert r["state"] in ("queued", "running"), r        # waiting, not failed busy
+    job = _wait(c, "p", job)
+    assert job["state"] == "done" and job["result"]["status"] == "applied", job
+    assert (deps.dep_dir(srv.project("p").path, "amp") / "amp_cell.sym").is_file()
+    shutil.rmtree(root, ignore_errors=True)

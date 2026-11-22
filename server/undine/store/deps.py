@@ -191,7 +191,8 @@ def files_sha(project_path: Path) -> str:
 
 
 class Planned(Exception):
-    """plan_fetch's stop before anything is staged or written (Allow.plan_only): `plan` as NeedsFetch's."""
+    """plan_fetch's stop once the plan is known, staging looked at (what is staged is removed again) and nothing
+    written (Allow.plan_only): `plan` as NeedsFetch's."""
 
     def __init__(self, plan: dict):
         super().__init__("planned")
@@ -203,12 +204,15 @@ class Allow:
     """What an operation started over HTTP may fetch from a remote (phase 4): the (url, want, commit) triples a person
     confirmed, `want` a commit or a rev, `commit` for a rev the commit the plan showed (None when it was not known; a
     fetch that gives another one is a new need). A local repository under --dep-root needs no confirmation, and an
-    index is never fetched (index.IndexNotFetched). `plan_only`: stop once the plan is known (Planned), before
-    anything is staged or written. `files`: the files_sha the confirmation was for; an operation checks it once it holds
-    the project's dependency lock (FilesChanged). An operation given no Allow (None: the command line) fetches what it needs."""
+    index is never fetched (index.IndexNotFetched). `plan_only`: stop once the plan is known (Planned): staging is
+    looked at too (what it stages is removed again), nothing is written. `files`: the files_sha the confirmation was
+    for; an operation checks it once it holds the project's dependency lock (FilesChanged). `locked`: the caller holds
+    that lock already (a flock is not re-entrant): the operation does not take it. An operation given no Allow (None:
+    the command line) fetches what it needs."""
     fetches: frozenset = frozenset()
     plan_only: bool = False
     files: str | None = None              # files_sha the person confirmed for (checked under the deps lock)
+    locked: bool = False                  # the caller holds the project's dependency lock already (not taken again)
 
     @property
     def urls(self) -> frozenset:
@@ -234,6 +238,14 @@ def _check_files(prj, allow: Allow | None) -> None:
     if allow is not None and allow.files is not None and files_sha(prj.path) != allow.files:
         raise FilesChanged(f"project.json or {LOCK} of {prj.name} changed since the fetch was confirmed (another "
                            "operation ran first): nothing was fetched or written; confirm the fetch again")
+
+
+def _held(prj, allow: Allow | None, wait: bool | None = None):
+    """The project's dependency lock for one operation: taken (waiting, or not for a plan only: DepsBusy), or nothing
+    when the caller holds it already (Allow.locked)."""
+    if allow is not None and allow.locked:
+        return contextlib.nullcontext()
+    return _deps_lock(prj.path, _waits(allow) if wait is None else wait)
 
 
 def _waits(allow: Allow | None) -> bool:
@@ -1877,7 +1889,7 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
     else:
         spec = {"git": git, **({"rev": rev} if rev else {}), **({"subdir": subdir} if subdir else {}),
                 **({"package": package} if package else {})}
-    with _deps_lock(prj.path, _waits(allow)):
+    with _held(prj, allow):
         _reread(prj)
         _check_files(prj, allow)
         _not_taken(prj, name)
@@ -1976,7 +1988,7 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
     person refreshes it first)."""
     allow = as_allow(allow)
     _dep_spec(prj, name)
-    with _deps_lock(prj.path, _waits(allow)):
+    with _held(prj, allow):
         _reread(prj)
         _check_files(prj, allow)
         base = _dep_spec(prj, name)                      # as the operation before this one left it
@@ -2172,8 +2184,9 @@ def remove(prj, name: str, guard=None, allow: Allow | None = None) -> dict:
     The trust given to what went goes too. A name only a package places is NotDirect. `allow` (a confirmed job): its
     files checked under the dependency lock this removal holds, before anything is written (FilesChanged)."""
     _dep_spec(prj, name)
-    with _deps_lock(prj.path):
-        _check_files(prj, as_allow(allow))
+    allow = as_allow(allow)
+    with _held(prj, allow, True):
+        _check_files(prj, allow)
         with _committing(prj, guard):
             _dep_spec(prj, name)                              # removed meanwhile?
             _own_dir(prj.path, name)
@@ -2535,14 +2548,17 @@ def _index_line(e: dict) -> ix.Line | None:
         return None
 
 
-def plan_fetch(prj, op: str, args: dict | None = None, local_roots: list[Path] | None = None, hosts=()) -> dict:
+def plan_fetch(prj, op: str, args: dict | None = None, local_roots: list[Path] | None = None, hosts=(),
+               locked: bool = False) -> dict:
     """What operation `op` ("add", "update", "remove", "lock" or "sync", with add's or update's `args`) would fetch
     from a remote that no person confirmed, over HTTP (`local_roots`, `hosts` as the server's): NeedsFetch's plan,
     {op, fetches, complete}, `fetches` empty when it needs none. Nothing is fetched (but a local repository under
-    --dep-root, which needs no confirmation), staged or written; an index with no local copy is
-    index.IndexNotFetched. The confirmation of a dependency fetch checks the request against it."""
+    --dep-root, which needs no confirmation) or written; staging is looked at too, so a need it finds is in the plan,
+    and what it staged is removed again. An index with no local copy is index.IndexNotFetched. It does not wait for
+    the project's dependency lock (DepsBusy), unless `locked`: the caller holds it already. The confirmation of a
+    dependency fetch checks the request against it."""
     args = args or {}
-    allow = Allow(plan_only=True)
+    allow = Allow(plan_only=True, locked=locked)
     try:
         if op == "add":
             add(prj, args.get("name"), args.get("git"), args.get("rev"), args.get("subdir"), local_roots=local_roots,
@@ -2596,7 +2612,7 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
     if offline is None:
         offline = os.environ.get("UNDINE_OFFLINE") == "1"
     command = f"lib sync {prj.name}"
-    with _deps_lock(prj.path, wait):
+    with _held(prj, allow, wait):
         _reread(prj)
         _check_files(prj, allow)
         lock = read_lock(prj.path)
@@ -2797,14 +2813,14 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
                 raise Planned({"op": "lock", "fetches": [], "complete": True})
             if allow is not None and allow.files is not None:
                 # a confirmed job: the files as confirmed and the tools written under one hold of the lock
-                with _deps_lock(prj.path), _in_store(prj):
+                with _held(prj, allow, True), _in_store(prj):
                     _check_files(prj, allow)
                     lock, created, _ = _record_env(prj, guard, [])
                 return {"lock": lock, "resolved": [], "created": created}
             with _in_store(prj):                         # nothing to fetch: no wait behind a fetch in progress
                 lock, created, _ = _record_env(prj, guard, [])
             return {"lock": lock, "resolved": [], "created": created}
-    with _deps_lock(prj.path, _waits(allow)):
+    with _held(prj, allow):
         _reread(prj)
         _check_files(prj, allow)
         start = read_lock(prj.path)

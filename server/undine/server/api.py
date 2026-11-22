@@ -2309,11 +2309,12 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """Runs the operation of `request` with what `allow` lets it fetch: what the route that named it returns."""
         op, args, reason = request["op"], {k: request.get(k) for k in _DEP_KEYS}, request.get("reason", "")
         if request.get("adopt"):
-            # the operation runs in a changeset made from the project: the files as confirmed, checked and copied
-            # into the changeset under one hold of the project's dependency lock (_one_click's `opening`). Safe for
-            # the lock order: deps.lock is taken before the changesets' lock everywhere (_DepGuard), and what holds
-            # the changesets' lock takes a project's deps.lock without waiting (the adopt's install, restore);
-            # create() takes neither the changesets' lock nor a deps.lock itself
+            # the operation runs in a changeset made from the project: the project's dependency lock taken, waiting
+            # behind another operation, then under that one hold the files checked, the plan made and the changeset
+            # opened (_one_click's `opening`). Safe for the lock order: deps.lock is taken before the changesets'
+            # lock everywhere (_DepGuard), and what holds the changesets' lock takes a project's deps.lock without
+            # waiting (another adopt's install, which is then left pending for lib sync; restore); create() takes
+            # neither the changesets' lock nor a deps.lock itself
             prj = srv.project(real)
 
             @contextlib.contextmanager
@@ -2472,8 +2473,10 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
 
     def _one_click(project: str, req: DepChangeset, actor: str, allow: deps.Allow, opening=None) -> dict:
         """POST /deps/changeset's work, with what `allow` lets the operation fetch (the route: no remote; a fetch job:
-        what the person confirmed). `opening`: a context the changeset is opened in (a job: the project's files
-        checked under its dependency lock). Raises the HTTP error."""
+        what the person confirmed). `opening` (a job): a context that holds the project's dependency lock, waiting for
+        it, and checks the files; the plan (under that lock, not taken again), and the changeset's open, run in it, so
+        a job waits behind another operation rather than failing busy. The route plans without waiting (409 busy).
+        Raises the HTTP error."""
         if req.action not in ("add", "update", "remove", "pdk"):
             raise _err(ValueError(f"unknown action {req.action!r} (add, update, remove, pdk)"))
         preview = "~" in project
@@ -2508,7 +2511,8 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 deps._dep_spec(prj, req.name)        # a dependency of project.json (NotDirect, DepError)
             if req.action != "remove":
                 try:
-                    plan = deps.plan_fetch(prj, req.action, _dep_args(req), srv.dep_roots, srv.dep_hosts)
+                    plan = deps.plan_fetch(prj, req.action, _dep_args(req), srv.dep_roots, srv.dep_hosts,
+                                           locked=opening is not None)
                 except (deps.NeedsFetch, ix.IndexNotFetched, deps.DepsBusy):
                     raise                            # before anything is opened: 409 busy, needs_fetch ...
                 except Exception:
@@ -2521,13 +2525,13 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                     raise deps.NeedsFetch(plan)
         try:
             real = changesets._real_of(project)
-            check(srv.project(project))
-            if preview:
-                cid = project.split("~")[1]
-                return {"changeset": cid, "status": "open", "result": run(real, cid)}
-            title = req.title or (f"Set the PDK to {req.pdk}" if req.action == "pdk" else
-                                  f"{req.action.capitalize()} {req.name}")
             with opening() if opening is not None else contextlib.nullcontext():
+                check(srv.project(project))
+                if preview:
+                    cid = project.split("~")[1]
+                    return {"changeset": cid, "status": "open", "result": run(real, cid)}
+                title = req.title or (f"Set the PDK to {req.pdk}" if req.action == "pdk" else
+                                      f"{req.action.capitalize()} {req.name}")
                 meta = changesets.create(real, title, req.reason, actor)
         except deps.NeedsFetch as e:
             raise _err(_needs(e, project, request))

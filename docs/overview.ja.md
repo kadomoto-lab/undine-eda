@@ -37,22 +37,22 @@ Design API の向こう側にあります。Web UI はその API のクライア
 
 ## スクリーンショット
 
-<table>
-  <tr>
-    <td width="50%"><img src="images/showcase-cell.png" alt="sar_adc のセルのページ: 設計意図のメモとスペック"><br><sub><b>セルと設計意図</b>: セルがすべきこと。目標、制約、スペックと、それを測る条件</sub></td>
-    <td width="50%"><img src="images/showcase-schematic.png" alt="SAR ADC の最上位の回路図: サンプリングスイッチ、容量 DAC、コンパレータ、コントローラ"><br><sub><b>回路図</b>: Xschem 互換の編集。ここでは SAR ADC の最上位</sub></td>
-  </tr>
-  <tr>
-    <td><img src="images/showcase-simulation.png" alt="コンパレータのテストベンチ tb_sar_comp: ブラウザに表示した outp と outn の ngspice 過渡解析"><br><sub><b>シミュレーション</b>: ngspice はサーバーで動き、波形はブラウザで表示(±0.45 mV の入力に対するコンパレータの判定)</sub></td>
-    <td><img src="images/showcase-comparator.png" alt="SAR ADC のダイナミックコンパレータのトランジスタレベルのレイアウト"><br><sub><b>レイアウト</b>: PDK のレイヤーでサーバーが描画するタイル。ここではコンパレータ</sub></td>
-  </tr>
-  <tr>
-    <td><img src="images/drc.png" alt="met1 の間隔違反のマーカーを表示した DRC 結果ブラウザ"><br><sub><b>DRC / LVS</b>: KLayout または Magic のデッキ。ルールとマーカーをレイアウト上に表示</sub></td>
-    <td><img src="images/changeset.png" alt="changeset のレビュー: 差分と変更前後のチェックを持つエージェントの提案"><br><sub><b>変更セット (changeset)</b>: エージェントの提案、その差分、変更前後のチェック。人の判断を待つ</sub></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="images/tapeout.png" alt="すべてのサインオフチェックに合格した Tiny Tapeout のタイル" width="50%"><br><sub><b>テープアウト</b>: Tiny Tapeout のタイルのチェックとサインオフ一式</sub></td>
-  </tr>
+<table markdown="block">
+<tr markdown="block">
+<td width="50%" markdown="span">![sar_adc のセルのページ: 設計意図のメモとスペック](images/showcase-cell.png)<br><sub><b>セルと設計意図</b>: セルがすべきこと。目標、制約、スペックと、それを測る条件</sub></td>
+<td width="50%" markdown="span">![SAR ADC の最上位の回路図: サンプリングスイッチ、容量 DAC、コンパレータ、コントローラ](images/showcase-schematic.png)<br><sub><b>回路図</b>: Xschem 互換の編集。ここでは SAR ADC の最上位</sub></td>
+</tr>
+<tr markdown="block">
+<td markdown="span">![コンパレータのテストベンチ tb_sar_comp: ブラウザに表示した outp と outn の ngspice 過渡解析](images/showcase-simulation.png)<br><sub><b>シミュレーション</b>: ngspice はサーバーで動き、波形はブラウザで表示(±0.45 mV の入力に対するコンパレータの判定)</sub></td>
+<td markdown="span">![SAR ADC のダイナミックコンパレータのトランジスタレベルのレイアウト](images/showcase-comparator.png)<br><sub><b>レイアウト</b>: PDK のレイヤーでサーバーが描画するタイル。ここではコンパレータ</sub></td>
+</tr>
+<tr markdown="block">
+<td markdown="span">![met1 の間隔違反のマーカーを表示した DRC 結果ブラウザ](images/drc.png)<br><sub><b>DRC / LVS</b>: KLayout または Magic のデッキ。ルールとマーカーをレイアウト上に表示</sub></td>
+<td markdown="span">![changeset のレビュー: 差分と変更前後のチェックを持つエージェントの提案](images/changeset.png)<br><sub><b>変更セット (changeset)</b>: エージェントの提案、その差分、変更前後のチェック。人の判断を待つ</sub></td>
+</tr>
+<tr markdown="block">
+<td colspan="2" align="center" markdown="span">![すべてのサインオフチェックに合格した Tiny Tapeout のタイル](images/tapeout.png){ width="50%" }<br><sub><b>テープアウト</b>: Tiny Tapeout のタイルのチェックとサインオフ一式</sub></td>
+</tr>
 </table>
 
 ## 謝辞

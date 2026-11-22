@@ -14,12 +14,13 @@
 #            Undine's store ($UNDINE_STORE, else ~/.undine/store: build/<commit>/<variant>/osdi)
 #
 # Not installed here: pixi itself and the KLayout application (both are explained when missing).
-# Settings (environment): PDK_FAMILY=sky130  PDK_VERSION=<open_pdks commit; default: the version Undine is tested with>
+# Settings (environment): PDK_FAMILY=sky130  PDK_VERSION=<the PDK's commit; default: the one Undine is tested with,
+#   which its built-in profile lists (python -m undine pdk tested FAMILY)>
 set -euo pipefail
 cd "$(dirname "$0")"
 
 PDK_FAMILY=${PDK_FAMILY:-sky130}
-PDK_VERSION=${PDK_VERSION:-8afc8346a57fe1ab7934ba5a6056ea8b43078e71}
+PDK_VERSION=${PDK_VERSION:-}              # empty: the tested commit, read in the pdk step (it needs the environment)
 KLAYOUT_VERSION=0.30.12
 
 if [ -t 1 ]; then B=$'\033[1;36m' Y=$'\033[33m' N=$'\033[0m'; else B= Y= N=; fi
@@ -56,6 +57,9 @@ do_web() {
 }
 
 do_pdk() {
+  if [ -z "$PDK_VERSION" ]; then
+    PDK_VERSION=$(pixi run python -m undine pdk tested "$PDK_FAMILY")
+  fi
   step "pdk: $PDK_FAMILY ${PDK_VERSION:0:12} with ciel (into ${PDK_ROOT:-$HOME/.ciel})"
   local have
   have=$(pixi run python -m undine pdks | grep "^${PDK_FAMILY}[^@ ]*@${PDK_VERSION:0:12}" || true)

@@ -270,6 +270,16 @@ def _walk(top: Path) -> tuple[list[str], list[tuple[str, Path, bool, os.stat_res
     return folders, files
 
 
+def _about_of(status: Path) -> dict:
+    """{"about": what the job used} from its status.json (provenance.about); {} for a job from before it was
+    recorded, or a status that cannot be read."""
+    try:
+        about = json.loads(status.read_text()).get("about")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {"about": about} if isinstance(about, dict) else {}
+
+
 def _sha(path: Path, progress: live.Closing) -> str:
     """provenance.file_sha, the bytes read counted in `progress`."""
     h = hashlib.sha256()
@@ -1288,7 +1298,8 @@ class Changesets:
         recorded with its hash is not read at all (_known_hashes). Whether the proposal changed meanwhile is told by
         the stamps of its files ("sources": {path: provenance.stamp} as saved), not by their bytes: the files and their
         stamps, the operations and the branch's tip are compared once all is saved, and the files again at the
-        cleanup.
+        cleanup. The manifest names what each side used, from its undine.lock: "packages" (provenance.lock_packages)
+        and "pdk" (provenance.pdk_about), {side: ...}; each job row carries the job's "about" when it recorded one.
         The closure's progress (live.Closing): phase "evidence", files and bytes (copied or hashed) done of how many.
         """
         sources = [(side, meta[key], self.srv.project(meta[key]).path)
@@ -1345,10 +1356,18 @@ class Changesets:
             # Include status.json itself: it contains the recorded input hashes and the verdict.
             found = {**hashed, **known, **copied}
             manifest["files"] = {rel: found[rel] for rel in sorted(stamps)}
+            # what each side used, from the undine.lock archived: the packages it pins and the PDK (information: the
+            # files are in "files" by hash); each job with its own (provenance.about)
+            manifest["packages"], manifest["pdk"] = {}, {}
+            for side, name, _ in sources:
+                lock = provenance.read_lock(stage / side)
+                manifest["packages"][side] = provenance.lock_packages(lock)
+                manifest["pdk"][side] = provenance.pdk_about(self.srv.project(name).pdk, lock)
             for side, name, _ in sources:
                 for path in sorted((stage / side / "runs").glob("*/status.json")):
                     manifest["jobs"].append({"side": side, "project": name, "id": path.parent.name,
-                                             "path": str(path.parent.relative_to(stage))})
+                                             "path": str(path.parent.relative_to(stage)),
+                                             **_about_of(path)})
             self._ensure_idle(sources)
             if self.changes(project, meta) != manifest["changes"] or self._stamps(sources, dirs) != stamps \
                     or (meta.get("git") and self._branch_tip(project, meta) != manifest["commits"]["tip"]):
@@ -2305,8 +2324,10 @@ class Changesets:
     def evidence(self, project: str, cid: str, check: bool = False) -> dict:
         """A closed changeset's evidence: {"path", "captured", "commits"?, "size" (now: _evidence_size),
         "bytes" (as captured), "linked", "pruned" (the manifest's notes), "jobs": the manifest's, each with "pruned":
-        its files a prune removed}; with `check`, "check": {"ok": how many files still have their hash, "pruned",
-        "missing", "changed": [path in the evidence]}: a file a prune removed is said to be pruned, not missing."""
+        its files a prune removed and "about" (what it used: provenance.about) when it recorded one, "packages" and
+        "pdk": {side: what that side's undine.lock pins} (a manifest from before them has neither)}; with `check`,
+        "check": {"ok": how many files still have their hash, "pruned", "missing", "changed": [path in the evidence]}:
+        a file a prune removed is said to be pruned, not missing."""
         meta = self._load(project, cid)
         d, manifest = self._manifest(project, meta)
         pruned = self._pruned(manifest)
@@ -2314,7 +2335,8 @@ class Changesets:
                 for j in manifest.get("jobs") or []]
         out = {"path": meta["evidence"].get("path"), "captured": manifest.get("captured"), "size": _evidence_size(d),
                "bytes": manifest.get("bytes"), "linked": manifest.get("linked"), "pruned": manifest.get("pruned") or [],
-               "jobs": jobs, **({"commits": manifest["commits"]} if "commits" in manifest else {})}
+               "jobs": jobs, **({"commits": manifest["commits"]} if "commits" in manifest else {}),
+               **{k: manifest[k] for k in ("packages", "pdk") if k in manifest}}
         if check:
             res = {"ok": 0, "pruned": [], "missing": [], "changed": []}
             present = [(rel, sha) for rel, sha in sorted(manifest.get("files", {}).items())

@@ -1,0 +1,12 @@
+# Undine's PDK profile of the gf180mcu family (GlobalFoundries GF180MCU: gf180mcuA to gf180mcuD): what Undine needs to
+# know about the process, as data, in profile.toml (docs/design/packages.md, PDK profiles). Built into Undine as the
+# fallback, and the same files the package profile_gf180mcu publishes.
+[package]
+name = "profile_gf180mcu"
+version = "1.0.0"
+description = "Undine's PDK profile of the gf180mcu family (GlobalFoundries GF180MCU)"
+license = "Apache-2.0"
+repository = "https://github.com/kadomoto-lab/undine-eda.git"
+
+[files]
+include = ["profile.toml"]

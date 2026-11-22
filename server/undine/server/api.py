@@ -31,7 +31,7 @@ from undine.checks import magicflow, parasitics, stdcells, tapeout, verify
 from undine.pdks import ciel, compat, fetchjobs, pcell, pdkops
 from undine.schematics import schematic, xschem, symbolcheck, symbolsync, netlist as netlistmod
 from undine.layouts import layoutstore, sdl
-from undine.simulation import sim
+from undine.simulation import modellib, sim
 from undine import tools
 from undine.design import gatelevel, intent as intentmod, rtl, librelane
 from undine.layouts.layout import LayoutDB
@@ -423,11 +423,13 @@ class Server:
                                      "sha": provenance.text_sha(text)}
 
     def _run(self, project: str, kind: str, tool: str, lib: str, cell: str, deck: str | None, inputs: dict,
-             start, gate: Callable[[], None] | None = None) -> "Run":
+             start, gate: Callable[[], None] | None = None, result: list | None = None) -> "Run":
         """A run whose inputs are known: `start(meta)` creates the job. The layout entry is taken again, under the
         layout lock, right before the export, so the recorded hash is the one of what the tool gets. `gate` runs
         first and may refuse the launch (the trust gate): only launching is refused, so a run prepared for its status
-        (suite, signoff, a changeset's reuse lookup) still is."""
+        (suite, signoff, a changeset's reuse lookup) still is. `result`: the reference netlist's NetlistResult (a list
+        of one, or empty), whose files say which packages the run read (provenance.about), with the layouts'
+        libraries."""
         def launch():
             if gate is not None:
                 gate()
@@ -435,8 +437,21 @@ class Server:
             with db.lock:
                 inp = {**inputs, "design": [provenance.layout_entry(db, e["lib"], e["cell"]) if e["view"] == "layout" else e
                                             for e in inputs["design"]]}
-                return start(db, provenance.meta(inp))
+                return start(db, provenance.meta(inp, self._about(project, inp, result)))
         return Run(project, kind, tool, lib, cell, deck, inputs, launch)
+
+    def _about(self, project: str, inp: dict, result: list | None = None, read=()) -> dict:
+        """provenance.about of a run on `inp`: the files it read are those of its NetlistResult (`result`), `read`
+        (model files) and the folders of the libraries of its layout entries."""
+        prj = self.project(project)
+        files = [*(result[0].files if result else ()), *read]
+        for e in inp.get("design", []):
+            if e.get("view") == "layout":
+                try:
+                    files.append(prj.library(e["lib"]).path.resolve())
+                except KeyError:
+                    pass
+        return provenance.about(prj, files)
 
     def _pdk_of(self, project: str):
         prj = self.project(project)
@@ -451,7 +466,8 @@ class Server:
             raise ValueError("the PDK has no DRC deck")
         db = self.db(project, lib)
         inp = provenance.inputs([provenance.layout_entry(db, lib, cell)], prj.pdk, ["klayout"],
-                                provenance.deck_entry(prj.pdk, "drc", deck), options or {})
+                                provenance.deck_entry(prj.pdk, "drc", deck), options or {},
+                                profile=provenance.profile_fields(prj.pdk, provenance.DRC_PROFILE, deck))
         return self._run(project, "drc", "klayout", lib, cell, deck, inp, lambda db, meta: verify.start_drc(
             self.jobs, prj.path, prj.pdk, db.layout, cell, lib, deck, options or {}, meta))
 
@@ -479,10 +495,11 @@ class Server:
             options = {"schematic_simplify": True, **(options or {})}
         db = self.db(project, lib)
         inp = provenance.inputs([provenance.layout_entry(db, lib, cell), ref], prj.pdk, ["klayout"],
-                                provenance.deck_entry(prj.pdk, "lvs", deck), options or {})
+                                provenance.deck_entry(prj.pdk, "lvs", deck), options or {},
+                                profile=provenance.profile_fields(prj.pdk, provenance.LVS_PROFILE, deck))
         return self._run(project, "lvs", "klayout", lib, cell, deck, inp, lambda db, meta: verify.start_lvs(
             self.jobs, prj.path, prj.pdk, db.layout, cell, lib, sch, deck, options or {}, label, meta, instances),
-            gate=self._paths_gate(prj, result))
+            gate=self._paths_gate(prj, result), result=result)
 
     def prepare_netgen_lvs(self, project: str, lib: str, cell: str, schematic_cell: str | None = None,
                            schematic_file: str | None = None) -> "Run":
@@ -493,7 +510,8 @@ class Server:
         db = self.db(project, lib)
         inp = provenance.inputs([provenance.layout_entry(db, lib, cell), ref], prj.pdk, ["magic", "netgen"])
         return self._run(project, "lvs", "netgen", lib, cell, None, inp, lambda db, meta: magicflow.start_lvs(
-            self.jobs, prj.path, prj.pdk, db.layout, cell, lib, sch, label, meta), gate=self._paths_gate(prj, result))
+            self.jobs, prj.path, prj.pdk, db.layout, cell, lib, sch, label, meta), gate=self._paths_gate(prj, result),
+            result=result)
 
     def _paths_gate(self, prj, result: list) -> Callable[[], None]:
         """The trust gate of an LVS run (KLayout, netgen), checked when it launches: the reference netlist's lines
@@ -651,7 +669,8 @@ class Server:
         the testbench's netlist entry, so a run with stand-ins is never reused for one without) and warns of one that
         replaced nothing (`substitute_warnings`). The PDK's standard cells a testbench calls get their library's SPICE
         (_cell_spice). The PDK's model library is read as a copy reduced to what the netlist uses (modellib.py); the
-        inputs name the library and corner as the netlist does."""
+        inputs name the library and corner as the netlist does, and hash every file the netlist reads (the original
+        ones, modellib.files_read) and the OSDI models ("models"), with the profile's model fields ("profile")."""
         prj = self.project(project)
         for m in measure or []:
             if not isinstance(m, str) or "\n" in m or not re.match(r"\s*\.meas(ure)?\s", m, re.I):
@@ -679,7 +698,7 @@ class Server:
         views = self.extracted_views(project, extracted) if extracted else {}
         if views and netlist is not None:
             raise ValueError("extracted applies to a testbench netlisted from its schematic, not to a given netlist")
-        ext_entries, in_effect = [], {}
+        ext_entries, in_effect, result = [], {}, []
         if netlist is None:
             subs = {}
             for key, st in views.items():
@@ -691,6 +710,7 @@ class Server:
                                     **({"job": st["id"]} if wants.get(key) not in (None, *parasitics.MODES) else {}),
                                     "sha": (st.get("files") or {}).get("extracted.spice")})
             r = self.sim_netlist(prj, lib, cell, overrides or None, subs, subst or None)
+            result.append(r)
             # what ngspice would run of an untrusted dependency (.control, *#, a file outside the PDK): refused before
             # any job is looked up or made. A netlist given as text is the caller's own
             trust.check_netlist(r, untrusted=trust.untrusted_dirs(prj.path), pdk_root=prj.pdk.root if prj.pdk else None,
@@ -790,7 +810,15 @@ class Server:
                    **({"extracted": {k: st.get("mode") for k, st in views.items()}} if views else {}),
                    **({"save": sorted(set(save))} if saved and save else {}),
                    **({"save": "all"} if save_all else {})}
-        inp = provenance.inputs([entry, *ext_entries], prj.pdk, ["ngspice"], None, options)
+        # what ngspice reads besides the netlist, by hash: the original files its .lib / .include lines name (not the
+        # reduced copy it gets), transitively, and the OSDI models; and the profile's model fields
+        # relative paths from where ngspice runs: a job's own directory under runs/ (not made yet)
+        read = modellib.files_read(text, self.jobs.runs_dir(prj.path) / ".next")
+        if prj.pdk and prj.pdk.profile.osdi:
+            read += [str(f) for f in prj.pdk.osdi_files()]
+        inp = provenance.inputs([entry, *ext_entries], prj.pdk, ["ngspice"], None, options,
+                                models=provenance.model_entries(read),
+                                profile=provenance.profile_fields(prj.pdk, provenance.SIM_PROFILE) if prj.pdk else None)
         if reuse and (job := self.reusable(project, inp)) is not None:
             return job
         used = [{"cell": k, "mode": st.get("mode"), "job": st["id"]} for k, st in views.items()]
@@ -803,7 +831,7 @@ class Server:
                                  # who started it (cancel_job); one that reads this changeset is not its writer
                                  # (reader: mcp.Sessions._seed)
                                  **live.started_by(),
-                                 **provenance.meta(inp)}, self._osdi(prj),
+                                 **provenance.meta(inp, self._about(project, inp, result, read))}, self._osdi(prj),
                                 timeout_s=timeout_s,
                                 models=(prj.pdk.root / profile.model_lib, prj.pdk.id) if profile and profile.model_lib else None)
 
@@ -945,6 +973,9 @@ class Server:
                                  # a target's density / antenna runs of the same deck are other checks
                                  and ((j.get("inputs") or {}).get("options") or {}).get("decks") == run.inputs["options"].get("decks")),
                                 None)
+            if prev and not same and prev.get("inputs") and prev.get("key") == provenance.key(
+                    {k: v for k, v in run.inputs.items() if k in prev["inputs"] or k not in provenance.LATER}):
+                same = prev                              # recorded before models / profile were: the same run
             if prev:
                 if same:
                     changed = []
@@ -1904,7 +1935,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
 
     @app.post("/api/p/{project}/pdk")
     def set_pdk(project: str, req: SetPdk):
-        """Pins the project to another PDK version (e.g. from an unsupported one to pcell.SUPPORTED)."""
+        """Pins the project to another PDK version (e.g. from an unsupported one to the one Undine is tested with)."""
         try:
             if "~" in project:
                 raise ValueError("the PDK is changed in the project, not in a changeset preview")

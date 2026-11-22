@@ -24,7 +24,8 @@ compared by area and perimeter. So the reference netlist has a MIM as that capac
 with `A = W * L` and `P = 2 * (W + L)` per unit (um) and `m` from `MF`. LVS then compares the capacitors' total area
 and perimeter and their nets: two 2 x 3 um units match `W=2 L=3 MF=2`; one unit, units of another perimeter (2.4 x
 2.5 um) or the capacitor on other nets do not. The rule is the PDK profile's `lvs_elements`, which can rename a model
-and compute parameters (`server/undine/pdks/pdkprofile.py`).
+and compute parameters by a named formula (`profile.toml` under `server/undine/data/profiles/`, the formula
+`mim_area_perimeter` in `server/undine/pdks/formulas.py`).
 
 **Standard cells in LVS (sky130).** A layout built from the PDK's standard cells (a LibreLane macro imported, or cells
 placed by hand) is checked against a schematic of them. The schematic's netlist calls the cells without defining

@@ -38,8 +38,10 @@ its layers, decks or models, and the features that need them are unavailable.
 ./setup.sh pdk
 ```
 
-It runs `ciel enable --pdk-family sky130 8afc8346a57fe1ab7934ba5a6056ea8b43078e71`, which downloads the PDK into
-`$PDK_ROOT` (by default `~/.ciel`) and enables it. The step is skipped when that version is already installed, and
+It runs `ciel enable --pdk-family sky130` with the version Undine is tested with, which its built-in
+[profile](#pdk-profiles) lists (`pixi run python -m undine pdk tested sky130` prints it:
+`8afc8346a57fe1ab7934ba5a6056ea8b43078e71`). That downloads the PDK into `$PDK_ROOT` (by default `~/.ciel`) and
+enables it. The step is skipped when that version is already installed, and
 `./setup.sh` runs its check afterwards.
 
 For another version, give the open_pdks commit in `PDK_VERSION`:
@@ -51,26 +53,34 @@ PDK_VERSION=<open_pdks commit> ./setup.sh pdk
 
 !!! note "`pixi run pdk`"
 
-    `pixi run pdk` is a plain `ciel enable` of the tested SKY130 version. It does not read `PDK_VERSION` or
-    `PDK_FAMILY`, does not skip an installed version, and runs no check afterwards. Use `./setup.sh pdk` for
-    anything else.
+    `pixi run pdk` (`python -m undine pdk enable sky130`) is a plain `ciel enable` of the tested SKY130 version. It
+    does not read `PDK_VERSION` or `PDK_FAMILY`, does not skip an installed version, and runs no check afterwards.
+    Use `./setup.sh pdk` for anything else.
 
 ### GF180MCU and IHP SG13G2
 
-Install them at the tested versions with ciel:
+Install them at the tested versions with ciel (`./setup.sh pdk` and `pdk enable` take the version from the family's
+built-in profile when none is given):
+
+=== "setup.sh"
+
+    ```sh
+    PDK_FAMILY=gf180mcu ./setup.sh pdk
+    PDK_FAMILY=ihp-sg13 ./setup.sh pdk
+    ```
+
+=== "pdk enable"
+
+    ```sh
+    pixi run python -m undine pdk enable gf180mcu
+    pixi run python -m undine pdk enable ihp-sg13
+    ```
 
 === "ciel"
 
     ```sh
     pixi run ciel enable --pdk-family gf180mcu 792ef67037d74c8c51811eab3ce23cf793491296
     pixi run ciel enable --pdk-family ihp-sg13 89d42ee6d2fd9b50b86a1aada6fee6673c3e6008
-    ```
-
-=== "setup.sh"
-
-    ```sh
-    PDK_FAMILY=gf180mcu PDK_VERSION=792ef67037d74c8c51811eab3ce23cf793491296 ./setup.sh pdk
-    PDK_FAMILY=ihp-sg13 PDK_VERSION=89d42ee6d2fd9b50b86a1aada6fee6673c3e6008 ./setup.sh pdk
     ```
 
 The `ihp-sg13` family installs both SG13G2 and SG13CMOS5L. Then:
@@ -480,14 +490,29 @@ family.
 Undine has profiles for SKY130, GF180MCU, IHP SG13G2 and IHP SG13CMOS5L. The first three have been run against the
 tested PDK versions; SG13CMOS5L's has not. A PDK of a family without a profile gets the generic one, *Unknown
 process*, which knows none of this: such a PDK is listed and a project can be pinned to it, but DRC, LVS, simulation
-models and PCells are unavailable. Profiles are part of Undine, not of the PDK, so a new profile comes with a new
-version of Undine. [Architecture and development](../development.md) shows where the profiles sit in the server.
+models and PCells are unavailable.
+
+A profile is data: a `profile.toml` in a **profile package**, one per ciel family (`profile_sky130`,
+`profile_gf180mcu`, and `profile_ihp_sg13` with both IHP processes). Each also lists the PDK versions Undine is tested
+with: `./setup.sh pdk`, `pixi run pdk` and `pdk enable` install the first of them, and a project created with a bare
+PDK name (`sky130A`) gets that version when it is installed. To print it:
+
+```sh
+pixi run python -m undine pdk tested gf180mcu         # 792ef67037d74c8c51811eab3ce23cf793491296
+```
+
+Undine reads only what it knows in a profile: an unknown key, a computed value other than the formulas and stack
+generators Undine has, or a path outside the PDK is refused. For now the profile packages are built into Undine
+(`server/undine/data/profiles/`), so a new profile comes with a new version of Undine. Whether Undine's tests have run
+a profile (the *verified* flag of the profile, not a PDK state) is Undine's own record, not the profile's.
+[Architecture and development](../development.md) shows where the profiles sit in the server.
 
 !!! note "Planned"
 
-    A package system for libraries and PDKs, with profiles published as data (and with them the hashes that make a
-    PDK *verified*), is designed in [Packages and PDKs](../design/packages.md); [Phases](../design/packages.md#phases)
-    says what exists today. Pinning a PDK by its files and fetching it through ciel are there now.
+    A package system for libraries and PDKs, with profiles published as packages in the index (and with them the
+    hashes that make a PDK *verified*), is designed in [Packages and PDKs](../design/packages.md);
+    [Phases](../design/packages.md#phases) says what exists today. Pinning a PDK by its files and fetching it through
+    ciel are there now.
 
 ## See also
 

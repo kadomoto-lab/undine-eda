@@ -1,0 +1,316 @@
+# What Undine needs to know about SkyWater SKY130 (docs/design/packages.md, PDK profiles; the keys are the fields of
+# server/undine/pdks/pdkprofile.py's Profile, read by profiledata.py). Whether Undine's tests ran it (verified) and
+# whether run_checks runs Magic DRC (magic_drc) are Undine's own record, in pdks/tested.py.
+schema = 1
+undine = ">=0.1.0"
+family = "sky130"
+
+[[profile]]
+name = "sky130"
+label = "SkyWater SKY130"
+variants = ["sky130A", "sky130B"]
+metals = ["li1", "met1", "met2", "met3", "met4", "met5"]
+max_metal = "met5"
+drc_klayout = ["sky130?_mr.drc"]
+drc_extra = ["met_min_ca_density.lydrc", "pin_label_purposes_overlapping_drawing.rb.drc", "zeroarea.rb.drc"]
+lvs_klayout = ["sky130.lvs"]
+# the SPICE reader reads W=2 as 2 m (= 2e6 um); the deck's scale switch brings the layout side to the same units
+lvs_options = { lvs_sub = "VSS", scale = true }
+magic_rc = "{name}.magicrc"
+netgen_setup = "{name}_setup.tcl"
+pcells = true
+erc_tap = [["tap"]]
+net_labels = [
+    ["licon1", "li1.label"], ["mcon", "met1.label"], ["via", "met2.label"], ["via2", "met3.label"],
+    ["via3", "met4.label"], ["via4", "met5.label"],
+]
+# Magic's drc(full) where it is stricter than the KLayout deck (capm.11: 1.34 um from a capm to another plate's
+# metal3, which the mr deck checks as 0.5 um); the bottom plates of capm.2b are capm + 0.14 um, 1.2 um apart
+space = [
+    { a = "diff", b = "diff", um = 0.3, rule = "difftap.3, difftap.15a (MV)" },
+    { a = "tap", b = "tap", um = 0.27, rule = "difftap.3" },
+    { a = "diff", b = "tap", um = 0.37, rule = "difftap.15b (MV)" },
+    { a = "poly", b = "poly", um = 0.21, rule = "poly.2" },
+    { a = "npc", b = "npc", um = 0.27, rule = "npc.2" },
+    { a = "licon1", b = "licon1", um = 0.17, rule = "licon.2" },
+    { a = "li1", b = "li1", um = 0.17, rule = "li.3" },
+    { a = "mcon", b = "mcon", um = 0.19, rule = "ct.2" },
+    { a = "met1", b = "met1", um = 0.14, rule = "m1.2" },
+    { a = "via", b = "via", um = 0.17, rule = "via.2" },
+    { a = "met2", b = "met2", um = 0.14, rule = "m2.2" },
+    { a = "met3", b = "met3", um = 0.3, rule = "m3.2" },
+    { a = "met4", b = "met4", um = 0.3, rule = "m4.2" },
+    { a = "met5", b = "met5", um = 1.6, rule = "m5.2" },
+    { a = "nwell", b = "nwell", um = 1.27, rule = "nwell.2a", merge = true },
+    { a = "diff", b = "nwell", um = 0.34, rule = "difftap.9", unless = "nwell" },
+    { a = "tap", b = "nwell", um = 0.13, rule = "difftap.11", unless = "nwell" },
+    { a = "hvi", b = "hvi", um = 0.7, rule = "hvi.5", merge = true },
+    { a = "nwell", b = "hvi", um = 0.7, rule = "hvi.5", unless = "hvi" },
+    { a = "capm", b = "capm", um = 1.48, rule = "capm.2b: bottom plates 1.2 apart" },
+    { a = "capm", b = "met3", um = 1.34, rule = "capm.11 (Magic): to another plate's metal3" },
+    { a = "cap2m", b = "cap2m", um = 1.48, rule = "cap2m.2b: bottom plates 1.2 apart" },
+    { a = "cap2m", b = "met4", um = 1.34, rule = "cap2m.11 (Magic): to another plate's metal4" },
+]
+fill = ["nwell", "nsdm", "psdm", "lvtn", "hvi", "hvntm"]
+# a ring 0.41 um wide: licon 0.17 with 0.12 of tap around it (licon.5); units 0.4 um inside it (their implant clear
+# of the ring's); the n-tap 0.18 um inside the well (diff/tap.10), 0.33 um thick-oxide (diff/tap.19). The PDK's
+# guard_ring_gen is not used: Magic reads its n-tap ring as overlapping layers
+ring = { width = 0.41, space = 0.4, conductor = "li1", well = [0.18, 0.33] }
+model_vars = [
+    ["SKYWATER_MODELS", "libs.tech/ngspice"], ["SKYWATER_STDCELLS", "libs.ref/sky130_fd_sc_hd/spice"],
+    ["SKYWATER_STDCELLS_HD", "libs.ref/sky130_fd_sc_hd/spice"],
+]
+model_lib = "libs.tech/ngspice/sky130.lib.spice"
+corners = ["tt", "ss", "ff", "sf", "fs"]
+corner_symbol = "sky130_fd_pr/corner.sym"
+mismatch_section = "{corner}_mm"                       # MC_MM_SWITCH=1 (tt_mm ...): MOSFETs, MIM and MOM capacitors
+pin_label_layers = ["li1.label", "met1.label", "met2.label", "met3.label", "met4.label", "met5.label"]
+# sky130_fd_sc_hd__nand2_1; the sky130_ef_sc_hd__ cells (fill, decap) are in the sky130_fd_sc_hd library too
+stdcells = [['sky130_(?:fd|ef)_sc_([a-z]+)__\w+', 'sky130_fd_sc_\1']]
+# the functional models (no specify blocks, no timing checks) without delay: UNIT_DELAY empty
+stdcell_verilog = ["libs.ref/{lib}/verilog/primitives.v", "libs.ref/{lib}/verilog/{lib}.v"]
+stdcell_verilog_defines = ["FUNCTIONAL", "UNIT_DELAY="]
+stdcell_tie = "sky130_fd_sc_hd__conb_1 (HI: 1, LO: 0)"
+
+[profile.layers]
+poly = [66, 20]
+diff = [65, 20]
+tap = [65, 44]
+licon1 = [66, 44]
+li1 = [67, 20]
+mcon = [67, 44]
+met1 = [68, 20]
+via = [68, 44]
+met2 = [69, 20]
+via2 = [69, 44]
+met3 = [70, 20]
+via3 = [70, 44]
+met4 = [71, 20]
+via4 = [71, 44]
+met5 = [72, 20]
+nwell = [64, 20]
+nsdm = [93, 44]
+psdm = [94, 20]
+"li1.label" = [67, 5]
+"met1.label" = [68, 5]
+"met2.label" = [69, 5]
+"met3.label" = [70, 5]
+"met4.label" = [71, 5]
+"met5.label" = [72, 5]
+"met4.pin" = [71, 16]
+# the rest of what sky130's devices draw (MIM plates, thick-oxide and Vt implants, the poly-contact implant, marker
+# layers), so that get_device_geometry names them
+capm = [89, 44]
+cap2m = [97, 44]
+npc = [95, 20]
+hvi = [75, 20]
+hvntm = [125, 20]
+lvtn = [125, 44]
+"poly.res" = [66, 13]
+"diff.res" = [65, 13]
+hvtp = [78, 44]
+hvtr = [18, 20]
+dnwell = [64, 18]
+pwell = [64, 44]
+rpm = [86, 20]
+urpm = [79, 20]
+ldntm = [11, 44]
+pad = [76, 20]
+"poly.label" = [66, 5]
+"areaid.sc" = [81, 4]
+"areaid.ce" = [81, 2]
+"areaid.de" = [81, 23]
+"areaid.ed" = [81, 19]
+"areaid.lvt" = [81, 60]
+prBoundary = [235, 4]
+"li1.pin" = [67, 16]
+"met1.pin" = [68, 16]
+"met2.pin" = [69, 16]
+"met3.pin" = [70, 16]
+"met5.pin" = [72, 16]
+"pwell.label" = [64, 59]
+
+[profile.drc_options]
+"sky130?_mr.drc" = { feol = true, beol = true, offgrid = true }
+
+[[profile.mims]]
+model = "sky130_fd_pr__cap_mim_m3_1"
+cap = [89, 44]
+bottom = "met3"
+via = "via3"
+top = "met4"
+planes = ["metal4", "metal3"]
+shield = ["*mimcap", "cap1"]
+
+[[profile.mims]]
+model = "sky130_fd_pr__cap_mim_m3_2"
+cap = [97, 44]
+bottom = "met4"
+via = "via4"
+top = "met5"
+planes = ["metal5", "metal4"]
+shield = ["*mimcap2", "cap2"]
+
+# open_pdks 2025+: gdsfactory 8 on kfactory 0.2x (the older pymacros/cells generation is not run, see pcell.py). Its
+# mim_cap (as Magic's generator) clamps each side of a cap_mim_m3_1 to 2 um, where capm.1 allows 1 um: a CDAC's
+# 1.17 um unit would come out 2 x 2 um, so the clamp is lowered to the rule (the drawing is clean in both decks from
+# 1 um). cap_mim_m3_2 keeps its 2.16 um: its 0.8 um via4 needs it
+[profile.pcell_lib]
+paths = ["python"]
+module = "cells"
+library = "skywater130"
+init = "sky130"
+limits = [["cap", "l_mim", 1.0]]
+
+[profile.strap]
+via = 0.15
+enc1 = [0.085, 0.055]
+enc2 = [0.085, 0.055]
+m2_space = 0.14
+
+# the MIM symbols write a call (XC1 c0 c1 sky130_fd_pr__cap_mim_m3_1 W=.. L=.. m=MF, um) that the deck's reader leaves
+# a call; the deck extracts the plates (met3 / capm, met4 / cap2m) as capacitors of the model's name, compared by area
+# and perimeter (the formula mim_area_perimeter, server/undine/pdks/formulas.py)
+[[profile.lvs_elements]]
+model = "(sky130_fd_pr__)?cap_mim_m3_1"
+letter = "C"
+to = "sky130_fd_pr__model__cap_mim"
+params = "mim_area_perimeter"
+
+[[profile.lvs_elements]]
+model = "(sky130_fd_pr__)?cap_mim_m3_2"
+letter = "C"
+to = "sky130_fd_pr__model__cap_mim_m4"
+params = "mim_area_perimeter"
+
+# their SPICE calls sky130_fd_pr__nfet_01v8 / special_nfet_01v8 / pfet_01v8_hvt with w=650000u (scale 1e-6); conb_1's
+# poly resistors (res_generic_po) have no resistor marker, the deck joins their ends; a flop has two VNB labels on the
+# pwell (64/59) that only the deck's inductors and vpp capacitors connect to (must-connect error otherwise)
+[profile.stdcell_lvs]
+mos = 'sky130_fd_pr__(special_)?[np]fet\w*'
+short = 'sky130_fd_pr__res_generic_\w+'
+rename = [["special_nfet", "nfet"]]
+scale = 1e-06
+drop_labels = ["pwell.label"]
+strip = ["diff", "poly"]
+
+# the periphery rules (SkyWater's rule names, as KLayout's mr deck and Magic's drc(full) check them): poly.1a / 2 / 4
+# / 5, li.1 / 3 / 6, m1.1 / 2 / 3b / 6, m2.*, m3.1 / 2 / 3cd / 6, m4.*, m5.*; licon.1 / 2 / 5a / 5c / 7 / 8 / 8a / 15
+# (npc around a poly contact), li.5, ct.1 / 2 / 4, m1.4 / 5, via.1a / 2 / 4a / 5a, m2.4 / 5, via2.1a / 2 / 4 / 5,
+# m3.4, via3.1 / 2 / 4 / 5, m4.3, via4.1 / 2 / 4, m5.3; diff/tap.3 / 9 / 10 / 11, nsd / psd.5a / 1 / 2, nwell.1 / 2a
+[profile.stack]
+diff = "diff"
+tap = "tap"
+poly = "poly"
+well = "nwell"
+conductors = [
+    { name = "poly", width = 0.15, space = 0.21, away = [["diff", 0.075], ["tap", 0.055]] },
+    { name = "li1", width = 0.17, space = 0.17, area = 0.0561 },
+    { name = "met1", width = 0.14, space = 0.14, area = 0.083, wide = [[3.0, 0.28]] },
+    { name = "met2", width = 0.14, space = 0.14, area = 0.0676, wide = [[3.0, 0.28]] },
+    { name = "met3", width = 0.3, space = 0.3, area = 0.24, wide = [[3.0, 0.4]] },
+    { name = "met4", width = 0.3, space = 0.3, area = 0.24, wide = [[3.0, 0.4]] },
+    { name = "met5", width = 1.6, space = 1.6, area = 4.0 },
+]
+plates = [{ name = "capm", metal = "met3", cut = "via3" }, { name = "cap2m", metal = "met4", cut = "via4" }]
+
+[[profile.stack.cuts]]
+name = "licon1"
+below = "diff"
+above = "li1"
+size = 0.17
+space = 0.17
+enc_below = [0.04, 0.06]
+enc_above = [0.0, 0.08]
+rules = "licon.1, licon.2, licon.5a, licon.5c, licon.11, li.5"
+away = [["poly", 0.055]]
+
+[[profile.stack.cuts]]
+name = "licon1"
+below = "tap"
+above = "li1"
+size = 0.17
+space = 0.17
+enc_below = [0.04, 0.12]
+enc_above = [0.0, 0.08]
+rules = "licon.1, licon.2, licon.7, li.5"
+
+[[profile.stack.cuts]]
+name = "licon1"
+below = "poly"
+above = "li1"
+size = 0.17
+space = 0.17
+enc_below = [0.05, 0.08]
+enc_above = [0.0, 0.08]
+rules = "licon.1, licon.2, licon.8, licon.8a, licon.14, licon.15, li.5, npc.1, npc.2, licon.13"
+extra = [["npc", 0.1, 0.27, 0.27]]
+away = [["diff", 0.19], ["tap", 0.19]]
+
+[[profile.stack.cuts]]
+name = "mcon"
+below = "li1"
+above = "met1"
+size = 0.17
+space = 0.19
+enc_below = [0.0, 0.0]
+enc_above = [0.03, 0.06]
+rules = "ct.1, ct.2, ct.4, m1.4, m1.5"
+
+[[profile.stack.cuts]]
+name = "via"
+below = "met1"
+above = "met2"
+size = 0.15
+space = 0.17
+enc_below = [0.055, 0.085]
+enc_above = [0.055, 0.085]
+rules = "via.1a, via.2, via.4a, via.5a, m2.4, m2.5"
+
+[[profile.stack.cuts]]
+name = "via2"
+below = "met2"
+above = "met3"
+size = 0.2
+space = 0.2
+enc_below = [0.04, 0.085]
+enc_above = [0.065, 0.065]
+rules = "via2.1a, via2.2, via2.4, via2.5, m3.4"
+
+[[profile.stack.cuts]]
+name = "via3"
+below = "met3"
+above = "met4"
+size = 0.2
+space = 0.2
+enc_below = [0.06, 0.09]
+enc_above = [0.065, 0.065]
+rules = "via3.1, via3.2, via3.4, via3.5, m4.3"
+
+[[profile.stack.cuts]]
+name = "via4"
+below = "met4"
+above = "met5"
+size = 0.8
+space = 0.8
+enc_below = [0.19, 0.19]
+enc_above = [0.31, 0.31]
+rules = "via4.1, via4.2, via4.4, m5.3"
+
+[profile.stack.taps]
+implant = { ptap = "psdm", ntap = "nsdm" }
+implant_enc = 0.125
+implant_width = 0.38
+implant_space = 0.38
+well_enc = 0.18
+space = 0.27
+well_space = 0.13
+well_well = 1.27
+well_ndiff = 0.34
+latchup = 15.0                                         # LU.2 / LU.3
+
+# open_pdks 2025 (8afc834): the version Undine is tested with, which ./setup.sh and `pixi run pdk` install
+[[pdk]]
+commit = "8afc8346a57fe1ab7934ba5a6056ea8b43078e71"
+tested = true
+license = "Apache-2.0"

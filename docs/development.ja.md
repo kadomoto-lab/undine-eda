@@ -21,7 +21,10 @@
 (`xschem._py_parse` … `schematic._py_extract`)、`server/tests/test_core.py` が両者の結果が同じであることを確かめています。
 
 プロセスに固有のこと(レイヤー番号、ルールデッキとそのスイッチ、Magic / Netgen の設定、モデルとコーナー、PCell ライブラリと回路図の
-デバイスとの対応)は、PDK のファミリーごとに `undine/pdks/pdkprofile.py` にまとめて書いてあり、サーバーのほかの部分はそこから読みます。
+デバイスとの対応)は、プロセスごとにプロファイルとして 1 か所に書いてあります。`undine/data/profiles/<package>/profile.toml`(ciel の
+ファミリーごとのプロファイルのパッケージ)にあるデータで、`undine/pdks/profiledata.py` が `undine/pdks/pdkprofile.py` の dataclass に
+読み込み、サーバーのほかの部分はそこから読みます。プロファイルが名前で示す少数の計算(式とスタックの生成関数)は
+`undine/pdks/formulas.py` の関数です。
 
 ## リポジトリの構成
 

@@ -34,7 +34,7 @@ UNDINE_TOOLS = "$CONDA_PREFIX"                   # Undine looks for ngspice, xsc
 
 [tasks]
 web = { cmd = "npm ci --no-audit --no-fund && npm run build", cwd = "web" }
-pdk = "ciel enable --pdk-family sky130 8afc8346a57fe1ab7934ba5a6056ea8b43078e71"   # = pcell.SUPPORTED
+pdk = "python -m undine pdk enable sky130"   # ciel enable the commit the built-in profile is tested with
 serve = "python -m undine serve"
 ngspice = "bash scripts/ngspice.sh"     # ngspice with OSDI into this environment (skipped when it is there)
 osdi = "bash scripts/osdi.sh"           # compile IHP's Verilog-A models with OpenVAF (skipped when they are there)

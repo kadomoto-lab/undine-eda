@@ -1,0 +1,12 @@
+# Undine's PDK profile of the ihp-sg13 family (IHP SG13G2 and SG13CMOS5L, which ciel installs together): what Undine
+# needs to know about the processes, as data, in profile.toml (docs/design/packages.md, PDK profiles). Built into
+# Undine as the fallback, and the same files the package profile_ihp_sg13 publishes.
+[package]
+name = "profile_ihp_sg13"
+version = "1.0.0"
+description = "Undine's PDK profile of the ihp-sg13 family (IHP SG13G2 and SG13CMOS5L)"
+license = "Apache-2.0"
+repository = "https://github.com/kadomoto-lab/undine-eda.git"
+
+[files]
+include = ["profile.toml"]

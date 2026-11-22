@@ -188,6 +188,8 @@ in either order, and refuses (with the reason) a merge whose requirements and lo
 merged lock in the project from the store. Nothing is fetched at adopt: a dependency whose files the store does not
 hold (nor the project's install) is refused before anything is written (*not in the store: fetch it first*). An
 installation that fails anyway is said in the answer (`deps_warning`) with the adopt done; `lib sync` installs it later.
+The adopt never waits for another operation on the project's dependencies (a `pkg add` fetching on the command line):
+the installation is then left pending (`deps_pending`) for `lib sync` or the next sync.
 If Undine stops between the merge and the installation, it installs when it starts again.
 
 The library browser's **Add**, **Update** and **Remove**, and the PDK badge's move to another PDK, each make such an
@@ -272,7 +274,9 @@ are kept as they are, since what it made may be used elsewhere since; the answer
 changeset made stays in `project.json` while it still has files, so the cells kept there, and what you added to it
 since, stay part of the project. A dependency the changeset added goes (its `project.json` entry, its lock entry
 and its installed files), even when cells of the design placed since still use it: the answer names them
-(`deps_dropped`, and `deps_warning`), so you can place something else there or add the dependency again. The log gets
+(`deps_dropped`, and `deps_warning`), so you can place something else there or add the dependency again. An
+`undine.lock` the changeset created (its first dependency, or a PDK move in a project with no lock) goes too, unless
+it changed since (a conflict). The log gets
 a `merge` record naming the revert. It is committed (`Revert <id>: <changeset title>`, on top of HEAD) or left uncommitted as an
 apply is, open tabs follow it as they follow an adopt, and it needs no working copy: the commits are kept.
 

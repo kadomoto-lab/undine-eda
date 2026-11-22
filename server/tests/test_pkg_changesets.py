@@ -465,9 +465,9 @@ def test_one_click_add_applied(tmp_path):
     assert r.status_code == 200 and r.json()["result"]["ok"], r.text
     assert not deps.dep_dir(prj.path, "ip").exists() and "ip" not in srv.project("p").meta["libraries"]
     # an operation refused: its error, the changeset discarded
-    r = cl.post("/api/p/p/deps/changeset", json={"action": "remove", "name": "nothing"})
-    assert r.status_code == 400 and "not a library dependency" in r.json()["detail"]
-    assert [c["status"] for c in cs.list("p") if c["title"] == "Remove nothing"] == ["discarded"]
+    r = cl.post("/api/p/p/deps/changeset", json={"action": "add", "name": "gone", "git": str(tmp_path / "nothing")})
+    assert r.status_code == 400 and "is not a directory" in r.json()["detail"]
+    assert [c["status"] for c in cs.list("p") if c["title"] == "Add gone"] == ["discarded"]
     # the direct route works as before
     r = cl.post("/api/p/p/deps", json={"name": "ip", "git": str(ip), "subdir": "lib"})
     assert r.status_code == 200, r.text
@@ -539,4 +539,176 @@ def test_project_log_name_is_not_a_library_name(tmp_path):
     with pytest.raises(ValueError):
         srv.project("p").create_library(PROJECT_LOG)
     assert PROJECT_LOG not in cs._libs(cs._record("p", cs.create("p", "t", "", "user")["id"]))
+    shutil.rmtree(root)
+
+
+# ------------------------------------------------------------------ found by review
+
+
+def _no_lock(srv) -> None:
+    """The project without undine.lock (one made before locks, or whose lock was deleted)."""
+    (srv.project("p").path / deps.LOCK).unlink()
+
+
+def test_install_never_waits_for_a_held_dependency_lock(tmp_path):
+    """Another process (a CLI `pkg add` fetching for minutes) holds the project's dependency lock: the adopt does not
+    wait for it with the changesets' lock and the project's locks held. It is done, the install left pending for
+    the next sync."""
+    root, srv, cs = _setup(tmp_path)
+    meta = cs.create("p", "add ip", "", "user")
+    _add(cs, meta["id"], "ip", _repo(tmp_path / "ip", {"buf": SYM}), tmp_path)
+    prj = srv.project("p")
+    (prj.path / ".undine").mkdir(exist_ok=True)
+    holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
+                               "f = open(sys.argv[1], 'a'); fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True)\n"
+                               "time.sleep(120)\n", str(prj.path / ".undine" / "deps.lock")],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        out: dict = {}
+        t = threading.Thread(target=lambda: out.update(cs.apply("p", meta["id"], "user")["applied"]))
+        t.start()
+        t.join(60)
+        assert not t.is_alive(), "the adopt waited for the dependency lock"
+        assert srv.changeset_lock.acquire(blocking=False)
+        srv.changeset_lock.release()
+        assert out["deps_pending"] is True and "not installed yet" in out["deps_warning"]
+        assert "ip" in srv.project("p").meta["libraries"] and not deps.dep_dir(prj.path, "ip").exists()
+    finally:
+        holder.kill()
+        holder.wait()
+    deps.sync(srv.project("p"), offline=True)                              # the next sync installs it
+    assert (deps.dep_dir(prj.path, "ip") / "buf.sym").is_file()
+    shutil.rmtree(root)
+
+
+def test_pdk_set_prepares_outside_the_locks(tmp_path, monkeypatch):
+    """set_pdk's slow part (the tools' versions with no lock, a format 2 pin hashed) runs before the guard takes the
+    server's and the changesets' locks."""
+    pdks = _pdks(tmp_path / "pdks")
+    root, srv, cs = _setup(tmp_path, pdks)
+    _no_lock(srv)
+    meta = cs.create("p", "pdk", "", "user")
+    seen: list[dict] = []
+    real = deps.environment
+
+    def probe(*a, **kw):
+        got: dict = {}
+
+        def look():
+            for name, lock in (("server", srv.lock), ("changesets", srv.changeset_lock)):
+                got[name] = lock.acquire(blocking=False)
+                if got[name]:
+                    lock.release()
+        t = threading.Thread(target=look)
+        t.start()
+        t.join()
+        seen.append(got)
+        return real(*a, **kw)
+    monkeypatch.setattr(deps, "environment", probe)
+    cs.pdk_set("p", meta["id"], "fakeA")
+    assert seen and all(g == {"server": True, "changesets": True} for g in seen), seen
+    cs.discard("p", meta["id"])
+    shutil.rmtree(root)
+
+
+def test_restore_past_a_restore_that_undid_a_pdk_set_drops_the_cached_layouts(tmp_path):
+    pdks = _pdks(tmp_path / "pdks")
+    root, srv, cs = _setup(tmp_path, pdks)
+    meta = cs.create("p", "pdk", "", "user")
+    cid, P = meta["id"], meta["preview"]
+    g1 = cs.pdk_set("p", cid, "fakeB")["op"]["gseq"]
+    assert srv.db(P, "l").pdk.id == _id(pdks, "fakeB")
+    cs.restore("p", cid, 0)
+    assert srv.db(P, "l").pdk is None
+    cs.restore("p", cid, g1)                       # back past the restore: its record has no "pdk" key
+    assert srv.project(P).meta["pdk"] == _id(pdks, "fakeB")
+    assert srv.db(P, "l").pdk.id == _id(pdks, "fakeB")
+    cs.discard("p", cid)
+    shutil.rmtree(root)
+
+
+def test_restore_in_a_working_copy_with_no_lock_makes_none(tmp_path):
+    root, srv, cs = _setup(tmp_path)
+    _no_lock(srv)
+    meta = cs.create("p", "add ip", "", "user")
+    W = srv.project(meta["preview"]).path
+    before = _files(W)
+    assert before[1] is None
+    _add(cs, meta["id"], "ip", _repo(tmp_path / "ip", {"buf": SYM}), tmp_path)
+    assert (W / deps.LOCK).is_file()
+    cs.restore("p", meta["id"], 0)
+    assert _files(W) == before                                             # no lock, nothing installed
+    cs.discard("p", meta["id"])
+    shutil.rmtree(root)
+
+
+def test_revert_takes_back_a_lock_the_changeset_made(tmp_path):
+    """Reverting a one-click Set PDK, or the first add, in a project with no lock leaves no lock (a revert keeps the
+    files a changeset added, but not undine.lock)."""
+    pdks = _pdks(tmp_path / "pdks")
+    root, srv, cs = _setup(tmp_path, pdks)
+    _no_lock(srv)
+    cl = TestClient(create_app(srv, None))
+    r = cl.post("/api/p/p/deps/changeset", json={"action": "pdk", "pdk": "fakeB"})
+    assert r.status_code == 200, r.text
+    prj = srv.project("p")
+    assert prj.meta["pdk"] == _id(pdks, "fakeB") and (prj.path / deps.LOCK).is_file()
+    reverted = cs.revert("p", r.json()["changeset"], "user")["reverted"]
+    prj = srv.project("p")
+    assert prj.meta.get("pdk") is None and not (prj.path / deps.LOCK).exists()
+    assert deps.LOCK not in reverted["kept"] and not reverted.get("deps_warning")
+    # the first dependency added the same way, reverted
+    ip = _repo(tmp_path / "ip", {"buf": SYM})
+    r = cl.post("/api/p/p/deps/changeset", json={"action": "add", "name": "ip", "git": str(ip), "subdir": "lib"})
+    assert r.status_code == 200, r.text
+    reverted = cs.revert("p", r.json()["changeset"], "user")["reverted"]
+    prj = srv.project("p")
+    assert not (prj.path / deps.LOCK).exists() and not deps.dep_dir(prj.path, "ip").exists()
+    assert not reverted.get("deps_warning")
+    shutil.rmtree(root)
+
+
+def test_revert_refuses_a_lock_it_made_and_the_project_changed_since(tmp_path):
+    root, srv, cs = _setup(tmp_path)
+    _no_lock(srv)
+    meta = cs.create("p", "add ip", "", "user")
+    _add(cs, meta["id"], "ip", _repo(tmp_path / "ip", {"buf": SYM}), tmp_path)
+    cs.apply("p", meta["id"], "user")
+    prj = srv.project("p")
+    deps.add(prj, "amp", str(_repo(tmp_path / "amp", {"amp": SYM})), None, "lib")      # since, in the project
+    with pytest.raises(MergeConflict) as e:
+        cs.revert("p", meta["id"], "user")
+    assert deps.LOCK in {f["path"] for f in e.value.files}
+    assert set(deps.read_lock(prj.path)["libraries"]) == {"ip", "amp"}
+    shutil.rmtree(root)
+
+
+def test_one_click_refusals_open_no_changeset_nor_repository(tmp_path):
+    pdks = _pdks(tmp_path / "pdks")
+    root, srv, cs = _setup(tmp_path, pdks)
+    cl = TestClient(create_app(srv, None))
+    prj = srv.project("p")
+    for body, code in (({"action": "add", "name": "ip"}, 400),
+                       ({"action": "add", "name": "l", "git": str(tmp_path)}, 400),     # a library of the project
+                       ({"action": "add", "name": "bad/name", "git": str(tmp_path)}, 400),
+                       ({"action": "pdk"}, 400),
+                       ({"action": "pdk", "pdk": "nothing"}, 404),
+                       ({"action": "remove", "name": "nothing"}, 400),
+                       ({"action": "update", "name": "l"}, 400),
+                       ({"action": "move", "name": "ip"}, 400)):
+        r = cl.post("/api/p/p/deps/changeset", json=body)
+        assert r.status_code == code, (body, r.text)
+    assert not (prj.path / ".git").exists() and cs.list("p") == []
+    shutil.rmtree(root)
+
+
+def test_one_click_says_the_project_was_made_a_repository(tmp_path):
+    root, srv, cs = _setup(tmp_path)
+    cl = TestClient(create_app(srv, None))
+    r = cl.post("/api/p/p/deps/changeset", json={"action": "add", "name": "ip",
+                                                 "git": str(_repo(tmp_path / "ip", {"buf": SYM})), "subdir": "lib"})
+    body = r.json()
+    assert r.status_code == 200 and body["git_setup"] is True and body["first_commit"], r.text
+    assert "first_commit_note" in body
     shutil.rmtree(root)

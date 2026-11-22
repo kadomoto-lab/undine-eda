@@ -60,10 +60,12 @@ const stateText = (state?: string) => {
   return resolveText(state ? Object.hasOwn(states, state) ? states[state] : state : msg("review:check.unknown"));
 };
 
-function summaryLine(ops: ChangeOp[]): string {
+export function summaryLine(ops: ChangeOp[]): string {
   const n = ops.flatMap((o) => o.effects);
   const c = (k: string, d: string) => n.filter((e) => e.k === k && e.do === d).length;
+  const deps = n.filter((e) => e.k === "d").length;     // the project log's dependency operations
   const parts = [
+    deps && t("review:summary.dependencies", { count: deps }),
     (c("i", "mod") + c("o", "mod")) && t("review:summary.changed", { count: c("i", "mod") + c("o", "mod") }), (c("i", "add") + c("w", "add") + c("s", "add")) && t("review:summary.added", { count: c("i", "add") + c("w", "add") + c("s", "add") }),
     (c("i", "del") + c("w", "del") + c("s", "del")) && t("review:summary.removed", { count: c("i", "del") + c("w", "del") + c("s", "del") }),
   ].filter(Boolean);

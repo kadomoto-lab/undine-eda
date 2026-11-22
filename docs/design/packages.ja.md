@@ -598,8 +598,10 @@ fill、stack、`erc_tap` など)、欄を黙って落とす Undine は DRC や L
   (`not in the store: fetch it first`、deps.not_stored)。こうして採用は全か無かのまま、何も取得しません。マージしたファイルを
   書いた後(meta_lock を放し、ネットリストを読み直す前)、`undine.lock` か project.json の依存を変えたマージは、オフラインの
   deps.sync でそれをプロジェクトに install します。失敗は伝えるだけで(記録の `applied` / `reverted` の `deps_warning`)、
-  採用の失敗にはしません。merging.json が install を記すので、その前に止まったサーバーは次の起動で install します。revert も同じ
-  マージを通ります: changeset が加えた依存は外し、そのセルをまだ置いているプロジェクトのセルを示します(`deps_dropped`、
+  採用の失敗にはしません。merging.json が install を記すので、その前に止まったサーバーは次の起動で install します。install はプロジェクトの
+  依存関係のロックを待ちません(changeset のロックとプロジェクトのエディタ、レイアウト、ログを持ったまま動くため)。ほかの操作が
+  それを持っている間は、install を保留にし(`deps_pending`)、`lib sync` に任せます。revert も同じマージを通り、changeset が作った
+  `undine.lock` を消します: changeset が加えた依存は外し、そのセルをまだ置いているプロジェクトのセルを示します(`deps_dropped`、
   `deps_warning`。[決定事項](#decisions) 19)。
 - 人がライブラリブラウザで自分で **追加** しても、同じ操作を小さな changeset に作り、1 クリックで採用します。経路は 1 つです。
   *実装済み(段階 4、POST /api/p/{p}/deps/changeset):* ブラウザの追加(git のフォームと Packages のダイアログ)、更新、削除、

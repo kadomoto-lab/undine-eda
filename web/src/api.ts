@@ -126,7 +126,9 @@ export const PROJECT_LOG = "@project";
  * what the direct route returns; `deps` what the adopt installed, `deps_warning` what it could not (said, the adopt
  * done), `deps_dropped` the dependencies that went and the cells that still place them. */
 export interface DepChangeset<T> {
-  changeset: string; status: "applied" | "open"; result: T; git_setup?: boolean;
+  changeset: string; status: "applied" | "open"; result: T;
+  git_setup?: boolean; first_commit?: string | null; first_commit_note?: string | null;   // as a changeset's open
+  deps_pending?: boolean;          // another operation held the dependencies: `lib sync` installs them
   deps?: { name: string; action: string; commit: string | null; package?: string; warning?: string }[];
   deps_warning?: string;
   deps_dropped?: { name: string; used_by: string[] }[];

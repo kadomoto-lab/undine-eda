@@ -242,7 +242,8 @@ export function App() {
       const out = await api.setPdkInChangeset(project, to);       // a small changeset of its own, adopted
       await loadProject(project);
       await loadDeps(project);
-      toast(t("app:pdk.moved", { to }));
+      // in a changeset's preview the move goes into that changeset, not into the project
+      toast(out.status === "open" ? msg("app:pdk.movedInChangeset", { to, id: out.changeset }) : t("app:pdk.moved", { to }));
       adoptWarning(out);
     } catch (e) {
       // locked packages that do not accept that PDK: each with its chain and why, in a dialog
@@ -253,8 +254,16 @@ export function App() {
   };
 
   // the browser's own dependency operations each run in a small changeset adopted at once (api.*InChangeset)
-  /** What the adopt could not do (install from the store, a dependency still placed): said, the adopt done. */
-  const adoptWarning = (out: { deps_warning?: string }) => {
+  /** What else the one click did: the project made a git repository (and what is left of its first commit), and
+   * what the adopt could not do (install from the store, a dependency still placed), said with the adopt done. */
+  const adoptWarning = (out: Pick<DepChangeset<unknown>, "changeset" | "git_setup" | "first_commit" | "first_commit_note" | "deps_warning">) => {
+    if (out.git_setup) {
+      toast(out.first_commit ? msg("app:dependency.gitSetup", { commit: out.first_commit.slice(0, 7), id: out.changeset })
+        : msg("app:dependency.gitSetupHead", { id: out.changeset }));
+      if (out.first_commit && out.first_commit_note) {
+        toast(msg("history:firstCommit.indexNote", { commit: out.first_commit.slice(0, 7), why: out.first_commit_note }), "error");
+      }
+    }
     if (out.deps_warning) toast(msg("app:dependency.adoptedWarning", { warning: out.deps_warning }), "error");
   };
   /** An adopt the project refused (a conflict): the changeset stays open, and the person may review it. */

@@ -610,6 +610,26 @@ def _unapply(cur: dict, before: dict, after: dict) -> dict:
     return out
 
 
+def _sync_offline(srv, project: str, wait: bool) -> list[dict]:
+    """deps.sync of `project` (a working copy too) from the store only (offline), under the server's lock, with the
+    server's --dep-root / --dep-host; a project with no undine.lock is left with none (sync writes one: removed
+    again). `wait` False: deps.DepsBusy, nothing done, while another operation holds its dependency lock."""
+    prj = srv.project(project)
+    had_lock = (prj.path / deps.LOCK).is_file()
+    try:
+        return deps.sync(prj, guard=srv.lock, local_roots=srv.dep_roots, offline=True, hosts=srv.dep_hosts,
+                         wait=wait)
+    finally:
+        if not had_lock:
+            with deps.meta_lock(prj.path):
+                (prj.path / deps.LOCK).unlink(missing_ok=True)
+
+
+def _pdk_moved(effects: list[dict]) -> bool:
+    """Whether dependency effects ({k: "d"}) change project.json's PDK (a pdk_set, or a restore that undid one)."""
+    return any(e["before"]["project"].get("pdk") != e["after"]["project"].get("pdk") for e in effects)
+
+
 def _installed_names(d: Path) -> set[str]:
     """The local names installed in the project directory `d` (.undine/deps/<name>; not a staging or old one)."""
     root = d / deps.DEPS
@@ -1937,10 +1957,9 @@ class Changesets:
                 for lib in sorted({lib for lib, r in recs if r["gseq"] > to} - dropped):    # every library the restore covers says so
                     self.srv.oplog(work, lib).append({**m, "cell": None, "view": None, "effects": []})
                 if dep_undo:                                   # last: all or nothing, so nothing to put back after it
-                    deps.sync(self.srv.project(work), guard=self.srv.lock, local_roots=self.srv.dep_roots,
-                              offline=True, hosts=self.srv.dep_hosts, wait=False)
+                    _sync_offline(self.srv, work, wait=False)  # a state with no lock gets none
                     self.srv.deps_changed(work)
-                    if any(e.get("pdk") for e in dep_undo):   # its layouts and editors hold the PDK taken back
+                    if _pdk_moved(dep_undo):                   # its layouts and editors hold the PDK taken back
                         self._forget(project, cid)
         except Exception as e:
             self._forget(project, cid)                       # cached editors / layouts hold the failed state
@@ -2120,8 +2139,9 @@ class Changesets:
         project = self._real_of(project)
         meta, prj = self._writable(project, cid)
         guard = _DepGuard(self, project, cid, "pdk_set", {"pdk": spec}, actor, reason, "mod", None)
+        prepared = prj.prepare_pdk(spec)      # the tools' versions, a PDK hashed: not under the locks
         with guard:
-            move = prj.set_pdk(spec)
+            move = prj.set_pdk(spec, prepared)
         self._forget(project, cid)
         old, new = move
         return {"changeset": cid, "op": guard.public(), "old": old, "new": new, "created": move.created}
@@ -2758,24 +2778,25 @@ class Changesets:
         when local names went (a dependency the merge took out: the project's schematics that still place its
         cells), and "deps_warning" (said, not raised: the merge is written, `lib sync` installs it later) when the
         install failed, rewrote project.json or undine.lock, or a dropped dependency is still used. A project with
-        no lock gets none."""
+        no lock gets none. It never waits for the project's dependency lock (the caller holds the changesets' lock
+        and the project's editors, layouts and logs): while another operation holds it (a `pkg add` fetching), the
+        install is left pending, "deps_pending": true, for `lib sync` (or the next adopt that installs) to do."""
         prj = self.srv.project(project)
         d = prj.path
-        had_lock = (d / deps.LOCK).is_file()
         names = _installed_names(d)
         seen = self._digests(d, ("project.json", deps.LOCK))
         out: dict = {}
         warnings: list[str] = []
         try:
-            out["deps"] = deps.sync(prj, guard=self.srv.lock, local_roots=self.srv.dep_roots, offline=True,
-                                    hosts=self.srv.dep_hosts)
+            out["deps"] = _sync_offline(self.srv, project, wait=False)
+        except deps.DepsBusy:
+            out["deps_pending"] = True
+            warnings.append(f"the dependencies are not installed yet: another operation on them was running; "
+                            f"`lib sync {project}` (or the next sync) installs them")
         except Exception as e:
             warnings.append(f"the dependencies were not installed after the merge ({e}); install them with "
                             f"`lib sync {project}`")
         finally:
-            if not had_lock:
-                with deps.meta_lock(d):
-                    (d / deps.LOCK).unlink(missing_ok=True)
             self.srv.deps_changed(project)
         rewrote = [rel for rel, digest in seen.items() if _file_digest(d / rel) != digest]
         if rewrote:
@@ -2916,6 +2937,7 @@ class Changesets:
         d = prj.path
         plan = branches.plan_merge(d, base, theirs, keep_added=revert)
         if revert:
+            self._drop_added_meta(prj, meta, plan, base)
             self._keep_libraries(prj, meta, plan, base, theirs)
         logs = [p for p in plan["paths"] if gitmerge.kind_of(p) == "log"]
         plan["writes"] = {p: v for p, v in plan["writes"].items() if p not in logs}
@@ -2971,6 +2993,26 @@ class Changesets:
             plan["conflicts"].append({"path": deps.LOCK, "kind": "lock", "conflicts": [
                 {"id": f"resolve:{i}", "what": f"after merging project.json and {deps.LOCK}: {p}", "base": None,
                  "ours": None, "theirs": None, "taken": "ours", "resolved": False} for i, p in enumerate(new)]})
+
+    @staticmethod
+    def _drop_added_meta(prj, meta: dict, plan: dict, tip: str) -> None:
+        """A revert keeps the files the changeset added, but not undine.lock or project.json: a lock the changeset
+        made (its first dependency, a Set PDK in a project with none) goes with it, or the project keeps pinning what
+        the revert took back. Removed when it is still as the changeset left it; changed in the project since, it
+        is a conflict (nothing written)."""
+        d, prefix = prj.path, meta["git"].get("prefix") or ""
+        for rel in [r for r in plan["kept"] if r in ("project.json", deps.LOCK)]:
+            plan["kept"].remove(rel)
+            now = (d / rel).read_bytes() if (d / rel).is_file() else None
+            if now is None:
+                continue
+            plan["paths"].append(rel)
+            added = _blob(d, prefix, tip, rel)
+            if now == added:
+                plan["writes"][rel] = None
+            else:
+                _add(plan, rel, _whole(meta["id"], f"{rel}: the changeset added it, and it changed in the project "
+                                       "since", added, now, None))
 
     @staticmethod
     def _keep_libraries(prj, meta: dict, plan: dict, tip: str, base: str) -> None:

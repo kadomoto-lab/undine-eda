@@ -608,7 +608,10 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   files are written (meta_lock let go, before the netlists are read again), a merge that changed `undine.lock` or
   project.json's dependencies installs them in the project with an offline deps.sync; a failure is said
   (`deps_warning` in the record's `applied` / `reverted`), not a failed adopt. merging.json notes the install, so a
-  server stopped before it installs at its next start. A revert goes through the same merge: the dependency the
+  server stopped before it installs at its next start. The install never waits for the project's dependency lock
+  (it runs with the changesets' lock and the project's editors, layouts and logs held): while another operation holds
+  it, the install is left pending (`deps_pending`) for `lib sync`. A revert goes through the same merge, and takes an
+  `undine.lock` the changeset created back out: the dependency the
   changeset added is uninstalled, and the cells of the project that still place its cells are named
   (`deps_dropped`, `deps_warning`; [Decisions](#decisions) 19).
 - A person's own **Add** in the library browser makes the same operation in a small changeset and adopts it in one

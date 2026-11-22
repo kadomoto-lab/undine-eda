@@ -2189,28 +2189,47 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         operation run in its working copy (Changesets.dep_op, pdk_set), then adopted, which installs it in the project
         from the store. Returns {changeset, status: "applied", result: what the direct route returns (/deps,
         /deps/{name}/update, /deps/{name}/remove, /pdk), deps?: the install's rows, deps_warning?, deps_dropped?,
-        git_setup}. An operation refused: its error, the changeset discarded. An adopt refused (a conflict with the
-        project): its error (409 merge_conflict ...) with "changeset" in the body, the changeset left open for
-        review. On a preview (`<project>~<id>`) the operation goes into that changeset, not adopted: status "open"."""
+        deps_pending? (another operation held the dependencies: `lib sync` installs them), git_setup, first_commit,
+        first_commit_note (as the changeset's open answers them)}. What the request alone shows wrong (no git nor
+        package, an unknown PDK, a name that is no dependency) is refused before anything is opened, so a refusal
+        never makes the project a git repository. An operation refused: its error, the changeset discarded. An
+        adopt refused (a conflict with the project): its error (409 merge_conflict ...) with "changeset" in the
+        body, the changeset left open for review. On a preview (`<project>~<id>`) the operation goes into that changeset, not adopted: status "open"."""
         if req.action not in ("add", "update", "remove", "pdk"):
             raise _err(ValueError(f"unknown action {req.action!r} (add, update, remove, pdk)"))
         actor = x_undine_actor
 
         def run(real: str, cid: str):
             if req.action == "pdk":
-                if not req.pdk:
-                    raise ValueError("give the PDK (pdk)")
                 r = changesets.pdk_set(real, cid, req.pdk, actor, req.reason)
                 return {"from": r["old"], "to": r["new"], "created": r["created"]}
             return changesets.dep_op(real, cid, req.action, _dep_args(req), actor, req.reason,
                                      local_roots=srv.dep_roots, hosts=srv.dep_hosts)["result"]
+
+        def check(prj) -> None:
+            """What the request alone shows wrong, refused before a changeset is opened: opening one may make the
+            project a git repository (git-setup), which a refusal cannot take back."""
+            if req.action == "pdk":
+                if not req.pdk:
+                    raise ValueError("give the PDK (pdk)")
+                if pick_pdk(srv.pdks, req.pdk) is None:
+                    raise KeyError(f"no PDK {req.pdk}")
+                return
+            if not req.name:
+                raise ValueError("give the dependency's name")
+            if req.action == "add":
+                if not req.git and not req.package:
+                    raise ValueError("give `git` (a repository) or `package` (a package from an index)")
+                check_name(req.name)
+                deps._not_taken(prj, req.name)
+            else:
+                deps._dep_spec(prj, req.name)        # a dependency of project.json (NotDirect, DepError)
         try:
             real = changesets._real_of(project)
+            check(srv.project(project))
             if "~" in project:
                 cid = project.split("~")[1]
                 return {"changeset": cid, "status": "open", "result": run(real, cid)}
-            if req.action != "pdk" and not req.name:
-                raise ValueError("give the dependency's name")
             title = req.title or (f"Set the PDK to {req.pdk}" if req.action == "pdk" else
                                   f"{req.action.capitalize()} {req.name}")
             meta = changesets.create(real, title, req.reason, actor)
@@ -2231,8 +2250,10 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             err = _err(e)
             err.extra = {**(getattr(err, "extra", None) or {}), "changeset": cid}
             raise err
-        return {"changeset": cid, "status": "applied", "result": result, "git_setup": meta.get("git_setup"),
-                **{k: applied[k] for k in ("deps", "deps_warning", "deps_dropped") if applied.get(k) is not None}}
+        return {"changeset": cid, "status": "applied", "result": result,
+                **{k: meta.get(k) for k in ("git_setup", "first_commit", "first_commit_note")},
+                **{k: applied[k] for k in ("deps", "deps_warning", "deps_dropped", "deps_pending")
+                   if applied.get(k) is not None}}
 
     # ------------------------------------------------- git: the project's history (vcs/history.py)
 

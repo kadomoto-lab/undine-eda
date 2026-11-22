@@ -225,6 +225,43 @@ it("says the changeset stays open for review when the project refused to adopt a
   expect(screen.queryByRole("dialog", { name: t("app:dependency.keptTitle") })).toBeNull();
 });
 
+it("says the project was made a git repository when a one-click add did it", async () => {
+  mocked.addDepInChangeset.mockResolvedValue({ changeset: "cs-000003", status: "applied", git_setup: true,
+    first_commit: "f".repeat(40), first_commit_note: "the index has staged changes", result: { name: "dac", commit: C, cells: ["dac8"] } });
+  render(<App />);
+  await settle();
+  fireEvent.click(screen.getByTitle(t("app:dependency.addHint")));
+  await settle();
+  const form = screen.getByRole("dialog", { name: t("app:dependency.add") });
+  const inputs = form.querySelectorAll("input");
+  fireEvent.change(inputs[0], { target: { value: "dac" } });
+  fireEvent.change(inputs[1], { target: { value: "https://example.org/dac.git" } });
+  fireEvent.click(within(form).getByRole("button", { name: t("common:actions.add") }));
+  await settle();
+  const toasts = document.querySelector(".toasts")?.textContent ?? "";
+  expect(toasts).toContain(t("app:dependency.gitSetup", { commit: "fffffff", id: "cs-000003" }));
+  expect(toasts).toContain(t("history:firstCommit.indexNote", { commit: "fffffff", why: "the index has staged changes" }));
+});
+
+it("says a PDK move in a changeset's preview went into that changeset, not the project", async () => {
+  location.hash = "#/p/p~cs-000004";
+  const OLD = { id: "sky130A@aaaaaaaaaaaa", name: "sky130A", family: "sky130", version: "a".repeat(40) };
+  mocked.project.mockResolvedValue({ name: "p~cs-000004", pdk: OLD, pdk_requested: OLD.id, pdk_unsupported: "old PCell code",
+    pdk_upgrade: "sky130A@bbbbbbbbbbbb", libraries: LIBS });
+  mocked.setPdkInChangeset.mockResolvedValue({ changeset: "cs-000004", status: "open", result: { from: OLD.id, to: "sky130A@bbbbbbbbbbbb" } });
+  render(<App />);
+  await settle();
+  fireEvent.click(within(document.querySelector(".topbar") as HTMLElement).getByRole("button", { name: /sky130A/ }));
+  fireEvent.click(screen.getByRole("menuitem", { name: t("app:pdk.move", { to: "sky130A@bbbbbbbbbbbb" }) }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: t("app:pdk.move", { to: "sky130A@bbbbbbbbbbbb" }) }));
+  await settle();
+  expect(mocked.setPdkInChangeset).toHaveBeenCalledWith("p~cs-000004", "sky130A@bbbbbbbbbbbb");
+  const toasts = document.querySelector(".toasts")?.textContent ?? "";
+  expect(toasts).toContain(t("app:pdk.movedInChangeset", { to: "sky130A@bbbbbbbbbbbb", id: "cs-000004" }));
+  expect(toasts).not.toContain(t("app:pdk.moved", { to: "sky130A@bbbbbbbbbbbb" }));
+});
+
 it("shows the packages that do not accept the PDK when moving the PDK is refused", async () => {
   const OLD = { id: "sky130A@aaaaaaaaaaaa", name: "sky130A", family: "sky130", version: "a".repeat(40) };
   mocked.project.mockResolvedValue({ name: "p", pdk: OLD, pdk_requested: OLD.id, pdk_unsupported: "old PCell code",

@@ -40,7 +40,9 @@ def test_only_the_newer_pcell_code_runs():
     assert pcell.macros_dir(_Pdk(new)) == new / "python" and not pcell.legacy(_Pdk(new))
     assert pcell.macros_dir(_Pdk(old)) is None and pcell.legacy(_Pdk(old))
     why = pcell.unavailable_reason(_Pdk(old, version="bdc9412b3e468c102d01b7cf6337be06ec6e9c9a"))
-    assert "no longer supports" in why and f"set-pdk PROJECT sky130A@{pcell.SUPPORTED['sky130'][:12]}" in why
+    from undine.pdks import profiledata
+    assert "no longer supports" in why and "set-pdk PROJECT sky130A@8afc8346a57f" in why
+    assert profiledata.tested_commits("sky130")[0].startswith("8afc8346a57f")       # the built-in profile's
     assert "no PCell generators" in pcell.unavailable_reason(_Pdk(_tech()))
 
 

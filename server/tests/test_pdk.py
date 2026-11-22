@@ -153,7 +153,8 @@ def test_a_bare_pdk_name_picks_the_supported_version():
     from undine.pdks import pcell
     from undine.pdks.pdk import Pdk
     from undine.store.project import pick_pdk
-    good, other = pcell.SUPPORTED["sky130"], "0123456789abcdef0123456789abcdef01234567"
+    from undine.pdks import profiledata
+    good, other = profiledata.tested_commits("sky130")[0], "0123456789abcdef0123456789abcdef01234567"
     pdks = {p.id: p for p in (Pdk("sky130A", "sky130", other, Path("/x")), Pdk("sky130A", "sky130", good, Path("/y")))}
     runs = pcell.macros_dir
     pcell.macros_dir = lambda p: Path("/pcells")         # both run their PCells: the tested version is taken

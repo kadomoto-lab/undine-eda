@@ -1,0 +1,177 @@
+# What Undine needs to know about IHP's SG13 processes (docs/design/packages.md, PDK profiles; the keys are the fields
+# of server/undine/pdks/pdkprofile.py's Profile, read by profiledata.py): IHP-Open-PDK through ciel, whose family
+# ihp-sg13 installs SG13G2 and SG13CMOS5L together; decks in libs.tech/klayout/tech. Whether Undine's tests ran a
+# process (verified) and whether run_checks runs Magic DRC (magic_drc) are Undine's own record, in pdks/tested.py.
+schema = 1
+undine = ">=0.1.0"
+family = "ihp-sg13"
+
+[[profile]]
+name = "ihp-sg13g2"
+label = "IHP SG13G2"
+variants = ["ihp-sg13g2"]
+metals = ["metal1", "metal2", "metal3", "metal4", "metal5", "topmetal1", "topmetal2"]
+max_metal = "topmetal2"
+klayout_dir = "tech"
+drc_klayout = ["ihp-sg13g2.drc"]
+drc_switches = "negated"
+lvs_klayout = ["sg13g2.lvs"]
+magic_rc = "{name}.magicrc"
+netgen_setup = "{name}_setup.tcl"
+pcells = true
+# Activ of the well's own implant, as the LVS deck's ptap / ntap. The deck joins a salicided source / drain butted to
+# a tap to the tap (nsd_ptap_abutt, psd_ntap_abutt): a tap of another net there is an LVS short, and the ERC finds the
+# junction only under SalBlock, where it is a diode (test_layout_checks.py)
+erc_tap = [["diff", "psd", "-nwell"], ["diff", "nwell", "-psd"]]
+# its Magic tech reads Metal1-TopMetal2 text (n/25) as labels; exercised with two sg13g2_inv_1 joined in metal2
+# (test_parasitics.py)
+net_labels = [
+    ["contact", "metal1.label"], ["via1", "metal2.label"], ["via2", "metal3.label"], ["via3", "metal4.label"],
+    ["via4", "metal5.label"], ["topvia1", "topmetal1.label"], ["topvia2", "topmetal2.label"],
+]
+model_lib = "libs.tech/ngspice/models/cornerMOSlv.lib"
+# the PDK ships its transistor models as Verilog-A; `pixi run osdi` compiles them with OpenVAF into the store
+# (Pdk.osdi_dir), each into <name>.osdi; Pdk.osdi_files says where each is found
+osdi = ["psp103", "psp103_nqs", "r3_cmc", "mosvar", "cap_cmomi", "cap_cmomf"]
+corners = ["mos_tt", "mos_ss", "mos_ff", "mos_sf", "mos_fs"]
+# mos_tt_mismatch ... with the symbols' mm_ok=1; ngspice 47, not in a test
+mismatch_section = "{corner}_mismatch"
+pin_label_layers = [
+    "metal1.label", "metal2.label", "metal3.label", "metal4.label", "metal5.label", "topmetal1.label",
+    "topmetal2.label",
+]
+stdcells = [['sg13g2_\w+', "sg13g2_stdcell"]]          # sg13g2_inv_1 (the IO cells, sg13g2_io, are not in its GDS)
+
+[profile.layers]
+diff = [1, 0]
+psd = [14, 0]
+nsd = [7, 0]
+poly = [5, 0]
+contact = [6, 0]
+nwell = [31, 0]
+metal1 = [8, 0]
+via1 = [19, 0]
+metal2 = [10, 0]
+via2 = [29, 0]
+metal3 = [30, 0]
+via3 = [49, 0]
+metal4 = [50, 0]
+via4 = [66, 0]
+metal5 = [67, 0]
+topvia1 = [125, 0]
+topmetal1 = [126, 0]
+topvia2 = [133, 0]
+topmetal2 = [134, 0]
+passiv = [9, 0]
+edgeseal = [39, 0]
+prboundary = [189, 0]
+"metal1.label" = [8, 25]
+"metal2.label" = [10, 25]
+"metal3.label" = [30, 25]
+"metal4.label" = [50, 25]
+"metal5.label" = [67, 25]
+"topmetal1.label" = [126, 25]
+"topmetal2.label" = [134, 25]
+"metal1.pin" = [8, 2]
+"metal2.pin" = [10, 2]
+"metal3.pin" = [30, 2]
+"metal4.pin" = [50, 2]
+"metal5.pin" = [67, 2]
+"topmetal1.pin" = [126, 2]
+"topmetal2.pin" = [134, 2]
+mim = [36, 0]
+vmim = [129, 0]
+
+# IHP's own PyCell API on KLayout; the library is bound to the sg13g2 technology
+[profile.pcell_lib]
+paths = ["python", "python/pycell4klayout-api/source/python"]
+module = "sg13g2_pycell_lib"
+library = "SG13_dev"
+technology = "sg13g2"
+
+# V1.a 0.19, V1.c / V1.c1 metal1 enclosure 0.01 / 0.05 (two opposite sides), Mn.c 0.005, Mn.b 0.21; the PCells draw
+# no gate contacts: the gates are joined by a poly bar below the diffusion with a contact on each gate (Cnt.a 0.16,
+# Cnt.d poly enclosure 0.07, Cnt.e 0.14 from Activ) under a metal1 pad (M1.c / c1 0 / 0.05, M1.d area 0.09: 0.3 x 0.3)
+[profile.strap]
+via = 0.19
+enc1 = [0.05, 0.01]
+enc2 = [0.05, 0.01]
+m2_space = 0.21
+gate = "poly"
+poly_w = 0.13
+layers = ["diff", "poly", "metal1", "via1", "metal2"]
+cont = 0.16
+cont_poly = 0.07
+cont_m1 = [0.05, 0.0]
+m1_min = 0.3
+
+# the stack generator ihp_stack@1 (server/undine/pdks/formulas.py) has the rules
+[profile.stack]
+generator = "ihp_stack@1"
+thin = 5
+tops = ["topmetal1", "topmetal2"]
+
+# SG13CMOS5L: the same front end with four thin metals and one thick one. Its DRC deck runs; the PDK has no LVS runset
+# and no cell libraries yet.
+[[profile]]
+name = "ihp-sg13cmos5l"
+label = "IHP SG13CMOS5L"
+variants = ["ihp-sg13cmos5l"]
+metals = ["metal1", "metal2", "metal3", "metal4", "topmetal1"]
+max_metal = "topmetal1"
+klayout_dir = "tech"
+drc_klayout = ["ihp-sg13cmos5l.drc"]
+drc_switches = "negated"
+magic_rc = "{name}.magicrc"
+netgen_setup = "{name}_setup.tcl"
+model_lib = "libs.tech/ngspice/models/cornerMOSlv.lib"
+osdi = ["psp103", "psp103_nqs", "r3_cmc", "mosvar", "cap_cmomi", "cap_cmomf"]
+corners = ["mos_tt", "mos_ss", "mos_ff", "mos_sf", "mos_fs"]
+mismatch_section = "{corner}_mismatch"                 # as SG13G2 (not exercised)
+limits = [
+    "no KLayout LVS runset in the PDK", "no standard cells or device symbols in the PDK",
+    "simulation set up as for SG13G2 but not exercised",
+]
+
+# SG13G2's without metal5, via4, topmetal2, topvia2 and the MIM
+[profile.layers]
+diff = [1, 0]
+psd = [14, 0]
+nsd = [7, 0]
+poly = [5, 0]
+contact = [6, 0]
+nwell = [31, 0]
+metal1 = [8, 0]
+via1 = [19, 0]
+metal2 = [10, 0]
+via2 = [29, 0]
+metal3 = [30, 0]
+via3 = [49, 0]
+metal4 = [50, 0]
+topvia1 = [125, 0]
+topmetal1 = [126, 0]
+passiv = [9, 0]
+edgeseal = [39, 0]
+prboundary = [189, 0]
+"metal1.label" = [8, 25]
+"metal2.label" = [10, 25]
+"metal3.label" = [30, 25]
+"metal4.label" = [50, 25]
+"topmetal1.label" = [126, 25]
+"metal1.pin" = [8, 2]
+"metal2.pin" = [10, 2]
+"metal3.pin" = [30, 2]
+"metal4.pin" = [50, 2]
+"topmetal1.pin" = [126, 2]
+
+[profile.stack]
+generator = "ihp_stack@1"
+thin = 4
+tops = ["topmetal1"]
+
+# IHP-Open-PDK 89d42ee6: exercised on ihp-sg13g2 (KLayout DRC of sg13g2_inv_1, clean, and LVS against its CDL,
+# matches; ngspice 47 with the OSDI models at mos_tt / mos_ss / mos_ff)
+[[pdk]]
+commit = "89d42ee6d2fd9b50b86a1aada6fee6673c3e6008"
+tested = true
+license = "Apache-2.0"

@@ -482,10 +482,11 @@ pixi run python -m undine serve --dep-root ~/ip
 メッセージ全体は `not from gitlab.com. Start the server with --dep-host gitlab.com, or run python -m undine lib add ...
 from the command line` で終わります。
 
-**原因。** 依存関係やインデックスを、ブラウザか HTTP API で追加、更新、ロック、同期しようとしましたが、その URL のどれかのホストが、
-このマシンが設定するインデックスのホスト(既定のインデックスの `github.com` と、`$UNDINE_HOME/config.toml` にあるもの)でも、
-`--dep-host` で指定したホストでもありません。URL は、リクエスト、project.json、パッケージのマニフェスト、インデックスの行の
-どれから来たものでもかまいません。クローンした `project.json` はどのホストでも指定できるので、その `indexes` はホストを足しません。
+**原因。** インデックスを、ブラウザか HTTP API で読む、取得し直す、またはそのパッケージを追加、更新、ロックしようとしましたが、
+インデックスの URL のホストが、このマシンが設定するインデックスのホスト(既定のインデックスの `github.com` と、
+`$UNDINE_HOME/config.toml` にあるもの)でも、`--dep-host` で指定したホストでもありません。クローンした `project.json` はどのホスト
+でも指定できるので、その `indexes` はホストを足しません(そうしたホストのリポジトリは拒否しません: ブラウザの取得のダイアログが
+注意とともに示し、確かめたあとに取得します)。
 
 **対処。** メッセージにあるコマンドをコマンドラインで実行します。コマンドラインはどのホストからも取得します。または、そのホストを
 指定してサーバーを起動し直します:

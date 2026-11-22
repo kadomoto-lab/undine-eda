@@ -744,6 +744,40 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   信頼のキー、install した木に結び付きます。`POST /api/p/{p}/trust {name, token}` はそれを使い切り、その後に変わったキーや木は
   拒否します。信頼を取り消すこと(`{name, untrust: true}`)にトークンは要りません。`test_agent_phase2.py` のテストが、どのツール、
   `undine call` のコマンド、クライアントのメソッドもどちらにも届かないことを確かめます。
+  *実装済み(段階 4)、依存の取得と index の更新*(store/deps.py: `Allow`、`plan_fetch`、`NeedsFetch`。
+  `POST /api/p/{p}/deps/fetch`): HTTP からの依存の操作には、リモートから何を取得してよいかを渡します。`--dep-root` の下の
+  ローカルのリポジトリにはトークンが要らず(決定)、index は読むことでは取得しません。それ以外のものを取得することになる操作
+  (`/deps` のルート、`POST /changesets/{id}/deps`、changeset を開く前にそう答える 1 クリックの `POST /deps/changeset`)は、何も
+  取得も書き込みもせず、計画を付けた 409 の `needs_fetch` を返します。計画は、取得ごとの URL、commit か rev、subdir、木、大きさ、
+  ライセンス(index の行から。通常の git の依存では null)、ホストとそれが許されているか、そして操作そのもの(`request`)です。
+  解決はそれを集めながら、わかっていることで先へ進みます。index の行はパッケージの commit、木、index の要求を与えるので、index の
+  パッケージの計画は完全です。rev で指定した通常の git の依存は(URL、rev)に結び付け(決定)、その manifest は取得してから読みます。
+  取得したところさらに取得するもの(推移的な git のパッケージ)があれば、ジョブは `needs_fetch` と次の計画で失敗し、人がもう一度
+  確かめます。その計画は、rev が前回の取得で返した commit(`gitsrc.last_commit`。行の commit として示す手がかり)で取得した
+  manifest を読み、ジョブは rev がまだそれを返すかを確かめます。違えば、いま返す commit が新しい取得になります。
+  `POST /api/confirmations {kind: "dependency", project, ...request, fetches}` は何も取得せずに計画を作り直し、違う計画は拒否します
+  (400)。トークンはプロジェクト、リクエスト、取得、project.json と undine.lock のハッシュに結び付くので、確認と取得の間にファイルが
+  変われば 403 で、トークンは使い切ります。操作はプロジェクトの依存関係のロックを取ったところでハッシュをもう一度確かめ(ジョブは
+  ファイルを変える別のジョブの後で待つことがあります)、変わっていれば `files_changed` で失敗します。ジョブ(専用の `fetchjobs.Jobs`、種類 `dependency`)は、確かめた取得だけを許して
+  操作を動かします。確かめた URL は `gitsrc.ConfirmedRemote` として許されたホストの外でも通り、全 ref を取る代わりの方法も
+  使えます。許されていないホストは拒否ではなく `allowed: false` の行になります(ダイアログが注意を出します)。進み具合は
+  `gitsrc.PROGRESS`(git の実行中は pack のバイト数、次に読んだファイル)で、おおよその値です。`GET /api/packages` と
+  `/api/packages/{name}` は取得せず(409 の `index_not_fetched {index, url, host}`)、HTTP からの追加、更新、`lib lock` も取得しません
+  (index のパッケージの更新は手元の写しをそのまま読みます)。`POST /api/indexes/{name}/refresh {token}` には、`--dep-root` と
+  `--dep-host` の確認の後で、index の URL とプロジェクトに結び付いた種類 `index` のトークンが要ります(確認しても index のホストは
+  通りません)。コマンドラインはこれまでどおり取得します。ブラウザの取得のダイアログ(web/src/FetchConfirmDialog.tsx)は計画を示し、
+  クリックしたときだけトークンを求めます。Packages のダイアログは、更新の前に index の URL を示します。`test_api_phase1.py` の
+  テストは、どのツール、`undine call` のコマンド、クライアントのメソッドも `deps/fetch`、更新、新しい種類に届かないことも確かめます。
+  取得のルートはジョブを始める前に計画を作り直しません。ジョブに許した取得が、確かめたものだけにとどめます。確かめていない読み
+  込みは、残したリポジトリが確かめた後にコミットを失ったとき(`gitsrc.fetch(network=False)`、`deps.NotKept`)も、壊れたストアの
+  オブジェクトを git から読み直すとき(sync とステージングは allow を見る `offline_for` を使います)も、ネットワークには行かず、
+  取得が要るものになります。オブジェクトが壊れた固定済みのエントリは、悪いオブジェクトを取り除いた後はストアにないエントリなので、
+  最初のステージングからそう扱います(通常のものは sync に任せ、パッケージは `not_synced`)。こうしてルートと(ステージングも見る)
+  `plan_fetch` が食い違うことはありません。確かめた 1 クリックのジョブは、プロジェクトの依存関係のロックを、ほかの操作の後で待って取り
+  (リクエストの中のルートだけが 409 の `busy` を返します)、その 1 回の保持の間にファイルを確かめ、計画を作り直し(トークンにない取得は
+  何も開く前に拒否します)、changeset を開きます(deps.lock はどこでも changeset のロックより先)。その間、別の changeset の採用は、
+  どの依存関係の操作の後でもそうであるように、インストールを `lib sync` に残します(`deps_pending`)。ジョブは再起動で
+  失われます。取得したものはストアに残ります。
 - **エージェントのツール**(MCP と組み込みのエージェント): `search_packages`、`get_package`、`get_dependency_status`、
   `propose_dependency`(エージェントの changeset での追加 / 更新 / 削除)。パッケージと index の文字列(説明、README、セル名、
   意図のメモ、index の行)はエージェントにとってデータです。ツールは `agent.py` の DATA の規則のもとで返し、指示としては扱いません。
@@ -869,7 +903,9 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   URL と、project.json、manifest、index(プロジェクト自身のものも、index の行が書くものも)、index の行が書くすべての URL に、
   git を動かす前に行います。URL はその後 `gitsrc.HttpRemote` として git に渡り、`gitsrc.fetch` はこれには全 ref を取る代わりの
   方法を使いません。その操作を一度コマンドラインで実行するように言います。そうすればコミットがストアに残ります。人がダイアログで
-  確かめた URL は、依存の取得の確認のトークンと一緒に段階 4 で扱います。大きさの上限は、CLI からのものも含めてすべての取得に
+  確かめた URL は、依存の取得の確認のトークンと一緒に段階 4 で扱います(*実装済み(段階 4):* 人が取得のダイアログで確かめた
+  リポジトリの URL はホストにかかわらず通り、全 ref を取る代わりの方法も使えます。index のホストはこれまでどおり確かめます。
+  [確認のトークン](#ui-cli-http-agent-tools))。大きさの上限は、CLI からのものも含めてすべての取得に
   かかります(`gitsrc._fetch_git`。index の写しにも)。git は受け取ったものを 1 つの pack として残し(`fetch.unpackLimit=1`)、
   その大きさ(index-pack の `tmp_pack_*`、次に新しい pack)を、git の実行中は 0.1 秒ごとに、終わったときにももう一度読みます。
   `UNDINE_FETCH_MAX` を超えると、git とその index-pack を(プロセスグループごと)止め、残したリポジトリをその排他ロックの下で
@@ -880,7 +916,8 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   トークンはプロジェクトと計画そのもの(ファミリー、variant、commit 全体、ライブラリ、ciel の取得元、ルート)に結び付きます。
   それを求めるのは、人がクリックした後のブラウザのダイアログだけです。HTTP からは ciel の既定の取得元からだけ取得します
   ([確認のトークン](#ui-cli-http-agent-tools))。コマンドラインは ciel を動かす前に尋ねます。HTTP からの依存の取得には、段階 4 まで
-  トークンは要りません(上の `--dep-root` の規則はかかります)。
+  トークンは要りません(上の `--dep-root` の規則はかかります)。*実装済み(段階 4):* HTTP からのリモートの依存の取得には種類
+  `dependency` のトークンが、index の更新には種類 `index` のトークンが要ります。`--dep-root` の下のローカルのリポジトリには要りません。
 - **署名**(後で行う)。当面、内容を固定するのは git のハッシュだけです。index の行の commit と木のハッシュ(blob に対する
   SHA-256 なので、git の SHA-1 には頼らない)で、取得、`sync`、`sync --from-vendor` のたびに確かめます。ファイルの変更、タグの
   付け替え、force-push は検出できます。公開できるのは index の PR をマージできる人で、index に push できる人は、別の内容を指す行を
@@ -891,7 +928,8 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   書くたびに(changeset の adopt と revert でも)、`deps.lock` は依存の操作 1 つの間(取得の間も)持ちます。段階 0 で加えます。
   *実装済み(段階 0):* 2 つのロックを、この名前で(以前の案では `.undine/lock` 1 つでした)。取得は今もリクエストの中で
   (`srv.lock` なしで)、`.undine/deps/` の中の作業用ディレクトリへ行い、ストアへのジョブとしては動きません。*実装済み(段階 1):*
-  依存の取得はストアに入れますが、今もリクエストの中で動きます(そのジョブは段階 4)。HTTP からの PDK の取得はジョブです。順序は
+  依存の取得はストアに入れますが、今もリクエストの中で動きます(そのジョブは段階 4。*実装済み(段階 4):* HTTP から確かめた
+  取得はジョブとして動きます。`POST /deps/fetch`)。HTTP からの PDK の取得はジョブです。順序は
   `deps.lock`、次にストアの `.lock` を**操作全体の間、共有で**(取得、木の記録、install、lock の書き込み、`projects/` へのプロジェクトの
   記録)、次に残したリポジトリごとの flock(`git/<h>.git.lock`。読むほうは共有で取る)です。`store gc` はストアのロックを排他で取る
   ので、木を記録してからそれを書いた lock を書くまでの間に動くことはありません。オブジェクト、記録、スタンプのキャッシュ、
@@ -1209,8 +1247,20 @@ store/changeset.py の evidence のマニフェスト。[changeset と evidence]
 パッケージのコードブロックが include するモデルのファイルが変わると、ネットリストの文面が同じでもシミュレーションが古くなる。
 プロファイルの欄は key の中、`about` は外。それより前のジョブは最新のまま。マニフェストがパッケージと PDK を並べる)。
 
+できたもの: 依存の取得と index の更新の確認のトークン、進み具合を示すジョブとしての依存の取得(store/deps.py の `Allow`、
+`plan_fetch`、`NeedsFetch`。store/index.py の `IndexNotFetched`。`gitsrc.PROGRESS` と `ConfirmedRemote`。pdks/fetchjobs.py の種類
+`dependency` と `index`。`POST /api/p/{p}/deps/fetch`、`GET .../deps/fetch/{job}`、`POST /api/indexes/{name}/refresh {token}`。
+web/src/FetchConfirmDialog.tsx。[確認のトークン](#ui-cli-http-agent-tools)と [HTTP API](../reference/api.ja.md#dependency-fetch)を
+参照)。テスト: `test_pkg_tokens.py`(HTTP からのリモートにはトークンが要り、その前には何も取得しない。トークンは URL、commit、
+木に結び付き、project.json か undine.lock が変わると拒否する。1 回だけ、5 分。ジョブの進み具合と種類、PDK のものとは別。index の
+更新にはトークンが要る。パッケージを読んでも index を取得しない。確かめた URL は許されたホストの外でも通る。git の rev には 2 回目が
+要る。動いた rev はもう一度確かめる。HTTP からの sync と lock。changeset の操作と 1 クリックの操作もトークンを通る。コマンドラインは
+これまでどおり取得する)、`test_api_phase1.py` の確認、web のテスト `FetchConfirmDialog.test.tsx`、`PackagesDialog.test.tsx`、
+`App.phase2.test.tsx`。
+
 段階 4 でこれから作るもの: 依存の変更のレビュー(lock の差分、ライセンス、大きさ、コードブロックと RTL)、エージェントの
-*needs fetch* と、確認トークンと通知を伴う人による取得、エージェントのツール、`dep_update` のレイアウトのコピーの更新。
+*needs fetch* を changeset に記録することと、レビューの取得ボタン、人による取得の後の通知、エージェントのツール、`dep_update` の
+レイアウトのコピーの更新。
 
 <a id="phase-5-status"></a>
 ### 段階 5 の状況

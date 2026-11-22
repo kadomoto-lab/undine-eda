@@ -63,6 +63,16 @@ class IndexReadError(Exception):
     """An index that cannot be read, or a line or a requirement that is not what the index format says."""
 
 
+class IndexNotFetched(IndexReadError):
+    """A read over HTTP of an index that has no local copy (phase 4): only a person's refresh, with a confirmation
+    token of kind 'index', fetches one. `name`: its nickname where the caller knows it, else the URL."""
+
+    def __init__(self, url: str, name: str | None = None):
+        super().__init__(f"index {name or url} has not been fetched on this machine: a person refreshes it (the "
+                         "Packages dialog's refresh, or `python -m undine pkg index update`) before it is read")
+        self.url, self.name = url, name or url
+
+
 # ------------------------------------------------------------------ names and URLs
 
 
@@ -491,9 +501,10 @@ class Index:
     """The local copy of one index, by URL. `source`: what git fetches from (over HTTP, deps._source's checked git
     directory for a local index), else the URL."""
 
-    def __init__(self, url: str, source: str | None = None):
+    def __init__(self, url: str, source: str | None = None, fetch: bool = True):
         self.url = _check_url(url)
         self.source = source
+        self.fetch = fetch                     # False (HTTP, phase 4): a read with no local copy is IndexNotFetched
         self.repo = _dir(self.url)
         self._files: dict[str, list[Line]] = {}
         self._names: list[str] | None = None
@@ -548,8 +559,10 @@ class Index:
         return got
 
     def ensure(self) -> None:
-        """Fetches the index once, when there is no local copy yet."""
+        """Fetches the index once, when there is no local copy yet; with fetch False, IndexNotFetched instead."""
         if not self.fetched():
+            if not self.fetch:
+                raise IndexNotFetched(self.url)
             self.update()
 
     def _read(self, commit: str, path: str) -> bytes | None:

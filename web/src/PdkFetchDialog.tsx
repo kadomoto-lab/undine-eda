@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, X } from "lucide-react";
 import { api, type PdkFetchJob, type PdkFetchPlan } from "./api";
+import { useEscape } from "./dialog";
 import { apiErrorText, msg, resolveText, useI18n, type UiText } from "./i18n";
 
 const STATE_KEYS = { verified: "verified", unverified: "unverified", modified: "modified", missing: "missing",
@@ -40,19 +41,8 @@ export function PdkFetchDialog({ project, onClose, onFetched, pollMs = 1000 }: {
       .catch((e) => { if (live.current) setErr(apiErrorText(e)); });
   }, [project, network]);
 
-  // Esc closes wherever the focus is (the dialog.tsx rule), and never reaches the editor behind
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      close.current();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  // Esc closes this dialog when it is the topmost (the dialog.tsx rule), and never reaches the editor behind
+  useEscape(onClose);
 
   const follow = async (id: string) => {
     while (live.current) {

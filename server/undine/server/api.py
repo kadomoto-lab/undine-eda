@@ -7,6 +7,8 @@ import re
 import sys
 import threading
 import time
+import contextlib
+import dataclasses
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -26,7 +28,8 @@ from pydantic import BaseModel, FiniteFloat
 
 from undine.agents import agent, turns, llm, llm_context, mcp as mcpmod
 from undine.server import live
-from undine.store import deps, locked, oplog, packages, provenance, cellviews, trust, vendor
+from undine.store import deps, gitsrc, locked, oplog, packages, provenance, cellviews, trust, vendor
+from undine.store import index as ix
 from undine.checks import magicflow, parasitics, stdcells, tapeout, verify
 from undine.pdks import ciel, compat, fetchjobs, pcell, pdkops
 from undine.schematics import schematic, xschem, symbolcheck, symbolsync, netlist as netlistmod
@@ -172,6 +175,7 @@ class Server:
         self.pdk_roots = list(pdk_roots) if pdk_roots is not None else default_pdk_roots()
         self._rescanning = threading.Lock()       # one rescan at a time: each works from the dict as the last left it
         self.pdk_jobs = fetchjobs.Jobs()          # PDK fetches over HTTP, in memory (fetchjobs.py)
+        self.dep_jobs = fetchjobs.Jobs()          # dependency fetches a person confirmed, apart from the PDK's
         self.confirmations = fetchjobs.Confirmations()   # the person's confirmation of a fetch (fetchjobs.py)
         self.dbs: dict[tuple[str, str], LayoutDB] = {}
         self.editors: dict[Path, SchEditor] = {}
@@ -1361,6 +1365,11 @@ def _trust_row(d: Path, trusted: set[str]) -> dict:
             "trusted": key in trusted, "findings": _trust_findings(d.name, trust.scan_dir(d))}
 
 
+# the code an HTTP error without one of its own gets (the exception handler's), also in a fetch job's failure
+_STATUS_CODES = {400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "conflict",
+                 422: "validation_error", 502: "upstream_error"}
+
+
 def _err(e: Exception) -> HTTPException:
     if isinstance(e, changesetmod.MergeConflict):       # nothing written: each file and its conflicts (the body's "files")
         err = HTTPException(409, str(e))
@@ -1408,6 +1417,24 @@ def _err(e: Exception) -> HTTPException:
         err.code = "resolution_refused"
         err.extra = {"problems": [{"code": p.code, "message": p.message, "chains": list(p.chains)}
                                   for p in e.problems]}
+        return err
+    if isinstance(e, deps.NeedsFetch):                # a fetch a person confirms first: the plan the dialog shows
+        err = HTTPException(409, str(e))
+        err.code = "needs_fetch"
+        err.extra = {"plan": e.plan}
+        return err
+    if isinstance(e, ix.IndexNotFetched):             # no local copy: a person's confirmed refresh fetches it
+        err = HTTPException(409, str(e))
+        err.code = "index_not_fetched"
+        err.extra = {"index": e.name, "url": e.url, "host": gitsrc.remote_host(e.url)}
+        return err
+    if isinstance(e, deps.FilesChanged):              # project.json or undine.lock changed since the confirmation
+        err = HTTPException(403, str(e))
+        err.code = "files_changed"
+        return err
+    if isinstance(e, deps.DepsBusy):                  # another dependency operation of the project is running
+        err = HTTPException(409, str(e))
+        err.code = "busy"
         return err
     if isinstance(e, deps.NeedsFormat2):              # the command line converts the lock (no route does)
         err = HTTPException(409, str(e))
@@ -1494,18 +1521,40 @@ class DepChangeset(ChangesetDep):
 
 
 class Confirm(BaseModel):
-    """What the person confirmed in a dialog (fetchjobs.Confirmations): kind 'pdk', a PDK fetch (the fields after
-    `name`), or kind 'trust', trusting the dependency installed under local name `name`."""
+    """What the person confirmed in a dialog (fetchjobs.Confirmations): kind 'pdk', a PDK fetch (commit, variant,
+    libraries, allow_network), kind 'trust', trusting the dependency installed under local name `name`, kind
+    'dependency', a dependency fetch (op and its fields, as the needs_fetch plan's `request` gives them, and the
+    `fetches` the dialog showed), or kind 'index', refreshing index `index` (project optional)."""
     kind: str
-    project: str
-    name: str = ""                       # kind 'trust': the dependency's local name (.undine/deps/<name>)
+    project: str = ""
+    name: str = ""                       # kind 'trust': the dependency's local name; 'dependency': add's / update's
     commit: str = ""                     # the full commit, or at least its first 7 characters (an id's 12)
     variant: str = ""
     libraries: list[str] | None = None   # None: ciel's default set
     allow_network: bool = False          # resolve a 12-character id with ciel ls-remote when it is not installed
+    op: str = ""                         # kind 'dependency': add | update | remove | lock | sync
+    git: str | None = None
+    rev: str | None = None
+    subdir: str | None = None
+    package: str | None = None
+    version: str | None = None
+    index: str | None = None             # kind 'dependency': add's index; kind 'index': the index (nickname or URL)
+    changeset: str | None = None         # the operation runs in this changeset's working copy
+    adopt: bool = False                  # the browser's one-click operation: a small changeset, adopted
+    reason: str = ""
+    title: str | None = None
+    fetches: list[dict] | None = None    # kind 'dependency': [{url, rev, commit, subdir, tree}] as the dialog showed
 
 
 class PdkFetch(BaseModel):
+    token: str | None = None
+
+
+class DepFetch(BaseModel):
+    token: str | None = None
+
+
+class IndexRefresh(BaseModel):
     token: str | None = None
 
 
@@ -1791,9 +1840,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
         # Keep detail and HTTP status compatible with scripts/MCP. UI wording belongs to the client.
-        codes = {400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found",
-                 409: "conflict", 422: "validation_error", 502: "upstream_error"}
-        body = {"detail": exc.detail, "code": getattr(exc, "code", codes.get(exc.status_code, "request_failed")), "params": {}}
+        body = {"detail": exc.detail, "code": getattr(exc, "code", _STATUS_CODES.get(exc.status_code, "request_failed")), "params": {}}
         if getattr(exc, "files", None) is not None:       # 409 merge_conflict of a changeset's apply / revert
             body["files"] = jsonable_encoder(exc.files)
         if getattr(exc, "extra", None):                   # 400 not_set_up ("top", "project", "command"), unsupported_library
@@ -1965,15 +2012,22 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
 
     @app.post("/api/confirmations")
     def confirm(req: Confirm):
-        """A person confirmed a PDK fetch (kind 'pdk') or trusting a dependency (kind 'trust') in a dialog: a token
-        for exactly that, single use, five minutes. Only this response carries it; no MCP tool, `undine call` command
-        or client method asks for one."""
+        """A person confirmed a PDK fetch (kind 'pdk'), trusting a dependency (kind 'trust'), a dependency fetch (kind
+        'dependency': the operation, checked against the plan the server makes now, and bound to the project, the
+        operation, the exact fetches and project.json with undine.lock) or an index refresh (kind 'index', bound to
+        its URL) in a dialog: a token for exactly that, single use, five minutes. Only this response carries it; no
+        MCP tool, `undine call` command, client method or agent tool asks for one."""
         try:
             if req.kind == "trust":
                 return _confirm_trust(req.project, req.name)
+            if req.kind == "dependency":
+                return _confirm_dependency(req)
+            if req.kind == "index":
+                return _confirm_index(req)
             if req.kind != "pdk":
                 raise ValueError(f"no confirmation of kind {req.kind!r}: this Undine confirms PDK fetches (kind "
-                                 "'pdk') and trusting a dependency (kind 'trust')")
+                                 "'pdk'), trusting a dependency (kind 'trust'), dependency fetches (kind "
+                                 "'dependency') and index refreshes (kind 'index')")
             plan = _pdk_plan(req.project, req.allow_network)
             asked = req.commit.lower()
             if (req.variant != plan["variant"] or len(asked) < 7 or not plan["commit"].startswith(asked)
@@ -2114,23 +2168,26 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             raise _err(e)
 
     # the Packages section of the library browser (store/packages.py): an index is read under the rule of a git
-    # dependency (--dep-root, --dep-host); the first read fetches it, then only a refresh does
+    # dependency (--dep-root, --dep-host). Over HTTP an index is never fetched by a read (409 index_not_fetched): only
+    # a refresh with the person's confirmation token (kind 'index') fetches it
 
     @app.get("/api/packages")
     def packages_search(q: str = "", index: str | None = None, project: str | None = None):
-        """The newest version of each package of an index whose name or description holds `q`."""
+        """The newest version of each package of an index whose name or description holds `q`; 409
+        index_not_fetched {index, url, host} when the index has no local copy (never fetched here)."""
         try:
             prj = srv.project(project) if project else None
-            return packages.search(q, index, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
+            return packages.search(q, index, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts, fetch=False)
         except Exception as e:
             raise _err(e)
 
     @app.get("/api/packages/{name}")
     def packages_info(name: str, index: str | None = None, project: str | None = None):
-        """Every version of a package, with whether each fits the project's PDK, and the version the project locks."""
+        """Every version of a package, with whether each fits the project's PDK, and the version the project locks;
+        409 index_not_fetched as search."""
         try:
             prj = srv.project(project) if project else None
-            return packages.info(name, index, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
+            return packages.info(name, index, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts, fetch=False)
         except Exception as e:
             raise _err(e)
 
@@ -2142,63 +2199,264 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         except Exception as e:
             raise _err(e)
 
+    def _index_target(name: str, project: str | None) -> tuple[str, str | None]:
+        """(URL, what git fetches it from) of index `name` (a nickname or URL; the project's own nicknames too), after
+        the --dep-root / --dep-host checks a refresh runs."""
+        prj = srv.project(project) if project else None
+        url = ix.url_of(name, prj.meta if prj is not None else {})
+        return url, packages._index(url, srv.dep_roots, srv.dep_hosts, f"pkg index update {url}").source
+
+    def _confirm_index(req: Confirm) -> dict:
+        project = changesets._real_of(req.project) if req.project else ""
+        if not req.index:
+            raise ValueError("name the index to refresh (index)")
+        url, _ = _index_target(req.index, project or None)
+        token, expires = srv.confirmations.issue({"kind": "index", "project": project, "url": url})
+        return {"token": token, "expires": expires, "index": ix.nickname(url, srv.project(project).meta if project
+                                                                         else None),
+                "url": url, "host": gitsrc.remote_host(url), "commit": ix.Index(url).commit()}
+
     @app.post("/api/indexes/{name}/refresh")
-    def indexes_refresh(name: str, project: str | None = None):
-        """Fetches an index (a nickname, or `undine`) again."""
+    def indexes_refresh(name: str, req: IndexRefresh | None = None, project: str | None = None):
+        """Fetches an index (a nickname, or `undine`) again, with the person's confirmation token of kind 'index'
+        for that URL (no token, a used or expired one, or one for another index or project: 403)."""
         try:
-            prj = srv.project(project) if project else None
+            real = changesets._real_of(project) if project else ""
+            bound = srv.confirmations.take(req.token if req else None, "index")
+            if bound["project"] != real:
+                raise PermissionError(f"the confirmation token is for {bound['project'] or 'no project'}, not "
+                                      f"{real or 'no project'}")
+            url, _ = _index_target(name, real or None)
+            if url != bound["url"]:
+                raise PermissionError(f"the confirmation token is for index {bound['url']}, not {url}: confirm the "
+                                      "refresh again")
+            prj = srv.project(real) if real else None
             return packages.refresh(name, prj, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
         except Exception as e:
             raise _err(e)
 
     # the dependency operations fetch (git, minutes for a slow remote) without the server's lock: they take it only to
-    # swap the installed files and write project.json and undine.lock (guard), so other requests go on meanwhile
+    # swap the installed files and write project.json and undine.lock (guard), so other requests go on meanwhile.
+    # Over HTTP they fetch from a remote only what a person confirmed (phase 4): a route fetches no remote at all
+    # (a local repository under --dep-root needs no confirmation) and answers 409 needs_fetch with the plan; the
+    # person's confirmation (kind 'dependency') and POST /deps/fetch run the operation as a job
+
+    _HTTP = deps.Allow()                       # what a route fetches from a remote unconfirmed: nothing
+    _DEP_KEYS = ("name", "git", "rev", "subdir", "package", "version", "index")
+
+    def _dep_request(op: str, args: dict, changeset: str | None = None, adopt: bool = False, reason: str = "",
+                     title: str | None = None) -> dict:
+        """The operation a needs_fetch plan names (its `request`), as the confirmation and the fetch job take it."""
+        out = {"op": op, **{k: args.get(k) for k in _DEP_KEYS if args.get(k) not in (None, "")}}
+        out |= {k: v for k, v in (("changeset", changeset), ("adopt", adopt), ("reason", reason), ("title", title))
+                if v}
+        return out
+
+    def _needs(e: deps.NeedsFetch, project: str, request: dict) -> deps.NeedsFetch:
+        """The plan with the project (the real one) and the request that brings the same operation back."""
+        e.plan = {**e.plan, "project": changesets._real_of(project), "request": request}
+        return e
+
+    def _dep_target(real: str, request: dict):
+        """The project an operation of `request` runs on: the changeset's working copy, else the project itself (a
+        one-click operation's changeset is made from it)."""
+        cid = request.get("changeset")
+        if cid:
+            meta = changesets._record(real, cid)
+            changesets._check_open(meta)
+            return srv.project(meta["preview"])
+        return srv.project(real)
+
+    _files_sha = deps.files_sha                # what a dependency fetch token binds of the project
+
+    def _fetch_key(f: dict) -> tuple:
+        """A fetch row as compared at the confirmation: what is fetched (url, rev, commit, subdir), strings only (""
+        for none), so that rows of one URL that differ by a missing field still sort. The tree is compared apart
+        (_same_fetches): a row found in another way (a commit gone while it was read) may not know it."""
+        return tuple(str(f.get(k) or "") for k in ("url", "rev", "commit", "subdir"))
+
+    def _same_fetches(asked: list, planned: list) -> bool:
+        """The rows the person confirmed are the plan's: the same fetches, and a tree that both give the same."""
+        a = {_fetch_key(f): f.get("tree") for f in asked if isinstance(f, dict)}
+        b = {_fetch_key(f): f.get("tree") for f in planned}
+        if len(a) != len([f for f in asked if isinstance(f, dict)]) or set(a) != set(b):
+            return False
+        return all(not a[k] or not b[k] or a[k] == b[k] for k in a)
+
+    def _confirm_dependency(req: Confirm) -> dict:
+        if req.op not in ("add", "update", "remove", "lock", "sync"):
+            raise ValueError(f"no dependency operation {req.op!r} to confirm (add, update, remove, lock, sync)")
+        real = changesets._real_of(req.project)
+        cid = req.changeset or (req.project.split("~")[1] if "~" in req.project else None)
+        if (cid or req.adopt) and req.op not in ("add", "update", "remove"):
+            raise ValueError(f"{req.op} runs in the project, not in a changeset")
+        if cid and req.adopt:
+            raise ValueError("a one-click operation (adopt) opens a changeset of its own: give no changeset")
+        args = {k: getattr(req, k) for k in _DEP_KEYS}
+        request = _dep_request(req.op, args, cid, req.adopt, req.reason, req.title)
+        prj = _dep_target(real, request)
+        plan = deps.plan_fetch(prj, req.op, args, srv.dep_roots, srv.dep_hosts)
+        if not _same_fetches(req.fetches or [], plan["fetches"]):
+            said = ", ".join(f"{f['url']} @ {(f['commit'] or f['rev'] or '?')[:12]}" for f in plan["fetches"])
+            raise ValueError(f"project {real} would fetch {said or 'nothing'}, not what was confirmed: show the fetch "
+                             "dialog again")
+        fetches = [(f["url"], f["rev"] or f["commit"], f["commit"]) for f in plan["fetches"]]
+        token, expires = srv.confirmations.issue({"kind": "dependency", "project": real, "request": request,
+                                                  "fetches": fetches, "files_sha": _files_sha(prj.path)})
+        return {"token": token, "expires": expires, "plan": {**plan, "project": real, "request": request}}
+
+    def _run_dep(real: str, request: dict, actor: str, allow: deps.Allow) -> dict:
+        """Runs the operation of `request` with what `allow` lets it fetch: what the route that named it returns."""
+        op, args, reason = request["op"], {k: request.get(k) for k in _DEP_KEYS}, request.get("reason", "")
+        if request.get("adopt"):
+            # the operation runs in a changeset made from the project: the project's dependency lock taken, waiting
+            # behind another operation, then under that one hold the files checked, the plan made and the changeset
+            # opened (_one_click's `opening`). Safe for the lock order: deps.lock is taken before the changesets'
+            # lock everywhere (_DepGuard), and what holds the changesets' lock takes a project's deps.lock without
+            # waiting (another adopt's install, which is then left pending for lib sync; restore); create() takes
+            # neither the changesets' lock nor a deps.lock itself
+            prj = srv.project(real)
+
+            @contextlib.contextmanager
+            def opening():
+                with deps._deps_lock(prj.path):
+                    deps._check_files(prj, allow)
+                    yield
+            body = DepChangeset(action=op, **{k: v for k, v in args.items() if v is not None}, reason=reason,
+                                title=request.get("title"))
+            return _one_click(real, body, actor, dataclasses.replace(allow, files=None), opening)
+        if request.get("changeset"):
+            cid = request["changeset"]
+            out = changesets.dep_op(real, cid, op, args, actor, reason, local_roots=srv.dep_roots,
+                                    hosts=srv.dep_hosts, allow=allow)
+            return {**out, "status": deps.status(srv.project(changesets._record(real, cid)["preview"]))}
+        prj = srv.project(real)
+        if op == "add":
+            r = deps.add(prj, args["name"], args["git"], args["rev"], args["subdir"], guard=srv.lock,
+                         local_roots=srv.dep_roots, package=args["package"], version=args["version"],
+                         index=args["index"], hosts=srv.dep_hosts, allow=allow)
+        elif op == "update":
+            r = deps.update(prj, args["name"], args["rev"], guard=srv.lock, local_roots=srv.dep_roots,
+                            version=args["version"], hosts=srv.dep_hosts, allow=allow)
+        elif op == "lock":
+            got = deps.relock(prj, guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts, allow=allow)
+            r = {**deps.status(srv.project(real)), "resolved": got["resolved"]}
+        elif op == "sync":
+            r = {"libraries": deps.sync(prj, guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts,
+                                        allow=allow)}
+        else:
+            r = {"ok": True, **deps.remove(prj, args["name"], guard=srv.lock, allow=allow)}
+        srv.deps_changed(real)
+        return r
+
+    @app.post("/api/p/{project}/deps/fetch")
+    def deps_fetch(project: str, req: DepFetch, x_undine_actor: str = Header("user")):
+        """Runs a dependency operation a person confirmed (a token of kind 'dependency') as a job: it fetches from a
+        remote exactly the confirmed fetches, a local repository under --dep-root, and nothing else; GET
+        .../deps/fetch/{job} follows it. No token, a used, expired or another project's one, or project.json or
+        undine.lock changed since the confirmation: 403, the token used up. A fetch that shows more to fetch (a plain
+        git dependency's manifest naming another) fails the job with code needs_fetch and the new plan."""
+        try:
+            real = changesets._real_of(project)
+            bound = srv.confirmations.take(req.token, "dependency")
+            if bound["project"] != real:
+                raise PermissionError(f"the confirmation token is for project {bound['project']}, not {real}")
+            request = bound["request"]
+            prj = _dep_target(real, request)
+            if _files_sha(prj.path) != bound["files_sha"]:
+                raise PermissionError(f"project.json or {deps.LOCK} of {prj.name} changed since the fetch was "
+                                      "confirmed: confirm the fetch again")
+            # the files are checked again by the operation once it holds the dependency lock (a job may wait
+            # behind another that changes them)
+            allow = deps.Allow(frozenset(tuple(f) for f in bound["fetches"]), files=bound["files_sha"])
+            actor = x_undine_actor
+
+            def run(say) -> dict:
+                job = fetchjobs.current()
+                if job is not None:
+                    gitsrc.PROGRESS.set(job.report)
+                try:
+                    return _run_dep(real, request, actor, allow)
+                except Exception as e:
+                    h = e if isinstance(e, HTTPException) else \
+                        _err(_needs(e, real, request) if isinstance(e, deps.NeedsFetch) else e)
+                    raise fetchjobs.JobFailed(str(h.detail), getattr(h, "code", None) or _STATUS_CODES.get(
+                        h.status_code, "request_failed"), getattr(h, "extra", None)) from None
+            job = srv.dep_jobs.start(("deps", str(srv.project(real).path)), real, run, kind="dependency")
+            return {"job": job.public()}
+        except Exception as e:
+            raise _err(e)
+
+    @app.get("/api/p/{project}/deps/fetch/{job}")
+    def deps_fetch_job(project: str, job: str):
+        """A dependency fetch job: {id, project, kind: "dependency", state (queued | running | done | failed), log,
+        progress ({url, bytes, limit} while git fetches, {url, files, of} while the files are read; approximate),
+        result (what the operation's route returns), error, code (as the route's error: needs_fetch with "plan",
+        resolution_refused ...)}. Jobs live in memory: a server restart forgets them."""
+        found = srv.dep_jobs.get(job)
+        if found is None or found.project != changesets._real_of(project):
+            raise HTTPException(404, f"no dependency fetch job {job} of project {project}")
+        return found.public()
 
     @app.post("/api/p/{project}/deps")
     def deps_add(project: str, req: NewDep):
-        """Adds a library dependency (a git repository at a rev), installs it read-only and locks its commit."""
+        """Adds a library dependency (a git repository at a rev), installs it read-only and locks its commit. A fetch
+        from a remote is 409 needs_fetch {plan} (a person confirms it)."""
         try:
             if req.git is None and not req.package:
                 raise ValueError("give `git` (a repository) or `package` (a package from an index)")
             r = deps.add(_no_preview(project), req.name, req.git, req.rev, req.subdir, guard=srv.lock,
                          local_roots=srv.dep_roots, package=req.package, version=req.version, index=req.index,
-                         hosts=srv.dep_hosts)
+                         hosts=srv.dep_hosts, allow=_HTTP)
             srv.deps_changed(project)           # packages it reached may have moved under names already open
             return r
+        except deps.NeedsFetch as e:
+            raise _err(_needs(e, project, _dep_request("add", req.model_dump())))
         except Exception as e:
             raise _err(e)
 
     @app.post("/api/p/{project}/deps/sync")
     def deps_sync(project: str, req: DepSync | None = None):
         """Installs every dependency exactly as locked, from the store where it has them; refuses (400) a lock that
-        does not pin what project.json names (`lib lock` resolves it) and, offline, one whose trees are not stored."""
+        does not pin what project.json names (`lib lock` resolves it) and, offline, one whose trees are not stored.
+        An entry only a remote has is 409 needs_fetch {plan}."""
         try:
             out = deps.sync(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots,
-                            offline=req.offline if req else None, hosts=srv.dep_hosts)
+                            offline=req.offline if req else None, hosts=srv.dep_hosts, allow=_HTTP)
             srv.deps_changed(project)
             return {"libraries": out}
+        except deps.NeedsFetch as e:
+            raise _err(_needs(e, project, _dep_request("sync", {})))
         except Exception as e:
             raise _err(e)
 
     @app.post("/api/p/{project}/deps/lock")
     def deps_relock(project: str):
         """Resolves the dependencies undine.lock does not pin as project.json names them (fetching them, under the
-        --dep-root rule as add), and records the tool versions in use now. Returns the status and `resolved`."""
+        --dep-root rule as add; a remote is 409 needs_fetch), and records the tool versions in use now. Returns the
+        status and `resolved`."""
         try:
-            r = deps.relock(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
+            r = deps.relock(_no_preview(project), guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts,
+                            allow=_HTTP)
             srv.deps_changed(project)
             return {**deps.status(srv.project(project)), "resolved": r["resolved"]}
+        except deps.NeedsFetch as e:
+            raise _err(_needs(e, project, _dep_request("lock", {})))
         except Exception as e:
             raise _err(e)
 
     @app.post("/api/p/{project}/deps/{name}/update")
     def deps_update(project: str, name: str, req: DepUpdate):
-        """Moves a dependency to `rev` (default: its rev again); returns the changed files and the cells using them."""
+        """Moves a dependency to `rev` (default: its rev again); returns the changed files and the cells using them.
+        A package from an index moves within the index's local copy (refreshed by a person); a fetch from a remote
+        is 409 needs_fetch."""
         try:
             r = deps.update(_no_preview(project), name, req.rev, guard=srv.lock, local_roots=srv.dep_roots,
-                            version=req.version, hosts=srv.dep_hosts)
+                            version=req.version, hosts=srv.dep_hosts, allow=_HTTP)
             srv.deps_changed(project)
             return r
+        except deps.NeedsFetch as e:
+            raise _err(_needs(e, project, _dep_request("update", {"name": name, **req.model_dump()})))
         except Exception as e:
             raise _err(e)
 
@@ -2213,33 +2471,29 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         except Exception as e:
             raise _err(e)
 
-    @app.post("/api/p/{project}/deps/changeset")
-    def deps_changeset(project: str, req: DepChangeset, x_undine_actor: str = Header("user")):
-        """The browser's own Add, Update, Remove and Set PDK (docs/design/packages.md, Changesets and evidence): a
-        small changeset opened (a project in no git repository is made one first, as any changeset open does), the
-        operation run in its working copy (Changesets.dep_op, pdk_set), then adopted, which installs it in the project
-        from the store. Returns {changeset, status: "applied", result: what the direct route returns (/deps,
-        /deps/{name}/update, /deps/{name}/remove, /pdk), deps?: the install's rows, deps_warning?, deps_dropped?,
-        deps_pending? (another operation held the dependencies: `lib sync` installs them), git_setup, first_commit,
-        first_commit_note (as the changeset's open answers them)}. What the request alone shows wrong (no git nor
-        package, an unknown PDK, a name that is no dependency) is refused before anything is opened, so a refusal
-        never makes the project a git repository. An operation refused: its error, the changeset discarded. An
-        adopt refused (a conflict with the project): its error (409 merge_conflict ...) with "changeset" in the
-        body, the changeset left open for review. On a preview (`<project>~<id>`) the operation goes into that changeset, not adopted: status "open"."""
+    def _one_click(project: str, req: DepChangeset, actor: str, allow: deps.Allow, opening=None) -> dict:
+        """POST /deps/changeset's work, with what `allow` lets the operation fetch (the route: no remote; a fetch job:
+        what the person confirmed). `opening` (a job): a context that holds the project's dependency lock, waiting for
+        it, and checks the files; the plan (under that lock, not taken again), and the changeset's open, run in it, so
+        a job waits behind another operation rather than failing busy. The route plans without waiting (409 busy).
+        Raises the HTTP error."""
         if req.action not in ("add", "update", "remove", "pdk"):
             raise _err(ValueError(f"unknown action {req.action!r} (add, update, remove, pdk)"))
-        actor = x_undine_actor
+        preview = "~" in project
+        request = _dep_request(req.action, _dep_args(req), project.split("~")[1] if preview else None, not preview,
+                               req.reason, req.title)
 
         def run(real: str, cid: str):
             if req.action == "pdk":
                 r = changesets.pdk_set(real, cid, req.pdk, actor, req.reason)
                 return {"from": r["old"], "to": r["new"], "created": r["created"]}
             return changesets.dep_op(real, cid, req.action, _dep_args(req), actor, req.reason,
-                                     local_roots=srv.dep_roots, hosts=srv.dep_hosts)["result"]
+                                     local_roots=srv.dep_roots, hosts=srv.dep_hosts, allow=allow)["result"]
 
         def check(prj) -> None:
             """What the request alone shows wrong, refused before a changeset is opened: opening one may make the
-            project a git repository (git-setup), which a refusal cannot take back."""
+            project a git repository (git-setup), which a refusal cannot take back. So is a fetch from a remote no
+            person confirmed (needs_fetch)."""
             if req.action == "pdk":
                 if not req.pdk:
                     raise ValueError("give the PDK (pdk)")
@@ -2255,15 +2509,32 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 deps._not_taken(prj, req.name)
             else:
                 deps._dep_spec(prj, req.name)        # a dependency of project.json (NotDirect, DepError)
+            if req.action != "remove":
+                try:
+                    plan = deps.plan_fetch(prj, req.action, _dep_args(req), srv.dep_roots, srv.dep_hosts,
+                                           locked=opening is not None)
+                except (deps.NeedsFetch, ix.IndexNotFetched, deps.DepsBusy):
+                    raise                            # before anything is opened: 409 busy, needs_fetch ...
+                except Exception:
+                    # a refusal of the operation itself (a resolution, a repository that is not one ...): it says
+                    # the same in the changeset, which is then discarded (slice 1's contract)
+                    return
+                # a fetch `allow` does not hold (none from the route; from a job, one that came since the
+                # confirmation: the index refreshed, a kept commit gone) is refused before anything is opened
+                if any(not allow.may(f["url"], f["rev"] or f["commit"]) for f in plan["fetches"]):
+                    raise deps.NeedsFetch(plan)
         try:
             real = changesets._real_of(project)
-            check(srv.project(project))
-            if "~" in project:
-                cid = project.split("~")[1]
-                return {"changeset": cid, "status": "open", "result": run(real, cid)}
-            title = req.title or (f"Set the PDK to {req.pdk}" if req.action == "pdk" else
-                                  f"{req.action.capitalize()} {req.name}")
-            meta = changesets.create(real, title, req.reason, actor)
+            with opening() if opening is not None else contextlib.nullcontext():
+                check(srv.project(project))
+                if preview:
+                    cid = project.split("~")[1]
+                    return {"changeset": cid, "status": "open", "result": run(real, cid)}
+                title = req.title or (f"Set the PDK to {req.pdk}" if req.action == "pdk" else
+                                      f"{req.action.capitalize()} {req.name}")
+                meta = changesets.create(real, title, req.reason, actor)
+        except deps.NeedsFetch as e:
+            raise _err(_needs(e, project, request))
         except Exception as e:
             raise _err(e)
         cid = meta["id"]
@@ -2274,7 +2545,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 changesets.discard(real, cid, actor)
             except Exception as e2:              # left open: the list shows it
                 print(f"undine: cannot discard {real}/{cid} after its operation failed: {e2}", file=sys.stderr)
-            raise _err(e)
+            raise _err(_needs(e, project, request) if isinstance(e, deps.NeedsFetch) else e)
         try:
             applied = changesets.apply(real, cid, actor).get("applied") or {}
         except Exception as e:                   # kept open for review (MergeConflict: its files and conflicts)
@@ -2285,6 +2556,22 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 **{k: meta.get(k) for k in ("git_setup", "first_commit", "first_commit_note")},
                 **{k: applied[k] for k in ("deps", "deps_warning", "deps_dropped", "deps_pending")
                    if applied.get(k) is not None}}
+
+    @app.post("/api/p/{project}/deps/changeset")
+    def deps_changeset(project: str, req: DepChangeset, x_undine_actor: str = Header("user")):
+        """The browser's own Add, Update, Remove and Set PDK (docs/design/packages.md, Changesets and evidence): a
+        small changeset opened (a project in no git repository is made one first, as any changeset open does), the
+        operation run in its working copy (Changesets.dep_op, pdk_set), then adopted, which installs it in the project
+        from the store. Returns {changeset, status: "applied", result: what the direct route returns (/deps,
+        /deps/{name}/update, /deps/{name}/remove, /pdk), deps?: the install's rows, deps_warning?, deps_dropped?,
+        deps_pending? (another operation held the dependencies: `lib sync` installs them), git_setup, first_commit,
+        first_commit_note (as the changeset's open answers them)}. What the request alone shows wrong (no git nor
+        package, an unknown PDK, a name that is no dependency, a fetch from a remote no person confirmed: 409
+        needs_fetch) is refused before anything is opened, so a refusal never makes the project a git repository. An
+        operation refused: its error, the changeset discarded. An adopt refused (a conflict with the project): its
+        error (409 merge_conflict ...) with "changeset" in the body, the changeset left open for review. On a
+        preview (`<project>~<id>`) the operation goes into that changeset, not adopted: status "open"."""
+        return _one_click(project, req, x_undine_actor, _HTTP)
 
     # ------------------------------------------------- git: the project's history (vcs/history.py)
 
@@ -3581,12 +3868,15 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """A dependency operation in the changeset's working copy (Changesets.dep_op): `action` add (as POST /deps),
         update (as /deps/{name}/update) or remove, recorded in its project log; the changeset's baseline is refused
         (403). Returns {changeset, op: {gseq, opid} (null: nothing changed), result: what the /deps route returns,
-        status: the working copy's deps status}; refusals as the /deps routes' (409 resolution_refused, busy ...)."""
+        status: the working copy's deps status}; refusals as the /deps routes' (409 resolution_refused, busy,
+        needs_fetch with the plan whose request names this changeset ...)."""
         try:
             out = changesets.dep_op(changesets._real_of(project), cid, req.action, _dep_args(req), x_undine_actor,
-                                    req.reason, local_roots=srv.dep_roots, hosts=srv.dep_hosts)
+                                    req.reason, local_roots=srv.dep_roots, hosts=srv.dep_hosts, allow=_HTTP)
             meta = changesets._record(changesets._real_of(project), cid)
             return {**out, "status": deps.status(srv.project(meta["preview"]))}
+        except deps.NeedsFetch as e:
+            raise _err(_needs(e, project, _dep_request(req.action, _dep_args(req), cid, reason=req.reason)))
         except Exception as e:
             raise _err(e)
 

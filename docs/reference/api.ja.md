@@ -36,16 +36,16 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 | `POST /api/p/{project}/libs` `{name}` | プロジェクト自身のライブラリを作成(`libs/<name>`。project.json に記録) |
 | `POST /api/p/{project}/pdk` `{pdk}` | プロジェクトを別の PDK バージョンに固定し直す(`pdk_history` と undine.lock に記録。undine.lock がなければ作る。format 2 の lock には、先に木のハッシュを取った新しい PDK の固定を書く)。`{from, to}` を返す。changeset のプレビューでは使えない |
 | `GET /api/p/{project}/deps` | ロックしたプロジェクトと、ここにインストールされたものとの比較(`lib status`。下記)。project.json がもう指定しないのに、まだインストールかロックされている依存関係は `state: "leftover"` と問題とともに一覧に入る(なので `ok` は false) |
-| `POST /api/p/{project}/deps` `{name, git, rev?, subdir?, package?}` または `{name, package, version?, index?}` | [ライブラリの依存関係](../guide/libraries.ja.md)を追加(`lib add`)。`git` がなければ[インデックスのパッケージ](../guide/libraries.ja.md#packages-from-an-index)を追加する(`pkg add`。`version` は要求で、既定は合う最新のものに `^` を付けたもの。`index` は略称か URL で、既定は既定のインデックス。lock の形式 2 が必要)。それが依存するパッケージも一緒に、取得し、読み取り専用でインストールし、ロックする。lock のエントリに `name`、`cells`、`public_cells`、`internal_cells`、`created`(undine.lock を作ったか)、`package` と `version`(通常の依存関係では null)、`resolved`(解決した各エントリ: `{name, ...entry}`。パッケージなら `package`、`version`、`names`、`via`、`flagged`、`trusted` も)、`flagged`(`{spice, rtl, tcl}`: 信頼の規則がその中に見つけるもの)、`trusted` を加えて返す。`package`: マニフェストが名乗るべき [package] の名前。ローカルの `git`(`file://`、`/path`、`~/path`)は、サーバーを `--dep-root` で起動し、リポジトリがそのディレクトリのどれかの下にあるときだけ受け付ける。同期と更新でも、マニフェストが指定するどの URL でも同じ。拒否は[下記](#dependency-refusals) |
-| `POST /api/p/{project}/deps/sync` `{offline?}` | 依存関係をすべてロックどおりにインストールし(`lib sync`)、残りものをそれぞれ削除する(そのファイルと undine.lock のエントリ)。`{libraries: [{name, action, commit}]}` を返す。`action` は `ok`(すでにロックどおり)、`installed`、`removed` のどれか(`removed` では `commit` が null のことがある)。パッケージの行には `package` もあり、固定した PDK が合わないパッケージの行には `warning`(`CHAIN: does not fit the PDK ID: REASON`)がある。そのパッケージもインストールし、`GET /deps` は問題として報告する。本文はなくてもよい: `{"offline": true}` は取得せず、`false` は取得してよく、本文なし(または `null`)ならサーバーの `UNDINE_OFFLINE` に従う。固定どおり: project.json の指定どおりに依存関係を固定していない lock は、何かを読む前に拒否する(`lib lock` で解決する)。全部か無か: 1 つでも失敗すると(リモートに届かない、ファイルがロックと合わない、オフラインでストアにない)、どれもインストールせず、どれも削除しない。[ストア](data.ja.md#the-store)にある依存関係はそこから入れ、リポジトリを読まない。ローカルのリポジトリは、project.json が指定するものも、git がそれを読む前(取得、またはストアに残したリポジトリの commit)に `--dep-root` と照らし合わせる |
-| `POST /api/p/{project}/deps/lock` | `lib lock`: project.json の指定どおりに undine.lock が固定していないものを取得し、インストールして固定し(add と同じく `--dep-root` の規則のもとで)、今使っているツールのバージョンを記録する(format 1 の lock では PDK の id も)。状態に `resolved: [{name, git, rev?, subdir?, commit, sha または tree}]` を加えて返す。lock はその形式のまま書く。format 2 にするのはコマンドラインの役目(`lib lock --format 2`、`pdk verify --pin`) |
-| `POST /api/p/{project}/deps/{name}/update` `{rev?, version?}` | 依存関係を `rev` に移す(既定はもう一度同じ rev)。インデックスのパッケージは、要求が受け付ける最新のバージョンに移す(`version`: 新しい要求で、project.json に書く)。`{name, from, to, rev, changed, used_by, packages_changed}` を返す: 変わったファイルと、それを使うセル、そして動いた、連れてきた(`from` が null)、もう要らない(`to` が null)エントリごとの `packages_changed: [{package, names, from, to, changed}]`。動いたものの信頼は project.json から取り除く |
+| `POST /api/p/{project}/deps` `{name, git, rev?, subdir?, package?}` または `{name, package, version?, index?}` | [ライブラリの依存関係](../guide/libraries.ja.md)を追加(`lib add`)。`git` がなければ[インデックスのパッケージ](../guide/libraries.ja.md#packages-from-an-index)を追加する(`pkg add`。`version` は要求で、既定は合う最新のものに `^` を付けたもの。`index` は略称か URL で、既定は既定のインデックス。lock の形式 2 が必要)。それが依存するパッケージも一緒に、取得し、読み取り専用でインストールし、ロックする。lock のエントリに `name`、`cells`、`public_cells`、`internal_cells`、`created`(undine.lock を作ったか)、`package` と `version`(通常の依存関係では null)、`resolved`(解決した各エントリ: `{name, ...entry}`。パッケージなら `package`、`version`、`names`、`via`、`flagged`、`trusted` も)、`flagged`(`{spice, rtl, tcl}`: 信頼の規則がその中に見つけるもの)、`trusted` を加えて返す。`package`: マニフェストが名乗るべき [package] の名前。ローカルの `git`(`file://`、`/path`、`~/path`)は、サーバーを `--dep-root` で起動し、リポジトリがそのディレクトリのどれかの下にあるときだけ受け付ける。同期と更新でも、マニフェストが指定するどの URL でも同じ。このルートはリモートのリポジトリから取得することはなく、計画を付けた 409 の `needs_fetch` を返し、人がそれを確かめる([依存関係の取得](#dependency-fetch))。`--dep-root` の下のローカルのリポジトリは確認が要らない。拒否は[下記](#dependency-refusals) |
+| `POST /api/p/{project}/deps/sync` `{offline?}` | 依存関係をすべてロックどおりにインストールし(`lib sync`)、残りものをそれぞれ削除する(そのファイルと undine.lock のエントリ)。`{libraries: [{name, action, commit}]}` を返す。`action` は `ok`(すでにロックどおり)、`installed`、`removed` のどれか(`removed` では `commit` が null のことがある)。パッケージの行には `package` もあり、固定した PDK が合わないパッケージの行には `warning`(`CHAIN: does not fit the PDK ID: REASON`)がある。そのパッケージもインストールし、`GET /deps` は問題として報告する。本文はなくてもよい: `{"offline": true}` は取得せず、`false` は取得してよく、本文なし(または `null`)ならサーバーの `UNDINE_OFFLINE` に従う。固定どおり: project.json の指定どおりに依存関係を固定していない lock は、何かを読む前に拒否する(`lib lock` で解決する)。全部か無か: 1 つでも失敗すると(リモートに届かない、ファイルがロックと合わない、オフラインでストアにない)、どれもインストールせず、どれも削除しない。[ストア](data.ja.md#the-store)にある依存関係はそこから入れ、リポジトリを読まない。ローカルのリポジトリは、project.json が指定するものも、git がそれを読む前(取得、またはストアに残したリポジトリの commit)に `--dep-root` と照らし合わせる。リモートのリポジトリにしかないエントリは、何かを取得する前に 409 の `needs_fetch`([依存関係の取得](#dependency-fetch)) |
+| `POST /api/p/{project}/deps/lock` | `lib lock`: project.json の指定どおりに undine.lock が固定していないものを取得し、インストールして固定し(add と同じく `--dep-root` の規則のもとで。リモートは 409 の `needs_fetch`)、今使っているツールのバージョンを記録する(format 1 の lock では PDK の id も)。状態に `resolved: [{name, git, rev?, subdir?, commit, sha または tree}]` を加えて返す。lock はその形式のまま書く。format 2 にするのはコマンドラインの役目(`lib lock --format 2`、`pdk verify --pin`) |
+| `POST /api/p/{project}/deps/{name}/update` `{rev?, version?}` | 依存関係を `rev` に移す(既定はもう一度同じ rev)。インデックスのパッケージは、要求が受け付ける最新のバージョンに移す(`version`: 新しい要求で、project.json に書く)。`{name, from, to, rev, changed, used_by, packages_changed}` を返す: 変わったファイルと、それを使うセル、そして動いた、連れてきた(`from` が null)、もう要らない(`to` が null)エントリごとの `packages_changed: [{package, names, from, to, changed}]`。動いたものの信頼は project.json から取り除く。インデックスのパッケージは、インデックスの手元の写しのままで動かす(このルートはインデックスを取得しない: 人が先に取得し直す)。リモートからの取得は 409 の `needs_fetch` |
 | `POST /api/p/{project}/deps/{name}/remove` | 依存関係を、もう何も必要としないパッケージと一緒に削除。`{ok, name, removed_packages: [{package, version, commit, names}], kept: [{name, placed_by}]}` を返す(通常の依存関係では `package` は null。`kept`: ほかの依存関係がまだ配置しているパッケージ) |
-| `POST /api/p/{project}/deps/changeset` `{action, name?, git?, rev?, subdir?, package?, version?, index?, pdk?, title?, reason?}` | ブラウザの追加、更新、削除、PDK の変更: 小さな changeset を開き(題名は `title`、既定は `Add NAME`、`Update NAME`、`Remove NAME`、`Set the PDK to PDK`。git リポジトリにないプロジェクトは、どの [changeset](../guide/changesets.md) を開くときとも同じく、まずリポジトリにします)、その作業コピーで操作を行い(`action` は上のルートのフィールドを持つ `add`、`update`、`remove`、または `pdk` を持つ `pdk`)、それを採用して、プロジェクトにストアからインストールします。`{changeset, status: "applied", result, git_setup, first_commit, first_commit_note, deps?, deps_warning?, deps_dropped?, deps_pending?}` を返します: `result` は直接のルートが返すもの(`POST /deps`、`/deps/{name}/update`、`/deps/{name}/remove`、または `POST /pdk` と同じ `{from, to, created}`)、`git_setup`、`first_commit`、`first_commit_note` は changeset を開いたときの答えと同じ、残りは採用の[Merge](#changesets) と同じです。リクエストだけでわかる誤り(`git` も `package` もない追加、使われている名前や依存関係でない名前、`pdk` がないか知らない PDK)は何も開く前に拒否するので、そうした拒否でプロジェクトがリポジトリになることはありません。操作が拒否されたときは直接のルートと同じ答えで、changeset は破棄します。採用が拒否されたとき(409 の `merge_conflict` など)は本文と `params` に `changeset` があり、changeset はレビューのために開いたままです。プレビュー(`{project}~{id}`)では、操作はその changeset に入り、採用はしません: `status: "open"`。上の直接のルートはこれまでどおり動きます |
-| `GET /api/packages?q=&index=&project=` | [パッケージ欄](../guide/libraries.ja.md#packages-in-the-browser): インデックスのパッケージのうち、名前か説明に `q` を含むもの(空ならすべて)について、yank されていない最新のバージョン: `{index, index_name, commit, packages: [{name, version, description, license, yanked, fits}]}`。`index`: 略称か URL(既定は既定のインデックス)。`project`: その project.json が示す略称のためと、`fits`(`{ok, reason}`: そのバージョンがプロジェクトの PDK を受け付けるか。`project` がなければ null)のため。インデックスは最初に読むときに取得し、そのあとは取得し直すまで手元の写しを読む |
-| `GET /api/packages/{name}?index=&project=` | パッケージのすべてのバージョン(新しい順): `{index, index_name, commit, name, newest, locked, versions: [{name, version, description, license, yanked, fits, git, subdir, commit, tree, size, pdk, exports, deps: [{name, package, req, index, index_name}]}]}`。`newest`: yank されていない最新のもの。`locked`: プロジェクトがこのインデックスから固定しているバージョン、なければ null。インデックスにそのパッケージがなければ 404 |
+| `POST /api/p/{project}/deps/changeset` `{action, name?, git?, rev?, subdir?, package?, version?, index?, pdk?, title?, reason?}` | ブラウザの追加、更新、削除、PDK の変更: 小さな changeset を開き(題名は `title`、既定は `Add NAME`、`Update NAME`、`Remove NAME`、`Set the PDK to PDK`。git リポジトリにないプロジェクトは、どの [changeset](../guide/changesets.md) を開くときとも同じく、まずリポジトリにします)、その作業コピーで操作を行い(`action` は上のルートのフィールドを持つ `add`、`update`、`remove`、または `pdk` を持つ `pdk`)、それを採用して、プロジェクトにストアからインストールします。`{changeset, status: "applied", result, git_setup, first_commit, first_commit_note, deps?, deps_warning?, deps_dropped?, deps_pending?}` を返します: `result` は直接のルートが返すもの(`POST /deps`、`/deps/{name}/update`、`/deps/{name}/remove`、または `POST /pdk` と同じ `{from, to, created}`)、`git_setup`、`first_commit`、`first_commit_note` は changeset を開いたときの答えと同じ、残りは採用の[Merge](#changesets) と同じです。リクエストだけでわかる誤り(`git` も `package` もない追加、使われている名前や依存関係でない名前、`pdk` がないか知らない PDK、人が確かめていないリモートからの取得: 409 の `needs_fetch` で、計画の `request` は `adopt: true`)は何も開く前に拒否するので、そうした拒否でプロジェクトがリポジトリになることはありません。操作が拒否されたときは直接のルートと同じ答えで、changeset は破棄します。採用が拒否されたとき(409 の `merge_conflict` など)は本文と `params` に `changeset` があり、changeset はレビューのために開いたままです。プレビュー(`{project}~{id}`)では、操作はその changeset に入り、採用はしません: `status: "open"`。上の直接のルートはこれまでどおり動きます |
+| `GET /api/packages?q=&index=&project=` | [パッケージ欄](../guide/libraries.ja.md#packages-in-the-browser): インデックスのパッケージのうち、名前か説明に `q` を含むもの(空ならすべて)について、yank されていない最新のバージョン: `{index, index_name, commit, packages: [{name, version, description, license, yanked, fits}]}`。`index`: 略称か URL(既定は既定のインデックス)。`project`: その project.json が示す略称のためと、`fits`(`{ok, reason}`: そのバージョンがプロジェクトの PDK を受け付けるか。`project` がなければ null)のため。インデックスは取得しない: 手元の写しのないインデックスは `{index, url, host}` を付けた 409 の `index_not_fetched`(`index` は略称、`host` はローカルのものなら null)で、取得し直すまで手元の写しを読む |
+| `GET /api/packages/{name}?index=&project=` | パッケージのすべてのバージョン(新しい順): `{index, index_name, commit, name, newest, locked, versions: [{name, version, description, license, yanked, fits, git, subdir, commit, tree, size, pdk, exports, deps: [{name, package, req, index, index_name}]}]}`。`newest`: yank されていない最新のもの。`locked`: プロジェクトがこのインデックスから固定しているバージョン、なければ null。インデックスにそのパッケージがなければ 404。上と同じく 409 の `index_not_fetched` |
 | `GET /api/indexes?project=` | ここで、またプロジェクトが知っているインデックス: `{indexes: [{name, url, commit}]}`(最初の取得の前は `commit` が null) |
-| `POST /api/indexes/{name}/refresh?project=` | インデックス `name`(略称)を取得し直す: `{index, index_name, commit}` |
+| `POST /api/indexes/{name}/refresh?project=` `{token}` | インデックス `name`(略称)を、その URL についての種類 `index` の確認のトークンで取得し直す([依存関係の取得](#dependency-fetch)): `{index, index_name, commit}`。トークンがない、未知・使用済み・期限切れ、別の種類のもの、別のインデックスかプロジェクトのものなら 403 |
 | `GET /api/p/{project}/trust` | プロジェクトが信頼しているものと、インストールされた各依存関係が持つもの: `{trusted: [keys], dependencies: [{name, package, version, key, trusted, findings}]}`。ローカル名ごとに 1 行。changeset のプレビューでは `trusted` にプロジェクトのキーも入る。見つかったものは `{content, cell, file, where, kind, line, text}`([下記](#trusting-a-dependency)) |
 | `POST /api/p/{project}/trust` `{name, token}` または `{name, untrust: true}` | `name` としてインストールされた依存関係を、種類 `trust` の確認のトークンで信頼する。または(トークンなしで)その信頼を取り消す: `{key, trusted}`。[下記](#trusting-a-dependency) |
 
@@ -90,9 +90,9 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
   the network ...`。changeset の採用も同じように、持ち込む lock のエントリのファイルがストアにもプロジェクトのインストールにも
   なければ拒否します(409 の `merge_conflict`、undine.lock の衝突): `analog_ip @ 229914698b1f (...) is not in the store:
   fetch it first`。
-- **ブラウザが読めないインデックス。** `GET /api/packages`、`/api/packages/{name}`、`/api/indexes/{name}/refresh` は、
-  git の依存関係と同じ規則でインデックスを読む: ローカルのインデックスは `--dep-root` の下だけ、リモートのものは設定した
-  インデックスのホストか `--dep-host` で指定したホストだけ。それ以外は、何も取得する前に拒否する(400)。
+- **ブラウザが読めないインデックス。** `GET /api/packages`、`/api/packages/{name}`、種類 `index` の確認、
+  `/api/indexes/{name}/refresh` は、git の依存関係と同じ規則でインデックスを読む: ローカルのインデックスは `--dep-root` の下だけ、
+  リモートのものは設定したインデックスのホストか `--dep-host` で指定したホストだけ。それ以外は、何も取得する前に拒否する(400)。
 - **`--dep-root` の外のローカルリポジトリ。** `POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update` は、`file://`、絶対パス、`~/...` の
   `git` を、その実際のパス(シンボリックリンクと `..` を解決したもの)と git ディレクトリが `serve --dep-root` で指定したディレクトリの
   下になければ拒否します。メッセージは `--dep-root` と、同じことをコマンドラインで行う `python -m undine lib ...` のコマンドを示します。
@@ -101,9 +101,11 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 - **許されていないリモートのホスト。** 同じルートは、リモートのリポジトリやインデックスを、このマシンが設定するインデックスのホスト
   (既定のインデックスの `github.com` と、`$UNDINE_HOME/config.toml` にあるもの。プロジェクト自身の `indexes` は含みません)か、
   `serve --dep-host` で指定したホストからだけ取得します。これは、リクエストの URL にも、project.json、マニフェスト、インデックスの行が
-  指定する URL にも当てはまります。それ以外は git を実行する前に拒否します: `https://gitlab.com/me/ip.git: from the browser this
-  server fetches only from github.com (...); not from gitlab.com. Start the server with --dep-host gitlab.com, or run
-  python -m undine lib add ... from the command line`。これらのルートからは、サーバーがそれだけでは渡さないコミット(短縮した ID や、
+  指定する URL にも当てはまります。ほかのホストのインデックスは git を実行する前に拒否します: `https://gitlab.com/me/index.git:
+  from the browser this server fetches only from github.com (...); not from gitlab.com. Start the server with --dep-host
+  gitlab.com, or run python -m undine pkg index update ... from the command line`。ほかのホストのリポジトリは、人が確かめる
+  取得になり(409 の `needs_fetch`。その行は `allowed: false` で、ダイアログが注意を出します)、確かめた後はホストにかかわらず
+  通ります。これらのルートからは、人がその URL を確かめていなければ、サーバーがそれだけでは渡さないコミット(短縮した ID や、
   どのブランチやタグからもたどれないコミット)を、すべてのブランチとタグを取得して探すことはしません。メッセージは、その操作を
   一度コマンドラインで実行するように言います。そうすればコミットがストアに残り、ブラウザからも読めます。
 
@@ -118,6 +120,10 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 | `pdk_incompatible` | 409 | 固定済みのパッケージが受け入れない PDK への `POST /pdk` | `packages: [{name, package, version, chain, reason, family, variants, commits, compat, built_with}]` |
 | `not_synced` | 409 | 固定済みのパッケージがストアにもプロジェクトのインストールにもない(クローンした直後): 先に `lib sync` | |
 | `untrusted` | 403 | 人が信頼していない依存関係の内容を実行するジョブ([下記](#trusting-a-dependency)) | `name`、`package`、`key`、`cell`、`findings` |
+| `needs_fetch` | 409 | `POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update`、`/deps/changeset`、`/changesets/{id}/deps`: 人が確かめていないリモートからの取得([依存関係の取得](#dependency-fetch)) | `plan: {op, fetches, complete, project, request}` |
+| `index_not_fetched` | 409 | `GET /api/packages`、`/api/packages/{name}`、そして手元の写しのないインデックスを読む追加、更新、ロック: 人が先に取得し直す | `index`、`url`、`host` |
+| `busy` | 409 | プロジェクトの別の依存関係の操作が動いている間の、種類 `dependency` の確認や、(何も開く前の)1 クリックの `POST /deps/changeset` | |
+| `files_changed` | 403 | 確認の後に project.json か undine.lock が変わった依存関係の取得のジョブ。依存関係のロックを取ったところで見つける | |
 
 <a id="trusting-a-dependency"></a>
 ### 依存関係を信頼する
@@ -145,6 +151,33 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 同じく、MCP のツール、`undine call` のコマンド、Python のクライアントのメソッド、エージェントのツールのどれも、`trust` の確認を
 求めたり何かを信頼したりしません。
 
+<a id="dependency-fetch"></a>
+## 依存関係の取得
+
+HTTP からの依存関係の操作は、人がブラウザの **依存を取得** のダイアログで確かめたものだけをリモートのリポジトリから取得します。
+インデックスも、人が確かめた取得し直しでだけ取得します([確認のトークン](../design/packages.ja.md#ui-cli-http-agent-tools))。
+取得が要るルートは、何も取得も変更もせずに 409 の `needs_fetch` を返します。その `plan`:
+
+| フィールド | |
+|---|---|
+| `op` | `add`、`update`、`lock`、`sync` |
+| `fetches` | `[{url, rev, commit, subdir, tree, size, license, package, version, host, allowed}]`: 取得する各リポジトリとコミット(または rev)。インデックスのパッケージは、コミット、ツリー、サイズ、ライセンスをインデックスの行から持つ。rev で指定した通常の git の依存関係は `rev` を持ち、最初の取得の前は `commit` が null(取得した後は、その取得が返したコミットで、もう一度確かめる)。`host` は URL のホスト(ローカルのものは null)、`allowed` はサーバーが確認なしでそこから取得するか(設定したインデックスのホストと `--dep-host`) |
+| `complete` | 取得したものがさらに取得するものを挙げることがあるとき(通常の git の依存関係のマニフェストは取得してから読む)は false: 2 回目の確認が続くことがある |
+| `project` | プロジェクト(changeset でも実際のプロジェクト) |
+| `request` | 確認がそのまま受け取る操作: `{op, name?, git?, rev?, subdir?, package?, version?, index?, changeset?, adopt?, reason?, title?}`。`changeset` はその changeset の作業コピーで行い、`adopt: true` はブラウザのワンクリックの操作(小さな changeset を作って採用する) |
+
+| 呼び出し | |
+|---|---|
+| `POST /api/confirmations` `{kind: "dependency", project, ...request, fetches: [{url, rev, commit, subdir, tree}]}` | 人のクリックの後で: `{token, expires, plan}`。サーバーは(何も取得せずに。ステージングも見るが何も書かない)計画を作り直し、リクエストの `fetches` はその取得とちょうど同じでなければならない(URL、rev、コミット、subdir で比べ、両方にあるツリーは一致しなければならない)。違えば 400(`... show the fetch dialog again`)。トークンは 1 回だけ使え、5 分で切れ、プロジェクト、操作、その取得、project.json と undine.lock(バイトのとおり。changeset ならその作業コピーのもの)に結び付く。プロジェクトの別の依存関係の操作が動いている間は 409 の `busy` |
+| `POST /api/p/{project}/deps/fetch` `{token}` | トークンを使い切り、操作をジョブとして動かす: `{job}`(下記)。リモートからは確かめた取得だけ(そう確かめた URL はホストにかかわらず通る)、`--dep-root` の下のローカルのリポジトリ、それ以外は取得しない。トークンがない、未知・使用済み・期限切れ、別の種類やプロジェクトのもの、確認の後に project.json か undine.lock が変わった(`... changed since the fetch was confirmed: confirm the fetch again`)ときは 403。どの場合もトークンは使い切る |
+| `GET /api/p/{project}/deps/fetch/{job}` | ジョブ: `{id, project, kind: "dependency", state, log, progress, result, error, code, created, ended}`。`state` は `queued`、`running`、`done`、`failed` のどれか。`progress` はおおよその値で、git が取得する間は `{url, bytes, limit}`(受け取った pack のバイト数)、ファイルをストアに読む間は `{url, files, of}`。`result` は操作のルートが返すもの(`POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update`、`/deps/changeset`、`/changesets/{id}/deps`)。`error` と `code` はそのルートの拒否と同じ(独自のコードのない拒否は状態のもの: `invalid_request`、`not_found` など)で、その追加の値(`changeset`、`problems` など)は `params` に、ジョブ自身の値とぶつからないものはジョブにも入る。1 クリックの操作はプロジェクトの依存関係のロックを待って取り、その下でファイルを確かめ、計画を作り直し、changeset を開く。トークンにない取得(その間に取得し直したインデックス、なくなった残しのコミット)は、何も開く前に `needs_fetch` で拒否する。操作は、プロジェクトの依存関係のロックを取ったところで project.json と undine.lock をもう一度確かめる(ジョブはそれを変える別のジョブの後で待つことがある)。変わっていれば、何も取得も書き込みもせずに `code: "files_changed"` で失敗する。取得したところさらに取得するものがあったとき(通常の git の依存関係のマニフェストがほかのものを挙げる、rev が計画に示したのと別のコミットを返す)は、`code: "needs_fetch"` と次の `plan` で失敗し、人がもう一度確かめる。サーバーが知らないジョブや PDK のジョブなら 404 |
+| `POST /api/confirmations` `{kind: "index", index, project?}` | インデックスの取得し直しを人がクリックした後で: `{token, expires, index, url, host, commit}`(`commit` は手元の写しのもので、最初の取得の前は null)。トークンはインデックスの URL とプロジェクトに結び付く。インデックスは取得し直しと同じく確かめる(`--dep-root`、`--dep-host`。400) |
+
+プロジェクトの依存関係のジョブは一度に 1 つ動きます。ジョブは PDK のものとは別にサーバーのメモリの中にあり、再起動で失われます
+(ジョブが取得したものはストアに残り、次の試みはそこからインストールします)。コマンドラインはこれまでどおり、何も尋ねずに取得します。
+MCP のツール、`undine call` のコマンド、Python のクライアントのメソッド、エージェントのツールのどれも、これらの種類のトークンを
+求めず、持たず、取得も始めません。
+
 <a id="pdk-fetch"></a>
 ## PDK の取得
 
@@ -154,7 +187,7 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 | 呼び出し | |
 |---|---|
 | `GET /api/p/{project}/pdk/fetch-plan?allow_network=false` | 取得で動かすもの: `{family, variant, commit, libraries, source, root}`。`libraries` は ciel の既定のセットなら null、`source` は ciel の取得元、`root` は ciel が入れる PDK のルート(サーバーが探すルートのうち、`ciel/` があるか、まだないか、空の最初のもの)。commit は undine.lock の固定から、なければ 12 文字の id を、入っている PDK から、または `allow_network=true` なら `ciel ls-remote` で広げて得る。読むだけ |
-| `POST /api/confirmations` `{kind: "pdk", project, commit, variant, libraries, allow_network?}` | その取得だけに使えるトークン: `{token, expires, plan}`。リクエストはサーバーがいま作る計画と合わなければならない(`commit` は先頭 7 文字以上でよい。`libraries` は ciel の既定のセットなら null)。合わなければ 400(`... show the fetch dialog again`)。トークンは 1 回だけ使え、5 分で切れ(`expires`、Unix 時刻)、プロジェクトと計画の全体に結び付く。もう 1 つの種類は `trust`([依存関係を信頼する](#trusting-a-dependency))で、それ以外は 400。changeset のプレビューと、ciel の既定でない取得元は拒否する |
+| `POST /api/confirmations` `{kind: "pdk", project, commit, variant, libraries, allow_network?}` | その取得だけに使えるトークン: `{token, expires, plan}`。リクエストはサーバーがいま作る計画と合わなければならない(`commit` は先頭 7 文字以上でよい。`libraries` は ciel の既定のセットなら null)。合わなければ 400(`... show the fetch dialog again`)。トークンは 1 回だけ使え、5 分で切れ(`expires`、Unix 時刻)、プロジェクトと計画の全体に結び付く。ほかの種類は `trust`([依存関係を信頼する](#trusting-a-dependency))と、`dependency` と `index`([依存関係の取得](#dependency-fetch))で、それ以外は 400。changeset のプレビューと、ciel の既定でない取得元は拒否する |
 | `POST /api/p/{project}/pdk/fetch` `{token}` | トークンを使い切って、`ciel fetch` をジョブとして始める: `{job}`(下記)。トークンがない、知らない、使用済み、期限切れ、別のプロジェクトのものなら 403。changeset のプレビュー、または確かめた後に計画が変わった(undine.lock か project.json が変わった: 確かめ直す)ときは 400。1 つの PDK の取得は一度に 1 つで、2 つ目は `queued` で待つ |
 | `GET /api/p/{project}/pdk/fetch/{job}` | ジョブ: `{id, project, state, log, result, error, created, ended}`。`state` は `queued`、`running`、`done`、`failed` のどれか。`log` は ciel の出力の最後の 200 行。`result` は終わった後の `{path, verify}` で、`verify` は undine.lock と照らした PDK(`{state, changed, missing_libraries, extra_libraries, warnings}`。`state` は `pdk verify` と同じ)。`error` は失敗した理由。サーバーが知らないジョブなら 404 |
 

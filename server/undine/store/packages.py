@@ -7,9 +7,11 @@ browser reads them.
     newer(prj, rows)     per dependency from an index, the newest version its requirement accepts and the newest listed
 
 Over HTTP an index is read under the same rule as a git dependency (deps._source): a local index only below
---dep-root, a remote one only on a host allowed_hosts gives (the configured indexes' hosts and --dep-host). The first
-read of an index fetches it; search and info read the local copy after that, and only refresh fetches it again.
-newer() reads the local copies as they are and never fetches: a dependency row is drawn often.
+--dep-root, a remote one only on a host allowed_hosts gives (the configured indexes' hosts and --dep-host). From the
+command line the first read of an index fetches it; search and info read the local copy after that, and only refresh
+fetches it again. Over HTTP (fetch=False, phase 4) search and info never fetch: an index with no local copy is
+index.IndexNotFetched, and a refresh needs the person's confirmation token. newer() reads the local copies as they are
+and never fetches: a dependency row is drawn often.
 """
 from __future__ import annotations
 
@@ -21,12 +23,16 @@ from undine.store import index as ix
 from undine.store.semver import Req, SemverError, Version
 
 
-def _index(url: str, local_roots: list[Path] | None, hosts, command: str) -> ix.Index:
+def _index(url: str, local_roots: list[Path] | None, hosts, command: str, fetch: bool = True) -> ix.Index:
     try:
         src = deps._source({"git": url}, local_roots, command, hosts) if local_roots is not None else None
     except deps.DepError as e:
         raise deps.DepError(f"index {url}: {e}") from None
-    return ix.Index(url, src)
+    return ix.Index(url, src, fetch)
+
+
+def _unfetched(e: ix.IndexNotFetched, meta: dict | None) -> ix.IndexNotFetched:
+    return ix.IndexNotFetched(e.url, ix.nickname(e.url, meta))
 
 
 def _target(prj):
@@ -62,27 +68,36 @@ def _where(url: str, meta: dict | None, idx: ix.Index) -> dict:
 
 
 def search(query: str = "", index: str | None = None, prj=None, local_roots: list[Path] | None = None,
-           hosts=()) -> dict:
+           hosts=(), fetch: bool = True) -> dict:
     """{index, index_name, commit, packages: [{name, version, description, license, yanked, fits}]}: the newest
-    version of each package whose name or description holds `query` (every package for an empty one)."""
+    version of each package whose name or description holds `query` (every package for an empty one). `fetch` False
+    (HTTP): IndexNotFetched rather than a first fetch."""
     meta = prj.meta if prj is not None else {}
     url = ix.url_of(index, meta)
-    idx = _index(url, local_roots, hosts, f"pkg search {query}".rstrip())
-    found = idx.search(query)
+    idx = _index(url, local_roots, hosts, f"pkg search {query}".rstrip(), fetch)
+    try:
+        found = idx.search(query)
+    except ix.IndexNotFetched as e:
+        raise _unfetched(e, meta) from None
     target = _target(prj)
     rows = [{k: v for k, v in _line(x, meta).items() if k in ("name", "version", "description", "license", "yanked")}
             | {"fits": _fits(x, target, prj)} for x in found]
     return _where(url, meta, idx) | {"packages": rows}
 
 
-def info(name: str, index: str | None = None, prj=None, local_roots: list[Path] | None = None, hosts=()) -> dict:
+def info(name: str, index: str | None = None, prj=None, local_roots: list[Path] | None = None, hosts=(),
+         fetch: bool = True) -> dict:
     """{index, index_name, commit, name, newest, versions: [line fields + fits], locked}: every version the index
     lists, newest first; `newest` the newest that is not yanked (else the newest); `locked` the version the project
-    locks of this package from this index, or None. KeyError when the index lists no such package."""
+    locks of this package from this index, or None. KeyError when the index lists no such package. `fetch`: as
+    search's."""
     meta = prj.meta if prj is not None else {}
     url = ix.url_of(index, meta)
-    idx = _index(url, local_roots, hosts, f"pkg info {name}")
-    vs = idx.versions(name)
+    idx = _index(url, local_roots, hosts, f"pkg info {name}", fetch)
+    try:
+        vs = idx.versions(name)
+    except ix.IndexNotFetched as e:
+        raise _unfetched(e, meta) from None
     if not vs:
         raise KeyError(f"{ix.nickname(url, meta)} lists no package {name}: search for a name, or refresh the index")
     target = _target(prj)

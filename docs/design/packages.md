@@ -762,6 +762,44 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   project, the local name, the trust key and the installed tree; `POST /api/p/{p}/trust {name, token}` uses it up and
   refuses a key or tree that changed since. Taking trust back (`{name, untrust: true}`) needs no token. A test in
   `test_agent_phase2.py` checks that no tool, `undine call` command or client method reaches either.
+  *Implemented (phase 4), dependency fetches and index refreshes* (store/deps.py: `Allow`, `plan_fetch`, `NeedsFetch`;
+  `POST /api/p/{p}/deps/fetch`): over HTTP a dependency operation is given what it may fetch from a remote. A local
+  repository under `--dep-root` needs no token (decided), and an index is never fetched by a read. An operation that
+  would fetch anything else (the `/deps` routes, `POST /changesets/{id}/deps`, the one-click `POST /deps/changeset`,
+  which says it before a changeset is opened) fetches nothing, writes nothing and answers 409 `needs_fetch` with its
+  plan: per fetch the URL, the commit or rev, the subdir, tree, size and licence (from the index line; null for a plain
+  git dependency), the host and whether it is allowed, and the operation itself (`request`). The resolution goes on with
+  what is known while it collects them: an index line gives a package's commit, tree and index requirements, so the plan
+  of an index package is complete. A plain git dependency named by a rev is bound by (URL, rev) (decided) and its
+  manifest is read only once it is fetched: a fetch that shows more (a transitive git package) fails the job with
+  `needs_fetch` and the next plan, which the person confirms again. That plan reads the fetched manifest at the commit
+  the rev gave at its last fetch (`gitsrc.last_commit`, a hint shown as the row's commit), and the job checks that the
+  rev still gives it, else the commit it gives now is a new need. `POST /api/confirmations {kind: "dependency", project,
+  ...request, fetches}` makes the plan again, fetching nothing, and refuses one that differs (400); the token is bound to
+  the project, the request, the fetches and a hash of project.json and undine.lock, so a file changed between the
+  confirmation and the fetch is a 403 with the token used up; the operation checks the hash again once it holds the
+  project's dependency lock (a job may wait behind another that changes the files), and fails with `files_changed`. The job (a `fetchjobs.Jobs` of its own, kind
+  `dependency`) runs the operation with exactly the confirmed fetches allowed; a confirmed URL passes outside the allowed
+  hosts as a `gitsrc.ConfirmedRemote`, which may use the all-refs fallback, and a host not allowed is a row
+  `allowed: false` (the dialog warns) rather than a refusal. Its progress is `gitsrc.PROGRESS` (the pack's bytes while
+  git runs, then the files read), approximate. `GET /api/packages` and `/api/packages/{name}` never fetch (409
+  `index_not_fetched {index, url, host}`), nor do an add, update or `lib lock` over HTTP (an update of an index package
+  reads the local copy as it is); `POST /api/indexes/{name}/refresh {token}` needs a token of kind `index`, bound to the
+  index's URL and the project, after the `--dep-root` and `--dep-host` checks (a confirmation does not pass an index's
+  host). The command line fetches as before. The browser's Fetch dialog (web/src/FetchConfirmDialog.tsx) shows the plan
+  and asks for the token only on the click; the Packages dialog shows the index's URL before it refreshes. The test in
+  `test_api_phase1.py` also checks that no tool, `undine call` command or client method reaches `deps/fetch`, a refresh
+  or the new kinds. The fetch route does not make the plan again before it starts the job: the job's allowed fetches
+  hold it to what was confirmed. A read that is not confirmed never reaches the network, also when the kept repository
+  lost a commit after it was looked at (`gitsrc.fetch(network=False)`, `deps.NotKept`), or when a damaged store object
+  is read again from git (sync and staging use the allow-aware `offline_for`): either is a need. A locked entry whose
+  object is damaged is, once the bad object is taken out, an entry not in the store, and is said so from the first
+  stage (a plain one left for sync, a package `not_synced`), so the route and `plan_fetch` (which looks at staging
+  too) never disagree. A confirmed one-click job takes the project's dependency lock, waiting behind another operation
+  (only the route, in the request, answers 409 `busy`), and under that one hold checks the files, plans again (a fetch
+  the token does not hold is refused before anything is opened) and opens its changeset (deps.lock comes before the
+  changesets' lock everywhere). While it holds the lock, another changeset's adopt leaves its install pending for
+  `lib sync` (`deps_pending`), as it does behind any dependency operation. Jobs are lost on a restart; what one fetched stays in the store.
 - **Agent tools** (MCP and the built-in agent): `search_packages`, `get_package`, `get_dependency_status`,
   `propose_dependency` (add / update / remove in the agent's changeset). Package and index text (descriptions,
   READMEs, cell names, intent notes, index lines) is data for agents: the tools return it under `agent.py`'s DATA rule,
@@ -896,7 +934,9 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   own, or one an index line names) or an index line names, before git runs. The URL then goes to git as a
   `gitsrc.HttpRemote`, and `gitsrc.fetch` does not use the all-refs fallback for it: it says to run the operation
   once from the command line, which keeps the commit. A URL the person confirmed in a dialog is phase 4, with the
-  confirmation token for dependency fetches. The size limit applies to every fetch, from the CLI too
+  confirmation token for dependency fetches (*implemented (phase 4):* a repository URL the person confirmed in the fetch
+  dialog passes whatever its host, and may use the all-refs fallback; an index's host is checked as before;
+  [Confirmation token](#ui-cli-http-agent-tools)). The size limit applies to every fetch, from the CLI too
   (`gitsrc._fetch_git`, also for an index's copy): git keeps what it receives as one pack (`fetch.unpackLimit=1`),
   whose size (index-pack's `tmp_pack_*`, then the new packs) is read every 0.1 s while git runs and again when it
   ends. Past `UNDINE_FETCH_MAX` git and its index-pack are stopped (their process group) and the kept repository is
@@ -908,6 +948,8 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   ciel source, root), which only the browser's dialog asks for after the person's click; from HTTP only ciel's default
   source is fetched ([Confirmation token](#ui-cli-http-agent-tools)). The command line asks before it runs ciel.
   Dependency fetches over HTTP still need no token until phase 4 (the `--dep-root` rule above applies to them).
+  *Implemented (phase 4):* a dependency fetch from a remote over HTTP needs the token of kind `dependency`, and an index
+  refresh the token of kind `index`; a local repository under `--dep-root` needs none.
 - **Signing** (later). For now only git hashes pin content: the index line's commit and the tree hash (SHA-256 over
   the blobs, so it does not rest on git's SHA-1), checked on every fetch, on `sync` and on `sync --from-vendor`. A
   changed file, a moved tag or a force-push is detected; who may publish is whoever may merge the index's PRs, and
@@ -920,7 +962,8 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   operation at a time, held while it fetches. Phase 0 adds them. *Implemented (phase 0):* both locks, under these names
   (an earlier draft had a single `.undine/lock`). Fetches still run inside the request (without `srv.lock`), into a
   staging directory in `.undine/deps/`, not as jobs into a store. *Implemented (phase 1):* dependency fetches go into
-  the store, still inside the request (jobs for them are phase 4); a PDK fetch over HTTP is a job. The order is
+  the store, still inside the request (jobs for them are phase 4; *implemented (phase 4):* a confirmed fetch over HTTP
+  runs as a job, `POST /deps/fetch`); a PDK fetch over HTTP is a job. The order is
   `deps.lock`, then the store's `.lock` held **shared for the whole operation** (fetch, tree record, install, lock
   write and the project's entry in `projects/`), then one flock per kept repository (`git/<h>.git.lock`; readers take
   it shared). `store gc` takes the store lock exclusive, so it never runs between a tree being recorded and the lock
@@ -1252,9 +1295,22 @@ the evidence manifest in store/changeset.py; see [Changesets and evidence](#chan
 outdates nothing; a model file a package's code block includes outdates the simulation with the same netlist text;
 profile fields in the key; `about` outside it; a job from before stays fresh; the manifest lists packages and PDK).
 
+Built: the confirmation token for dependency fetches and index refreshes, and dependency fetches as jobs with
+progress (store/deps.py `Allow`, `plan_fetch`, `NeedsFetch`; store/index.py `IndexNotFetched`; `gitsrc.PROGRESS` and
+`ConfirmedRemote`; pdks/fetchjobs.py kinds `dependency` and `index`; `POST /api/p/{p}/deps/fetch`, `GET
+.../deps/fetch/{job}`, `POST /api/indexes/{name}/refresh {token}`; web/src/FetchConfirmDialog.tsx; see
+[Confirmation token](#ui-cli-http-agent-tools) and the [HTTP API](../reference/api.md#dependency-fetch)). Tests:
+`test_pkg_tokens.py` (a remote over HTTP needs a token, nothing fetched before it; the token bound to the URL, commit
+and tree, and refused once project.json or undine.lock changed; single use, five minutes; the job's progress and kind,
+apart from the PDK's; an index refresh needs a token; package reads never fetch an index; a confirmed URL passes
+outside the allowed hosts; a git rev needs a second round; a rev that moved is confirmed again; sync and lock over
+HTTP; a changeset's and the one-click operation through the token; the command line still fetches), the guard in
+`test_api_phase1.py`, and the web tests `FetchConfirmDialog.test.tsx`, `PackagesDialog.test.tsx`,
+`App.phase2.test.tsx`.
+
 Still to build in phase 4: the review of a dependency change (the lock diff, licences, size, code blocks and RTL), an
-agent's *needs fetch* and the person's fetch with the confirmation token and the notice, agent tools, and
-`dep_update`'s refresh of layout copies.
+agent's *needs fetch* recorded in its changeset with the review's Fetch button and the notice after the person's fetch,
+agent tools, and `dep_update`'s refresh of layout copies.
 
 ### Phase 5 status
 

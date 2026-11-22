@@ -6,12 +6,14 @@ import { setLocale, t } from "./i18n";
 import { PackagesDialog } from "./PackagesDialog";
 
 // The Packages section of the library browser (docs/design/packages.md, UI): search an index, read a package's
-// versions and PDK fit, add it by name and requirement; refresh fetches the index again.
+// versions and PDK fit, add it by name and requirement; refresh fetches the index again, after the person saw its URL
+// and clicked Fetch (phase 4: a read never fetches an index, and an add from another machine is confirmed first).
 vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), api: {
   indexes: vi.fn(), packages: vi.fn(), packageInfo: vi.fn(), refreshIndex: vi.fn(), addPackageInChangeset: vi.fn(),
+  confirmDependencyFetch: vi.fn(), depsFetch: vi.fn(), depsFetchStatus: vi.fn(),
 } }));
-const mocked = api as unknown as Record<"indexes" | "packages" | "packageInfo" | "refreshIndex" | "addPackageInChangeset",
-  ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as Record<"indexes" | "packages" | "packageInfo" | "refreshIndex" | "addPackageInChangeset"
+  | "confirmDependencyFetch" | "depsFetch" | "depsFetchStatus", ReturnType<typeof vi.fn>>;
 // the add runs in a small changeset of its own, adopted at once (POST /deps/changeset)
 const adopted = (result: unknown) => ({ changeset: "cs-000001", status: "applied", result });
 
@@ -99,19 +101,71 @@ it("hands an add whose adopt was refused to onKept: its changeset stays open", a
   expect(onAdded).not.toHaveBeenCalled();
 });
 
-it("refreshes the index and reads the search again; a refusal is shown", async () => {
+it("refreshes the index after showing its URL, and reads the search again; a refusal is shown", async () => {
   render(<PackagesDialog project="p" readOnly={false} taken={() => false} onClose={() => {}} onAdded={() => {}} debounceMs={0} />);
   await settle();
   mocked.refreshIndex.mockResolvedValue({ ...WHERE, commit: "d".repeat(40) });
   const calls = mocked.packages.mock.calls.length;
   fireEvent.click(screen.getByTitle(t("app:packages.refresh")));
   await settle();
+  // the URL first; the token (refreshIndex asks for it) only on Fetch
+  expect(screen.getByText(t("app:packages.fetchIndexFrom", { index: "undine", url: WHERE.index }))).toBeTruthy();
+  expect(mocked.refreshIndex).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.fetchIndexStart") }));
+  await settle();
   expect(mocked.refreshIndex).toHaveBeenCalledWith("undine", "p");
   await waitFor(() => expect(mocked.packages.mock.calls.length).toBeGreaterThan(calls));
   mocked.refreshIndex.mockRejectedValue(new ApiError(400, "index https://idx.evil.example/x.git: not from idx.evil.example", "invalid_request"));
   fireEvent.click(screen.getByTitle(t("app:packages.refresh")));
   await settle();
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.fetchIndexStart") }));
+  await settle();
   expect(screen.getByText(/not from idx\.evil\.example/)).toBeTruthy();
+});
+
+it("an index with no local copy is said, never fetched until the person clicks Fetch", async () => {
+  const url = "https://github.com/kadomoto-lab/undine-index.git";
+  mocked.packages.mockRejectedValue(new ApiError(409, "index undine has not been fetched on this machine", "index_not_fetched",
+    { index: "undine", url, host: "github.com" }));
+  render(<PackagesDialog project="p" readOnly={false} taken={() => false} onClose={() => {}} onAdded={() => {}} debounceMs={0} />);
+  await settle();
+  expect(screen.getByTestId("index-not-fetched").textContent).toContain(t("app:packages.notFetched", { index: "undine" }));
+  expect(screen.queryByText(/has not been fetched on this machine$/)).toBeNull();      // said in words, not as an error
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.fetchIndex", { index: "undine" }) }));
+  await settle();
+  expect(screen.getByText(t("app:packages.fetchIndexHost", { host: "github.com" }))).toBeTruthy();
+  expect(mocked.refreshIndex).not.toHaveBeenCalled();
+  mocked.packages.mockResolvedValue({ ...WHERE, packages: [] });
+  mocked.refreshIndex.mockResolvedValue(WHERE);
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.fetchIndexStart") }));
+  await settle();
+  expect(mocked.refreshIndex).toHaveBeenCalledWith("undine", "p");
+  await waitFor(() => expect(screen.queryByTestId("index-not-fetched")).toBeNull());
+});
+
+it("an add that needs a fetch from another machine opens the Fetch dialog, and adds once the fetch ran", async () => {
+  const onAdded = vi.fn();
+  render(<PackagesDialog project="p" readOnly={false} taken={() => false} onClose={() => {}} onAdded={onAdded} debounceMs={0} />);
+  await settle();
+  fireEvent.click(screen.getByText("amp", { selector: "b" }));
+  await settle();
+  const plan = { op: "add", complete: true, project: "p", request: { op: "add", name: "amp", package: "amp", adopt: true },
+    fetches: [{ url: "https://github.com/me/amp.git", rev: null, commit: "a".repeat(40), subdir: null, tree: "sha256:" + "b".repeat(64),
+      size: 2048, license: "Apache-2.0", package: "amp", version: "1.1.0", host: "github.com", allowed: true }] };
+  mocked.addPackageInChangeset.mockRejectedValue(new ApiError(409, "this needs 1 fetch a person confirms first", "needs_fetch", { plan }));
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.add", { name: "amp" }) }));
+  await settle();
+  expect(screen.getByRole("dialog", { name: t("app:depFetch.title") })).toBeTruthy();
+  expect(onAdded).not.toHaveBeenCalled();
+  expect(mocked.confirmDependencyFetch).not.toHaveBeenCalled();
+  const result = { name: "amp", commit: "a".repeat(40), cells: ["amp"], package: "amp", version: "1.1.0" };
+  mocked.confirmDependencyFetch.mockResolvedValue({ token: "tok", expires: 0, plan });
+  mocked.depsFetch.mockResolvedValue({ job: { id: "j1", project: "p", kind: "dependency", state: "done", log: [], progress: null,
+    result: adopted(result), error: null, code: null, created: 0, ended: 0 } });
+  fireEvent.click(screen.getByRole("button", { name: t("app:depFetch.start") }));
+  await settle();
+  expect(mocked.depsFetch).toHaveBeenCalledWith("p", "tok");
+  await waitFor(() => expect(onAdded).toHaveBeenCalledWith("amp", result, expect.objectContaining({ status: "applied" })));
 });
 
 it("in a preview it shows packages and adds none", async () => {
@@ -121,4 +175,44 @@ it("in a preview it shows packages and adds none", async () => {
   await settle();
   expect(screen.getByText(t("app:packages.readOnly"))).toBeTruthy();
   expect(screen.queryByRole("button", { name: t("app:packages.add", { name: "amp" }) })).toBeNull();
+});
+
+const NEEDS = { op: "add", complete: true, project: "p", request: { op: "add", name: "amp", package: "amp", adopt: true },
+  fetches: [{ url: "https://github.com/me/amp.git", rev: null, commit: "a".repeat(40), subdir: null, tree: "sha256:" + "b".repeat(64),
+    size: 2048, license: "Apache-2.0", package: "amp", version: "1.1.0", host: "github.com", allowed: true }] };
+const openFetch = async (more: { onClose?: () => void; onKept?: (e: unknown, id: string) => void } = {}) => {
+  render(<PackagesDialog project="p" readOnly={false} taken={() => false} onClose={more.onClose ?? (() => {})} onAdded={() => {}}
+    onKept={more.onKept} debounceMs={0} />);
+  await settle();
+  fireEvent.click(screen.getByText("amp", { selector: "b" }));
+  await settle();
+  mocked.addPackageInChangeset.mockRejectedValue(new ApiError(409, "this needs 1 fetch", "needs_fetch", { plan: NEEDS }));
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.add", { name: "amp" }) }));
+  await settle();
+  expect(screen.getByRole("dialog", { name: t("app:depFetch.title") })).toBeTruthy();
+};
+
+it("Esc in the Fetch dialog closes it alone; the next Esc closes the Packages dialog", async () => {
+  const onClose = vi.fn();
+  await openFetch({ onClose });
+  fireEvent.keyDown(window, { key: "Escape" });
+  await settle();
+  expect(screen.queryByRole("dialog", { name: t("app:depFetch.title") })).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog", { name: t("app:packages.title") })).toBeTruthy();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it("an add whose adopt was refused after the fetch goes to onKept, as the direct route's refusal does", async () => {
+  const onKept = vi.fn();
+  await openFetch({ onKept });
+  mocked.confirmDependencyFetch.mockResolvedValue({ token: "tok", expires: 0, plan: NEEDS });
+  mocked.depsFetch.mockResolvedValue({ job: { id: "j1", project: "p", kind: "dependency", state: "failed", log: [], progress: null,
+    result: null, error: "cannot apply cs-000007: conflict in undine.lock", code: "merge_conflict", changeset: "cs-000007",
+    created: 0, ended: 0 } });
+  fireEvent.click(screen.getByRole("button", { name: t("app:depFetch.start") }));
+  await settle();
+  expect(onKept).toHaveBeenCalledWith(expect.objectContaining({ code: "merge_conflict" }), "cs-000007");
+  expect(screen.queryByRole("dialog", { name: t("app:depFetch.title") })).toBeNull();
 });

@@ -188,7 +188,9 @@ MCP のツール、`undine call` のコマンド、Python のクライアント�
 `pending_deps: [{op_id, action, op, name, args, actor, reason, gseq, t, needs, plan}]`。`plan` は needs_fetch の計画で、その
 `request` に `changeset` と `op_id` があります。記録の `notices: [{at, kind, op_id, name, text}]` は、エージェントの
 `wait_for(event='changeset')` が返すもので、各エージェントに 1 回ずつ渡します(呼ぶ前に来たものも。`notices_given` が読み手
-ごとに数える)。`closes: true` の通知はその操作を取り下げたものです。同じ依存への後の操作は待ちの操作を置き換えます(その記録の
+ごとに数える)。`closes: true` の通知はその操作を取り下げたもので、プロジェクトログの `dep_drop` の記録(`drops`)がそれを記録する
+ので、それより前への復元は操作を戻します。取り下げるのは操作そのものの拒否だけで、過ぎ去る失敗(git、ネットワーク、ストア、
+設定)は失敗させ、操作は待ちのまま残ります。同じ依存への後の操作は待ちの操作を置き換えます(その記録の
 `supersedes`)。`changes` の中の needs_fetch の効果は、その後が決まると `outcome` を持ちます(`installed`、`superseded`、`dropped`。
 閉じた changeset の証拠では、取得されなかったものは `cancelled`)。
 

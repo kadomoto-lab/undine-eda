@@ -120,6 +120,13 @@ class NotDirect(DepError):
         self.placed_by = list(placed_by)
 
 
+class Inapplicable(DepError):
+    """The operation cannot apply to the project as it is now, whatever is fetched: the name is taken (a library, a
+    dependency, a name .undine/deps would shadow), or it is not a dependency of project.json. What a person's fetch of
+    an agent's pending operation drops it for (changeset.inapplicable), unlike a failure that passes (a network, a
+    store, a configuration)."""
+
+
 class NotSynced(DepError):
     """A locked package whose files and manifest are neither in the store nor installed (a fresh clone): `lib sync`
     first. Over HTTP 409 not_synced."""
@@ -1104,12 +1111,12 @@ def _not_taken(prj, name: str) -> None:
     libs = prj.libraries()
     lib = libs.get(name)
     if name in specs or (lib is not None and not (lib.origin == "dep" and name not in specs)):
-        raise DepError(f"library {name} exists")
+        raise Inapplicable(f"library {name} exists")
     # one directory of a case-insensitive file system serves both spellings: removing one would take the other
     other = next((n for n in [*specs, *libs] if n != name and n.casefold() == name.casefold()), None)
     if other is not None:
-        raise DepError(f"library {name} exists (as {other}): spell it {other}, or choose another name; nothing was "
-                       "changed")
+        raise Inapplicable(f"library {name} exists (as {other}): spell it {other}, or choose another name; nothing "
+                           "was changed")
 
 
 def _unchanged(start: dict | None, now: dict) -> None:
@@ -1899,8 +1906,8 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
         _own_dir(prj.path, name)
         what = _reserved(prj, lock).get(name.casefold())
         if what:
-            raise DepError(f"{name}: {what} has that name, and .undine/deps would shadow it: choose another local "
-                           "name; nothing was changed")
+            raise Inapplicable(f"{name}: {what} has that name, and .undine/deps would shadow it: choose another "
+                               "local name; nothing was changed")
         g = _Graph(prj, lock, local_roots, f"lib add {prj.name} {name} {git}" if git else
                    f"pkg add {prj.name} {package or name}", hosts, allow)
         if git is not None:
@@ -1969,7 +1976,7 @@ def _dep_spec(prj, name: str) -> dict:
         placed = _placed_by(prj, name) if spec is None and _plain_name(name) else []
         if placed:
             raise NotDirect(f"{name}: placed by {' and '.join(placed)}; update or remove that instead", placed)
-        raise DepError(f"{name} is not a library dependency")
+        raise Inapplicable(f"{name} is not a library dependency")
     return spec
 
 

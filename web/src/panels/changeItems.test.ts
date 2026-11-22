@@ -294,6 +294,8 @@ describe("dependency operations (the project log)", () => {
     expect(resolveText(describeEffect(dep({ do: "del" })))).toBe("− dependency ip");
     expect(resolveText(describeEffect(dep({ do: "mod", name: null, pdk: [null, "fakeA"] })))).toBe("PDK ∅ → fakeA");
     expect(resolveText(describeEffect(dep({ do: "mod", name: null })))).toBe("dependencies back as they were (project.json, undine.lock)");
+    expect(resolveText(describeEffect(dep({ do: "mod", state: "dropped" })))).toBe("proposal for dependency ip dropped: it could no longer apply (never fetched)");
+    expect(resolveText(describeEffect(dep({ state: "needs_fetch", outcome: "superseded" })))).toBe("+ dependency ip (proposed, then replaced by a later operation)");
   });
 });
 

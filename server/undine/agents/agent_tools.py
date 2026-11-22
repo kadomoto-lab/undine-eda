@@ -81,15 +81,30 @@ class ToolCtx:
     def cs(self) -> Changesets:
         return Changesets(self.srv)
 
+    @property
+    def reader_key(self) -> str:
+        return self.notice_key or self.owner or f"actor:{self.actor}"
+
     def take_notices(self) -> list[dict]:
-        """The notices of the changeset this call works in that this agent has not been given yet (each once)."""
+        """The notices of the changeset this call works in that this agent has not been given yet, at most a few
+        (Changesets.NOTICES_GIVEN), marked given: the caller's answer holds them all."""
         if not self.changeset:
             return []
         try:
-            return self.cs.take_notices(self.project, self.changeset,
-                                        self.notice_key or self.owner or f"actor:{self.actor}")
+            return self.cs.take_notices(self.project, self.changeset, self.reader_key)
         except (KeyError, ValueError, OSError):        # no record (any more): nothing to give
             return []
+
+    def notices_waiting(self) -> int:
+        """How many notices this agent has not been given yet (none marked)."""
+        if not self.changeset:
+            return 0
+        try:
+            meta = self.cs._record(self.project, self.changeset)
+            return max(0, len(meta.get("notices") or []) - self.cs.peek_notices(
+                self.project, self.changeset, self.reader_key, 0)[1])
+        except (KeyError, ValueError, OSError):
+            return 0
 
     @property
     def work(self) -> str:
@@ -4186,8 +4201,9 @@ def get_dependency_status(c: ToolCtx, a: dict):
     if c.changeset:
         meta = c.cs._load(c.project, c.changeset)
         out["waiting_for_fetch"] = [_pending_public(p) for p in c.cs.pending_ops(meta)]
-        out["notices"] = list(meta.get("notices") or [])
-        out["new_notices"] = c.take_notices()        # given now: wait_for does not return them again
+        out["notices"] = list(meta.get("notices") or [])     # all of them, none marked given (wait_for gives)
+        if (n := c.notices_waiting()):
+            out["notices_not_given"] = n
         if out["waiting_for_fetch"]:
             out["note"] = ("operations waiting for a fetch: a person fetches them from Undine's review of this "
                            "changeset; wait_for(events=['changeset']) returns the notice once one is installed")
@@ -4504,6 +4520,12 @@ def _wait_signals(c: ToolCtx, events: list[str]) -> dict:
     return out
 
 
+def _more_notices(c: ToolCtx) -> dict:
+    """{more_notices: n} when more notices than one answer gives are still to be given (wait_for again)."""
+    n = c.notices_waiting()
+    return {"more_notices": n, "more_notices_how": "wait_for(events=['changeset']) again gives them at once"} if n else {}
+
+
 def _job_state(c: ToolCtx, jid: str) -> str:
     for proj in dict.fromkeys([c.work, c.project]):
         try:
@@ -4549,7 +4571,7 @@ def wait_for(c: ToolCtx, a: dict):
     start = _wait_signals(c, events)
     if "changeset" in events and (given := c.take_notices()):   # arrived before this call: not missed
         return {"event": "changeset", "status": start["changeset"][0], "waited_s": 0, "notices": given,
-                "note": NOTICES_NOTE}
+                **_more_notices(c), "note": NOTICES_NOTE}
     for ev, v in start.items():                     # a job that is already over needs no waiting
         if ev.startswith("job:") and v not in ("queued", "running"):
             return {"event": ev, "state": v, "waited_s": 0, **_job_next(c, ev[4:], v)}
@@ -4564,7 +4586,7 @@ def wait_for(c: ToolCtx, a: dict):
                 start = {**start, "changeset": now["changeset"]}
                 continue
             return {"event": "changeset", "waited_s": round(time.time() - t0, 1), "status": now["changeset"][0],
-                    "notices": given, "note": NOTICES_NOTE}
+                    "notices": given, **_more_notices(c), "note": NOTICES_NOTE}
         for ev in events:
             # a job's status read while it is rewritten is "unknown" for a moment: not an end
             if now[ev] != start[ev] and not (ev.startswith("job:") and now[ev] in ("queued", "running", "unknown")):
@@ -4574,7 +4596,7 @@ def wait_for(c: ToolCtx, a: dict):
                 elif ev == "changeset":
                     out["status"] = now[ev][0]
                     if (given := c.take_notices()):        # a notice came with it
-                        out["notices"], out["note"] = given, NOTICES_NOTE
+                        out.update(notices=given, **_more_notices(c), note=NOTICES_NOTE)
                 elif ev.startswith("job:"):
                     out.update(state=now[ev], **_job_next(c, ev[4:], now[ev]))
                 else:
@@ -4644,8 +4666,8 @@ def _job_next(c: ToolCtx, jid: str, state: str) -> dict:
 BATCH_EXCLUDED = {"open_changeset", "list_changesets", "get_changeset", "batch", "run_checks", "run_simulation",
                   "run_rtl_sim", "run_librelane", "get_librelane_result", "wait_for", "check_specs", "sweep",
                   "extract_parasitics", "cancel_job", "restore_changeset",
-                  # a step holds the changesets' lock, which a dependency operation must not be run under (its fetch
-                  # and commit take the working copy's dependency lock first: propose_dependency)
+                  # a step's put-back (a failure, dry_run) restores the working copy's files from its snapshot, which
+                  # must not undo a dependency operation's install, nor a person's fetch replaying it meanwhile
                   "propose_dependency"}   # changeset management and jobs: not in a step
 BATCH_MAX = 2000         # a CDAC's shapes in one step: 2000 add_box take about 4 s on sky130A (bench_layout_assembly.py)
 

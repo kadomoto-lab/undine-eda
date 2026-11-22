@@ -210,7 +210,7 @@ def test_agent_continues_after_persons_fetch(tmp_path, remotes, nofetch, monkeyp
     assert any(r["kind"] == "schematic" and r["cell"] == "top" for r in checks["checks"]), checks
     st = _call(me, "get_dependency_status", {}, tokens)
     assert st["waiting_for_fetch"] == [] and [x["kind"] for x in st["notices"]] == ["fetched"]
-    assert st["new_notices"] == []                       # wait_for gave it already: once per agent
+    assert "notices_not_given" not in st                 # wait_for gave it already: once per agent
     # the review no longer calls the proposal waiting: it was fetched and installed (D)
     [lc] = [x for x in c.get(f"/api/p/p/changesets/{cid}").json()["changes"] if x["lib"] == "@project"]
     assert [(e["state"], e.get("outcome")) for op in lc["ops"] for e in op["effects"]] == \
@@ -587,10 +587,12 @@ def test_wait_for_returns_a_notice_that_came_before_it_once_per_agent(tmp_path, 
     assert [n["op_id"] for n in out["notices"]] == [op_id] and out["notices"][0]["kind"] == "fetched"
     again = _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 1})
     assert again["event"] is None and again["timeout"] and "notices" not in again
-    assert _call(me, "get_dependency_status", {})["new_notices"] == []
+    assert "notices_not_given" not in _call(me, "get_dependency_status", {})
     reader = _agent(srv, "r")
     st = _call(reader, "get_dependency_status", {"changeset": cid})
-    assert [n["op_id"] for n in st["new_notices"]] == [op_id]          # given to that reader now
+    assert st["notices_not_given"] == 1                  # it lists them, and gives none (wait_for gives them)
+    out = _call(reader, "wait_for", {"events": ["changeset"], "timeout_s": 5, "changeset": cid})
+    assert [n["op_id"] for n in out["notices"]] == [op_id]
     out = _call(reader, "wait_for", {"events": ["changeset"], "timeout_s": 1, "changeset": cid})
     assert out["event"] is None and "notices" not in out
     third = _agent(srv, "t")
@@ -646,5 +648,163 @@ def test_the_assistants_next_turn_hears_of_a_notice_that_came_mid_turn(tmp_path,
     agent.run(srv, "p", srv.project("p").path, conv, [], "anything else?", "agent:assistant", {}, owner="turn:t3",
               turn="t3")
     assert "notice" not in json.dumps(ta.SEEN[0]["messages"][-1])
+    httpd.shutdown()
+    shutil.rmtree(root, ignore_errors=True)
+
+
+# ------------------------------------------------------------------ the second review's findings (f0ed0d7)
+
+
+def _deps_ops(g: dict) -> list[tuple]:
+    return [(e.get("state"), e.get("outcome")) for lc in g["changes"] if lc["lib"] == "@project"
+            for op in lc["ops"] for e in op["effects"]]
+
+
+def test_closing_after_a_fetch_or_a_replaced_proposal_keeps_nothing_and_warns_nothing(tmp_path, remotes, nofetch):
+    """1: the outcomes come from the log whatever the status, so the closure's check of the changes before and after
+    the status moved agrees: no "changed during closure" warning, the working copy removed; the evidence keeps the
+    outcomes."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    # a discard of one whose first proposal a second replaced, and whose second never was fetched
+    other = _agent(srv, "b")
+    cid2 = _open(other)
+    _propose(other)
+    _propose(other)
+    srv.leases.release(cid2, other.owner)
+    out = cs.discard("p", cid2)
+    assert not out.get("cleanup_warning") and not out.get("retained"), out
+    assert _deps_ops(cs.get("p", cid2)) == [("needs_fetch", "superseded"), ("needs_fetch", "cancelled")]
+    # an apply after the person's fetch
+    me = _agent(srv)
+    cid = _open(me)
+    _propose(me)
+    [p] = _pending(c, cid)
+    assert _person_fetch(c, p["plan"])["state"] == "done"
+    srv.leases.release(cid, me.owner)
+    out = cs.apply("p", cid)
+    assert out["status"] == "applied" and not out.get("cleanup_warning") and not out.get("retained"), out
+    g = cs.get("p", cid)
+    assert not g.get("cleanup_warning") and g["retained"] is False
+    assert _deps_ops(g) == [("needs_fetch", "installed"), ("installed", None)]
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_failure_that_passes_leaves_the_op_pending(tmp_path, remotes, nofetch, monkeypatch):
+    """2: a network failure during the person's Fetch, or a confirmation that fails for a reason of the server's,
+    fails and leaves the operation pending: the next Fetch works."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    op_id = _propose(me)["op_id"]
+    [p] = _pending(c, cid)
+    real = gitsrc._fetch_git
+
+    def unreachable(*a, **k):
+        raise gitsrc.GitSourceError("fatal: unable to access: Could not resolve host: git.example.org")
+    monkeypatch.setattr(gitsrc, "_fetch_git", unreachable)
+    job = _person_fetch(c, p["plan"])
+    assert job["state"] == "failed" and "Could not resolve host" in job["error"], job
+    assert [x["op_id"] for x in _pending(c, cid)] == [op_id]
+    assert cs._record("p", cid).get("notices") in (None, [])
+    real_plan = deps.plan_fetch
+
+    def broken(*a, **k):
+        raise deps.DepError("cannot read ~/.undine/config.toml: bad TOML")
+    monkeypatch.setattr(deps, "plan_fetch", broken)
+    r = _confirm(c, p["plan"])
+    assert r.status_code == 400 and "config.toml" in r.json()["detail"], r.text
+    assert [x["op_id"] for x in _pending(c, cid)] == [op_id]
+    monkeypatch.setattr(deps, "plan_fetch", real_plan)
+    monkeypatch.setattr(gitsrc, "_fetch_git", real)
+    job = _person_fetch(c, p["plan"])
+    assert job["state"] == "done" and job["result"]["op_id"] == op_id, job
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_drop_is_undone_by_a_restore_and_never_marks_an_installed_op(tmp_path, remotes, nofetch):
+    """3: amp and amp2 (the same package) both wait; amp is fetched, so amp2 can no longer apply (one package, one
+    name) and is dropped, in the log. A restore past amp's fetch brings both back pending. A drop of an installed
+    operation is refused under the lock and writes nothing."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    a1 = _propose(me)["op_id"]
+    a2 = _propose(me, name="amp2", package="amp")["op_id"]
+    p1, p2 = _pending(c, cid)
+    assert _person_fetch(c, p1["plan"])["state"] == "done"
+    r = _confirm(c, p2["plan"])
+    assert r.status_code == 409 and r.json()["code"] == "not_pending" and "can no longer apply" in r.json()["detail"], \
+        r.text
+    assert _pending(c, cid) == []
+    assert ("dropped", None) in _deps_ops(c.get(f"/api/p/p/changesets/{cid}").json())
+    to = max(x["gseq"] for x in (p1, p2))                # right after amp2's proposal: before the fetch and the drop
+    _call(me, "restore_changeset", {"to": to})
+    assert [x["op_id"] for x in _pending(c, cid)] == [a1, a2]
+    assert not deps.dep_dir(srv.project(f"p~{cid}").path, "amp").exists()
+    # the race a confirmation could lose: the op installed between its read and its drop
+    [p1] = [x for x in _pending(c, cid) if x["op_id"] == a1]
+    assert _person_fetch(c, p1["plan"])["state"] == "done"
+    before = len(cs._record("p", cid)["notices"])
+    with pytest.raises(changesetmod.NotPending):
+        cs.drop_pending("p", cid, a1, "amp", "too late")
+    assert len(cs._record("p", cid)["notices"]) == before
+    assert ("dropped", None) not in _deps_ops(c.get(f"/api/p/p/changesets/{cid}").json())
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_notices_are_given_once_the_agent_has_them(tmp_path, remotes, monkeypatch):
+    """4: wait_for gives at most a few notices and says how many more wait; get_dependency_status gives none; a
+    batch put back keeps the notices and who was given them; the assistant's notices are marked given only once its
+    first model call answered, so a failed turn loses none."""
+    from http.server import HTTPServer
+    from undine.agents import llm
+    import test_agent as ta
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    for i in range(7):
+        cs.add_notice("p", cid, {"kind": "fetched", "op_id": f"dep-{i}", "name": "amp", "text": f"notice {i}"})
+    st = _call(me, "get_dependency_status", {})
+    assert st["notices_not_given"] == 7
+    out = _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 5})
+    assert [n["text"] for n in out["notices"]] == [f"notice {i}" for i in range(5)] and out["more_notices"] == 2
+    out = _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 5})
+    assert [n["text"] for n in out["notices"]] == ["notice 5", "notice 6"] and "more_notices" not in out
+    # a batch step that fails puts the files back, not the notices nor who was given them
+    def step():
+        cs.add_notice("p", cid, {"kind": "fetched", "op_id": "dep-x", "name": "amp", "text": "during the step"})
+        cs.mark_notices("p", cid, me.owner, 8)
+        raise RuntimeError("the step fails")
+    with pytest.raises(RuntimeError):
+        cs.batch("p", cid, step)
+    rec = cs._record("p", cid)
+    assert rec["notices"][-1]["text"] == "during the step"
+    assert _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 1})["event"] is None   # given once only
+    # the assistant: a turn whose model call fails gives nothing; the next turn shows the notice
+    srv.leases.release(cid, me.owner)
+    httpd = HTTPServer(("127.0.0.1", 0), ta.Fake)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    srv.gateway = llm.Gateway(root, "server")
+    srv.gateway.switch("server", "m", f"http://127.0.0.1:{httpd.server_port}/v1")
+    conv = {"id": "chat-n", "connection": {"kind": "server", "model": "m"}, "messages": [], "changeset": cid}
+    cs.add_notice("p", cid, {"kind": "fetched", "op_id": "dep-y", "name": "amp", "text": "for the assistant"})
+
+    def down(*a, **k):
+        raise RuntimeError("rate limited")
+    real = srv.gateway.complete_tools
+    monkeypatch.setattr(srv.gateway, "complete_tools", down)
+    with pytest.raises(RuntimeError):
+        agent.run(srv, "p", srv.project("p").path, conv, [], "go on", "agent:assistant", {}, owner="turn:a", turn="a")
+    srv.leases.release(cid, "turn:a")
+    monkeypatch.setattr(srv.gateway, "complete_tools", real)
+    ta.SEEN.clear()
+    ta.SCRIPT[:] = [{"content": "ok"}]
+    agent.run(srv, "p", srv.project("p").path, conv, [], "go on", "agent:assistant", {}, owner="turn:b", turn="b")
+    assert "for the assistant" in json.dumps(ta.SEEN[0]["messages"][-1])
+    srv.leases.release(cid, "turn:b")
+    ta.SEEN.clear()
+    ta.SCRIPT[:] = [{"content": "ok"}]
+    agent.run(srv, "p", srv.project("p").path, conv, [], "more?", "agent:assistant", {}, owner="turn:c", turn="c")
+    assert "for the assistant" not in json.dumps(ta.SEEN[0]["messages"][-1])
     httpd.shutdown()
     shutil.rmtree(root, ignore_errors=True)

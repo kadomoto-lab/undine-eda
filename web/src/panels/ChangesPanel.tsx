@@ -66,7 +66,7 @@ export function summaryLine(ops: ChangeOp[]): string {
   const c = (k: string, d: string) => n.filter((e) => e.k === k && e.do === d).length;
   // the project log's dependency operations; a proposal that was fetched, replaced or dropped since counts once,
   // as what replaced it
-  const deps = n.filter((e) => e.k === "d" && !(e.state === "needs_fetch" && e.outcome)).length;
+  const deps = n.filter((e) => e.k === "d" && e.state !== "dropped" && !(e.state === "needs_fetch" && e.outcome)).length;
   const parts = [
     deps && t("review:summary.dependencies", { count: deps }),
     (c("i", "mod") + c("o", "mod")) && t("review:summary.changed", { count: c("i", "mod") + c("o", "mod") }), (c("i", "add") + c("w", "add") + c("s", "add")) && t("review:summary.added", { count: c("i", "add") + c("w", "add") + c("s", "add") }),

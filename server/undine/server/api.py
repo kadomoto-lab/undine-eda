@@ -2306,11 +2306,12 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         prj = _dep_target(real, request)
         try:
             plan = deps.plan_fetch(prj, p["action"], args, srv.dep_roots, srv.dep_hosts)
-        except (deps.DepsBusy, deps.FilesChanged, ix.IndexNotFetched):
-            raise                                # for now: busy, or a person refreshes the index first
-        except (deps.DepError, ValueError, KeyError) as e:
-            # the operation itself can no longer apply (the dependency is there already, or gone): dropped, the
-            # agent told, and 409 not_pending from now on rather than the same refusal at every click
+        except Exception as e:
+            if not changesetmod.inapplicable(e):
+                raise                            # a failure that passes: the operation stays pending
+            # the operation itself can no longer apply (the dependency is there already, or gone, or does not
+            # resolve): dropped (checked under the lock: NotPending if installed meanwhile), the agent told, and 409
+            # not_pending from now on rather than the same refusal at every click
             changesets.drop_pending(real, cid, req.op_id, p["name"],
                                     f"the dependency operation {p['op']} {p['name']} can no longer apply, so it was "
                                     f"dropped without a fetch: {str(e).strip(chr(39))}")

@@ -217,6 +217,7 @@ _DEP_OPS = {"add": ("dep_add", "add"), "update": ("dep_update", "mod"), "remove"
 # the arguments of a dependency operation, as a needs_fetch plan's request names them (api.py's _DEP_KEYS)
 _DEP_KEYS = ("name", "git", "rev", "subdir", "package", "version", "index")
 REPLAY_RETRY_S = 3.0          # how long a person's fetch retries while another writer holds the changeset's lease
+NOTICES_GIVEN = 5             # notices one answer gives an agent at most (the rest: the next wait_for)
 OLD_FORM = ("changeset {cid} is a copy made before changesets were git branches: it can be reviewed and discarded; "
             "to apply it, open the proposal again as a new changeset")
 
@@ -241,6 +242,14 @@ def _needs_text(needs: list[dict]) -> str:
         what = f"{f['package']} {f['version']}" if f.get("package") and f.get("version") else (f.get("package") or "")
         out.append(f"{what} from {f.get('url')}" if what else str(f.get("url")))
     return ", ".join(out) or "nothing (the store had it)"
+
+
+def inapplicable(e: BaseException) -> bool:
+    """Whether a dependency operation's refusal means it cannot apply to the working copy as it is, whatever is
+    fetched (the name taken or not a dependency, a resolution refused, a name packages place): what drops an agent's
+    pending operation. Anything else (a git or network failure, the store, a configuration, a busy lock, a file
+    changed since the confirmation) passes and leaves it pending."""
+    return isinstance(e, (deps.Inapplicable, deps.ResolveError, deps.NotDirect))
 
 
 def _never_fetched(changes: list[dict]) -> list[dict]:
@@ -2313,28 +2322,32 @@ class Changesets:
                 "op_id": op_id, "needs": needs, **({"superseded": gone} if gone else {})}
 
     def _dep_net(self, meta: dict) -> list[dict]:
-        """The project log's records of an open changeset on git still in effect ([] otherwise)."""
-        if meta.get("status") != "open" or not meta.get("git"):
+        """The project log's records of a changeset on git still in effect, read from its working copy whatever the
+        record's status says (a closure compares the changes before and after the status moved: _cleanup); [] when
+        it has none (an older copy, a working copy gone)."""
+        if not meta.get("git"):
             return []
         try:
             return self._records(meta["preview"], PROJECT_LOG)
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, OSError):
             return []
 
     def _dep_outcomes(self, meta: dict, net: list[dict] | None = None) -> dict[str, str]:
-        """What became of the agents' operations that needed a fetch, by op_id: "installed" (a later record in effect
-        replays it), "superseded" (a later record in effect on the same dependency, which names it in "supersedes")
-        or "dropped" (it could no longer apply: a notice that closes it, drop_pending). An op_id not here and still
-        in effect is pending."""
+        """What became of the agents' operations that needed a fetch, by op_id, from the project log's records in
+        effect (so a restore past the record takes the outcome back too): "installed" (a record replays it),
+        "superseded" (a later record on the same dependency names it in "supersedes") or "dropped" (a dep_drop
+        record: it could no longer apply, drop_pending). Installed wins: an installed operation is never called
+        dropped. An op_id not here and still in effect is pending."""
         out: dict[str, str] = {}
-        for r in self._dep_net(meta) if net is None else net:
+        recs = self._dep_net(meta) if net is None else net
+        for r in recs:
             if r.get("replays"):
                 out[r["replays"]] = "installed"
+        for r in recs:
             for x in r.get("supersedes") or []:
                 out.setdefault(x, "superseded")
-        for n in meta.get("notices") or []:
-            if n.get("closes") and n.get("op_id"):
-                out.setdefault(n["op_id"], "dropped")
+            if r.get("drops"):
+                out.setdefault(r["drops"], "dropped")
         return out
 
     def _with_outcomes(self, meta: dict, lib: str, recs: list[dict]) -> list[dict]:
@@ -2362,7 +2375,7 @@ class Changesets:
         replayed by a fetch since (a restore past that fetch makes it pending again), superseded by a later operation
         on the same dependency, nor dropped as no longer applicable (_dep_outcomes). Each {op_id, sha (what a
         confirmation binds), action, op, name, args, actor, reason, gseq, t, needs, plan, owner}."""
-        net = self._dep_net(meta)
+        net = self._dep_net(meta) if meta.get("status") == "open" else []
         if not net:
             return []
         found: dict[str, dict] = {}
@@ -2439,11 +2452,16 @@ class Changesets:
                             raise Busy(f"{e}; what was fetched stays in the store, so Fetch again installs it "
                                        "without fetching") from e
                         time.sleep(0.25)
-        except (deps.NeedsFetch, deps.FilesChanged, deps.DepsBusy, NotPending, Busy):
-            raise
-        except (deps.DepError, ChangesetError) as e:
-            self.drop_pending(project, cid, op_id, p["name"], f"{actor}'s fetch for the dependency {p['name']} "
-                                                              f"({p['op']}) ended refused: {e}")
+        except Exception as e:
+            # only a refusal of the operation itself drops it; a failure that passes (the network, the store, a
+            # configuration, busy) fails the job and leaves it pending for the next Fetch
+            if inapplicable(e):
+                try:
+                    self.drop_pending(project, cid, op_id, p["name"], f"{actor}'s fetch for the dependency "
+                                                                      f"{p['name']} ({p['op']}) ended refused: {e}",
+                                      actor)
+                except NotPending:
+                    pass
             raise
         notice = self.add_notice(project, cid, {
             "kind": "fetched", "op_id": op_id, "name": p["name"],
@@ -2452,37 +2470,59 @@ class Changesets:
                     "run_checks after placing them"})
         return {**out, "state": "installed", "op_id": op_id, "notice": notice}
 
-    def drop_pending(self, project: str, cid: str, op_id: str, name: str | None, text: str) -> dict:
-        """Takes a pending operation that can no longer apply out of the pending ones (a refusal of the operation
-        itself at a person's confirmation or fetch: the dependency is there already, or no longer there): a notice
-        of kind "fetch_failed" that closes it ("closes": true; _dep_outcomes "dropped"), which the agent gets. Its
-        Fetch is not_pending from then on. Returns the notice."""
-        return self.add_notice(project, cid, {"kind": "fetch_failed", "op_id": op_id, "name": name, "text": text,
-                                              "closes": True})
+    def drop_pending(self, project: str, cid: str, op_id: str, name: str | None, text: str,
+                     actor: str = "user") -> dict:
+        """Takes a pending operation that can no longer apply (inapplicable: a refusal of the operation itself at a
+        person's confirmation or fetch, not a failure that passes) out of the pending ones. Under the changesets' lock
+        and the server's, checked to be still pending (NotPending: installed, replaced or restored away meanwhile, and
+        nothing is written), it appends a dep_drop record to the working copy's project log ({op: "dep_drop", drops:
+        op_id, effects: [{k: "d", do: "mod", name, state: "dropped", op_id}]}; no file changes, so a restore past the
+        record, or past what made the operation inapplicable, makes it pending again) and a notice of kind
+        "fetch_failed" the agent gets. Its Fetch is not_pending from then on. Returns the notice."""
+        real = self._real_of(project)
+        srv = self.srv
+        with srv.changeset_lock, srv.lock:
+            meta = self._record(real, cid)
+            self._check_open(meta)
+            self._still_pending(meta, op_id, None)
+            srv.oplog(meta["preview"], PROJECT_LOG).append({
+                "op": "dep_drop", "args": {"op_id": op_id}, "actor": actor, "reason": text, "changeset": cid,
+                "cell": None, "view": None, "drops": op_id,
+                "effects": [{"k": "d", "do": "mod", "name": name, "state": "dropped", "op_id": op_id}]})
+            return self.add_notice(real, cid, {"kind": "fetch_failed", "op_id": op_id, "name": name, "text": text,
+                                               "closes": True})
 
-    def take_notices(self, project: str, cid: str, reader: str) -> list[dict]:
-        """The changeset's notices `reader` (an agent's lease owner, or its conversation for the built-in assistant)
-        has not been given yet, marked given: each notice reaches each reader once, whenever it asks (wait_for,
-        get_dependency_status, the assistant's next turn). The record keeps a count per reader, by a hash of its
-        name ("notices_given"). With none new, the changesets' lock is not taken (a wait_for during a long apply)."""
+    def peek_notices(self, project: str, cid: str, reader: str, limit: int = NOTICES_GIVEN) -> tuple[list[dict], int]:
+        """(the first `limit` notices `reader` (an agent's lease owner, or the built-in assistant's conversation) has
+        not been given yet, the count to mark given once they reached it: mark_notices). Nothing is marked: a caller
+        marks them only once the agent has them (the assistant: its first model call answered; wait_for: what its
+        answer holds), so a failed turn or a cut answer loses none."""
         meta = self._record(self._real_of(project), cid)
-        key = _owner_hash(reader) or "-"
-        if (meta.get("notices_given") or {}).get(key, 0) >= len(meta.get("notices") or []):
-            return []
-        return self._take_notices(project, cid, reader)
+        notices = meta.get("notices") or []
+        given = (meta.get("notices_given") or {}).get(_owner_hash(reader) or "-", 0)
+        new = notices[given:given + limit]
+        return [dict(n) for n in new], given + len(new)
 
     @_serialized
-    def _take_notices(self, project: str, cid: str, reader: str) -> list[dict]:
+    def mark_notices(self, project: str, cid: str, reader: str, upto: int) -> None:
+        """The first `upto` notices given to `reader` (a count per reader in the record's "notices_given", by a hash
+        of its name; never lowered). Each notice reaches each reader once."""
         real = self._real_of(project)
         meta = self._record(real, cid)
-        notices = meta.get("notices") or []
         key = _owner_hash(reader) or "-"
-        given = (meta.get("notices_given") or {}).get(key, 0)
-        new = notices[given:]
-        if new:
-            meta["notices_given"] = {**(meta.get("notices_given") or {}), key: len(notices)}
+        given = meta.get("notices_given") or {}
+        if upto > given.get(key, 0):
+            meta["notices_given"] = {**given, key: upto}
             self._save(real, meta)
-        return [dict(n) for n in new]
+
+    def take_notices(self, project: str, cid: str, reader: str, limit: int = NOTICES_GIVEN) -> list[dict]:
+        """peek_notices and mark_notices at once, for a caller whose answer holds them all (wait_for, at most `limit`;
+        its answer says how many more wait). With none new, the changesets' lock is not taken (a wait_for during a
+        long apply)."""
+        new, upto = self.peek_notices(project, cid, reader, limit)
+        if new:
+            self.mark_notices(project, cid, reader, upto)
+        return new
 
     @_serialized
     def add_notice(self, project: str, cid: str, notice: dict) -> dict:
@@ -2547,7 +2587,13 @@ class Changesets:
         used = max(self._head(meta), live.floor(floor_dir))
         self._forget(project, cid)                           # cached editors / layouts hold the state being dropped
         self._put_files_back(wroot, snap, names)
-        shutil.copy2(snap / "changeset.json", meta_file)
+        with self.srv.changeset_lock:                    # the notices and who was given them are not the step's
+            now = json.loads(meta_file.read_text())
+            shutil.copy2(snap / "changeset.json", meta_file)
+            if now.get("notices") or now.get("notices_given"):
+                back = json.loads(meta_file.read_text())
+                back.update({k: now[k] for k in ("notices", "notices_given") if k in now})
+                self._save(project.split("~", 1)[0], back)
         live.raise_floor(floor_dir, used)
         self._forget(project, cid)
 

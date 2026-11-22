@@ -194,8 +194,10 @@ nothing written or installed), and `GET /api/p/{project}/changesets/{id}` lists 
 `pending_deps: [{op_id, action, op, name, args, actor, reason, gseq, t, needs, plan}]`, `plan` the needs_fetch plan
 whose `request` carries `changeset` and `op_id`. The record's `notices: [{at, kind, op_id, name, text}]` are what the
 agent's `wait_for(event='changeset')` returns, each once per agent (also those that came before the call;
-`notices_given` counts them per reader); a notice with `closes: true` dropped its operation. A later operation on the
-same dependency supersedes a pending one (its record's `supersedes`). In `changes`, a needs_fetch effect carries
+`notices_given` counts them per reader); a notice with `closes: true` dropped its operation, which a `dep_drop` record
+of the project log (`drops`) records, so a restore past it brings the operation back. Only a refusal of the operation
+itself drops it; a failure that passes (git, the network, the store, a configuration) fails and leaves it pending. A
+later operation on the same dependency supersedes a pending one (its record's `supersedes`). In `changes`, a needs_fetch effect carries
 `outcome` once something became of it (`installed`, `superseded`, `dropped`; in a closed changeset's evidence, one never
 fetched `cancelled`).
 

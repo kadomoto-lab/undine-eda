@@ -1247,7 +1247,15 @@ export function App() {
       <DialogHost />
       {pdkFetch && project && <PdkFetchDialog project={project} onClose={() => setPdkFetch(false)} onFetched={() => pdksChanged()} />}
       {fetching && <FetchConfirmDialog plan={fetching.plan} onClose={() => setFetching(null)}
-        onDone={async (result) => { const { done } = fetching; setFetching(null); await done(result); }} />}
+        onDone={async (result) => { const { done } = fetching; setFetching(null); await done(result); }}
+        onFailed={(e) => {
+          // the operation refused after the fetch: the same handlers as the direct routes' refusals
+          setFetching(null);
+          if (keptOpen(e)) return;
+          const listed = listedRefusal(e);
+          if (listed) setRefusal(listed);
+          else toast(apiErrorText(e), "error");
+        }} />}
       {showPackages && project && <PackagesDialog project={project} readOnly={inPreview} onClose={() => setShowPackages(false)}
         taken={(n) => !!info?.libraries.some((l) => l.name === n)} onAdded={packageAdded}
         onKept={(e) => { setShowPackages(false); keptOpen(e); }} />}

@@ -176,3 +176,43 @@ it("in a preview it shows packages and adds none", async () => {
   expect(screen.getByText(t("app:packages.readOnly"))).toBeTruthy();
   expect(screen.queryByRole("button", { name: t("app:packages.add", { name: "amp" }) })).toBeNull();
 });
+
+const NEEDS = { op: "add", complete: true, project: "p", request: { op: "add", name: "amp", package: "amp", adopt: true },
+  fetches: [{ url: "https://github.com/me/amp.git", rev: null, commit: "a".repeat(40), subdir: null, tree: "sha256:" + "b".repeat(64),
+    size: 2048, license: "Apache-2.0", package: "amp", version: "1.1.0", host: "github.com", allowed: true }] };
+const openFetch = async (more: { onClose?: () => void; onKept?: (e: unknown, id: string) => void } = {}) => {
+  render(<PackagesDialog project="p" readOnly={false} taken={() => false} onClose={more.onClose ?? (() => {})} onAdded={() => {}}
+    onKept={more.onKept} debounceMs={0} />);
+  await settle();
+  fireEvent.click(screen.getByText("amp", { selector: "b" }));
+  await settle();
+  mocked.addPackageInChangeset.mockRejectedValue(new ApiError(409, "this needs 1 fetch", "needs_fetch", { plan: NEEDS }));
+  fireEvent.click(screen.getByRole("button", { name: t("app:packages.add", { name: "amp" }) }));
+  await settle();
+  expect(screen.getByRole("dialog", { name: t("app:depFetch.title") })).toBeTruthy();
+};
+
+it("Esc in the Fetch dialog closes it alone; the next Esc closes the Packages dialog", async () => {
+  const onClose = vi.fn();
+  await openFetch({ onClose });
+  fireEvent.keyDown(window, { key: "Escape" });
+  await settle();
+  expect(screen.queryByRole("dialog", { name: t("app:depFetch.title") })).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog", { name: t("app:packages.title") })).toBeTruthy();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it("an add whose adopt was refused after the fetch goes to onKept, as the direct route's refusal does", async () => {
+  const onKept = vi.fn();
+  await openFetch({ onKept });
+  mocked.confirmDependencyFetch.mockResolvedValue({ token: "tok", expires: 0, plan: NEEDS });
+  mocked.depsFetch.mockResolvedValue({ job: { id: "j1", project: "p", kind: "dependency", state: "failed", log: [], progress: null,
+    result: null, error: "cannot apply cs-000007: conflict in undine.lock", code: "merge_conflict", changeset: "cs-000007",
+    created: 0, ended: 0 } });
+  fireEvent.click(screen.getByRole("button", { name: t("app:depFetch.start") }));
+  await settle();
+  expect(onKept).toHaveBeenCalledWith(expect.objectContaining({ code: "merge_conflict" }), "cs-000007");
+  expect(screen.queryByRole("dialog", { name: t("app:depFetch.title") })).toBeNull();
+});

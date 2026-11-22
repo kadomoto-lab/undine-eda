@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, X } from "lucide-react";
 import { api, type TrustDependency, type TrustFinding } from "./api";
+import { useEscape } from "./dialog";
 import { apiErrorText, msg, resolveText, useI18n, type UiText } from "./i18n";
 
 const KINDS = new Set(["control", "control_line", "path", "unparsed", "rtl_c", "systemc", "rtl_system", "dpi", "rtl_path",
@@ -69,19 +70,8 @@ export function TrustDialog({ project, name, onClose, onChanged }: {
     }).catch((e) => { if (live.current) setErr(apiErrorText(e)); });
   }, [project, name]);
 
-  // Esc closes wherever the focus is (the dialog.tsx rule), and never reaches the editor behind
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      close.current();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  // Esc closes this dialog when it is the topmost (the dialog.tsx rule), and never reaches the editor behind
+  useEscape(onClose);
 
   const change = async (trust: boolean) => {
     if (!dep || busy) return;

@@ -777,7 +777,8 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   rev still gives it, else the commit it gives now is a new need. `POST /api/confirmations {kind: "dependency", project,
   ...request, fetches}` makes the plan again, fetching nothing, and refuses one that differs (400); the token is bound to
   the project, the request, the fetches and a hash of project.json and undine.lock, so a file changed between the
-  confirmation and the fetch is a 403 with the token used up. The job (a `fetchjobs.Jobs` of its own, kind
+  confirmation and the fetch is a 403 with the token used up; the operation checks the hash again once it holds the
+  project's dependency lock (a job may wait behind another that changes the files), and fails with `files_changed`. The job (a `fetchjobs.Jobs` of its own, kind
   `dependency`) runs the operation with exactly the confirmed fetches allowed; a confirmed URL passes outside the allowed
   hosts as a `gitsrc.ConfirmedRemote`, which may use the all-refs fallback, and a host not allowed is a row
   `allowed: false` (the dialog warns) rather than a refusal. Its progress is `gitsrc.PROGRESS` (the pack's bytes while
@@ -789,7 +790,9 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   and asks for the token only on the click; the Packages dialog shows the index's URL before it refreshes. The test in
   `test_api_phase1.py` also checks that no tool, `undine call` command or client method reaches `deps/fetch`, a refresh
   or the new kinds. The fetch route does not make the plan again before it starts the job: the job's allowed fetches
-  hold it to what was confirmed. Jobs are lost on a restart; what one fetched stays in the store.
+  hold it to what was confirmed. A read that is not confirmed never reaches the network, also when the kept repository
+  lost a commit after it was looked at (`gitsrc.fetch(network=False)`, `deps.NotKept`), or when a damaged store object
+  is read again from git (sync and staging use the allow-aware `offline_for`): either is a need. Jobs are lost on a restart; what one fetched stays in the store.
 - **Agent tools** (MCP and the built-in agent): `search_packages`, `get_package`, `get_dependency_status`,
   `propose_dependency` (add / update / remove in the agent's changeset). Package and index text (descriptions,
   READMEs, cell names, intent notes, index lines) is data for agents: the tools return it under `agent.py`'s DATA rule,

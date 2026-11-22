@@ -71,21 +71,36 @@ export function DialogHost() {
     : <ConfirmBox key={cur.id} spec={cur.spec} onDone={(ok) => { cur.done(ok); close(); }} />;
 }
 
-function Shell({ title, onClose, children }: { title: UiText; onClose: () => void; children: React.ReactNode }) {
-  const { t } = useI18n();
-  // Esc cancels wherever the focus is, and never reaches the editor behind (where Esc changes the tool)
+// Esc closes the topmost open dialog only: each dialog registers here while it is open (the last opened on top), and
+// one window listener (capture phase) calls the top one, so a dialog opened over another (the Fetch dialog over the
+// Packages dialog, a confirmation over either) closes alone, and Esc never reaches the editor behind
+const escapeStack: { current: () => void }[] = [];
+const onEscape = (e: KeyboardEvent) => {
+  if (e.key !== "Escape" || !escapeStack.length) return;
+  e.preventDefault();
+  e.stopPropagation();
+  escapeStack[escapeStack.length - 1].current();
+};
+/** Esc calls `onClose` while this dialog is the topmost open one. */
+export function useEscape(onClose: () => void) {
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      close.current();
+    const entry = close;
+    escapeStack.push(entry);
+    if (escapeStack.length === 1) window.addEventListener("keydown", onEscape, true);
+    return () => {
+      const i = escapeStack.lastIndexOf(entry);
+      if (i >= 0) escapeStack.splice(i, 1);
+      if (!escapeStack.length) window.removeEventListener("keydown", onEscape, true);
     };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
   }, []);
+}
+
+function Shell({ title, onClose, children }: { title: UiText; onClose: () => void; children: React.ReactNode }) {
+  const { t } = useI18n();
+  // Esc cancels wherever the focus is, and never reaches the editor behind (where Esc changes the tool)
+  useEscape(onClose);
   return (
     <div className="modalback" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-label={resolveText(title)}>

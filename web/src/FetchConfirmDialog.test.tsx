@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { api, ApiError, needsFetchOf, type DepFetchJob, type FetchPlan, type FetchRow } from "./api";
+import { api, ApiError, keptChangesetOf, needsFetchOf, problemsOf, type DepFetchJob, type FetchPlan, type FetchRow } from "./api";
 import { setLocale, t } from "./i18n";
-import { FetchConfirmDialog, sizeText } from "./FetchConfirmDialog";
+import { FetchConfirmDialog, jobError, sizeText } from "./FetchConfirmDialog";
 
 // The dependency Fetch dialog (docs/design/packages.md, Confirmation token) shows the plan a 409 needs_fetch carried
 // (URL, commit, tree, size, licence, a warning for a host not allowed), asks the server for a token only after the
@@ -123,4 +123,38 @@ it("reads a needs_fetch refusal's plan, and sizes in words", () => {
   expect(needsFetchOf(new ApiError(409, "x", "resolution_refused", { plan: PLAN }))).toBeNull();
   expect(needsFetchOf(new Error("x"))).toBeNull();
   expect([sizeText(512), sizeText(4096), sizeText(12_345_678), sizeText(3e9)]).toEqual(["512 B", "4.1 kB", "12 MB", "3.0 GB"]);
+});
+
+it("a job refused with a route's code goes to onFailed as that route's error (kept changeset, problems)", async () => {
+  mocked.confirmDependencyFetch.mockResolvedValue({ token: "tok", expires: 0, plan: PLAN });
+  mocked.depsFetch.mockResolvedValue({ job: job("failed", { code: "merge_conflict", error: "cannot apply cs-000002: conflict in undine.lock",
+    changeset: "cs-000002", files: [] } as Partial<DepFetchJob>) });
+  const onFailed = vi.fn(), onDone = vi.fn();
+  render(<FetchConfirmDialog plan={PLAN} onClose={() => {}} onDone={onDone} onFailed={onFailed} pollMs={1} />);
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: t("app:depFetch.start") }));
+  await settle();
+  expect(onDone).not.toHaveBeenCalled();
+  const e = onFailed.mock.calls[0][0] as ApiError;
+  expect(e).toBeInstanceOf(ApiError);
+  expect([e.status, e.code, e.params?.changeset, e.message]).toEqual([409, "merge_conflict", "cs-000002", "cannot apply cs-000002: conflict in undine.lock"]);
+  expect(keptChangesetOf(e)).toBe("cs-000002");
+  const problems = [{ code: "conflict", message: "sar_common: two versions", chains: ["p -> a", "p -> b"] }];
+  const refused = jobError(job("failed", { code: "resolution_refused", error: "1 problem", problems } as Partial<DepFetchJob>))!;
+  expect(problemsOf(refused)).toEqual(problems);
+  expect(jobError(job("failed", { code: "untrusted", error: "x" }))!.status).toBe(403);
+  expect(jobError(job("failed", { code: "needs_fetch", plan: PLAN }))).toBeNull();      // a next round, not a refusal
+  expect(jobError(job("done"))).toBeNull();
+});
+
+it("Esc closes only the topmost dialog", async () => {
+  const outer = vi.fn(), inner = vi.fn();
+  const { rerender } = render(<FetchConfirmDialog plan={PLAN} onClose={outer} onDone={() => {}} />);
+  await settle();
+  rerender(<><FetchConfirmDialog plan={PLAN} onClose={outer} onDone={() => {}} />
+    <FetchConfirmDialog plan={{ ...PLAN, project: "q" }} onClose={inner} onDone={() => {}} /></>);
+  await settle();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(inner).toHaveBeenCalledTimes(1);
+  expect(outer).not.toHaveBeenCalled();
 });

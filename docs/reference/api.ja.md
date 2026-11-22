@@ -122,7 +122,8 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 | `untrusted` | 403 | 人が信頼していない依存関係の内容を実行するジョブ([下記](#trusting-a-dependency)) | `name`、`package`、`key`、`cell`、`findings` |
 | `needs_fetch` | 409 | `POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update`、`/deps/changeset`、`/changesets/{id}/deps`: 人が確かめていないリモートからの取得([依存関係の取得](#dependency-fetch)) | `plan: {op, fetches, complete, project, request}` |
 | `index_not_fetched` | 409 | `GET /api/packages`、`/api/packages/{name}`、そして手元の写しのないインデックスを読む追加、更新、ロック: 人が先に取得し直す | `index`、`url`、`host` |
-| `busy` | 409 | プロジェクトの別の依存関係の操作が動いている間の、種類 `dependency` の確認 | |
+| `busy` | 409 | プロジェクトの別の依存関係の操作が動いている間の、種類 `dependency` の確認や、(何も開く前の)1 クリックの `POST /deps/changeset` | |
+| `files_changed` | 403 | 確認の後に project.json か undine.lock が変わった依存関係の取得のジョブ。依存関係のロックを取ったところで見つける | |
 
 <a id="trusting-a-dependency"></a>
 ### 依存関係を信頼する
@@ -169,7 +170,7 @@ HTTP からの依存関係の操作は、人がブラウザの **依存を取得
 |---|---|
 | `POST /api/confirmations` `{kind: "dependency", project, ...request, fetches: [{url, rev, commit, subdir, tree}]}` | 人のクリックの後で: `{token, expires, plan}`。サーバーは(何も取得せずに)計画を作り直し、リクエストの `fetches` はその取得とちょうど同じでなければならない。違えば 400(`... show the fetch dialog again`)。トークンは 1 回だけ使え、5 分で切れ、プロジェクト、操作、その取得、project.json と undine.lock(バイトのとおり。changeset ならその作業コピーのもの)に結び付く。プロジェクトの別の依存関係の操作が動いている間は 409 の `busy` |
 | `POST /api/p/{project}/deps/fetch` `{token}` | トークンを使い切り、操作をジョブとして動かす: `{job}`(下記)。リモートからは確かめた取得だけ(そう確かめた URL はホストにかかわらず通る)、`--dep-root` の下のローカルのリポジトリ、それ以外は取得しない。トークンがない、未知・使用済み・期限切れ、別の種類やプロジェクトのもの、確認の後に project.json か undine.lock が変わった(`... changed since the fetch was confirmed: confirm the fetch again`)ときは 403。どの場合もトークンは使い切る |
-| `GET /api/p/{project}/deps/fetch/{job}` | ジョブ: `{id, project, kind: "dependency", state, log, progress, result, error, code, created, ended}`。`state` は `queued`、`running`、`done`、`failed` のどれか。`progress` はおおよその値で、git が取得する間は `{url, bytes, limit}`(受け取った pack のバイト数)、ファイルをストアに読む間は `{url, files, of}`。`result` は操作のルートが返すもの(`POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update`、`/deps/changeset`、`/changesets/{id}/deps`)。`error` と `code` はそのルートの拒否と同じ。取得したところさらに取得するものがあったとき(通常の git の依存関係のマニフェストがほかのものを挙げる、rev が計画に示したのと別のコミットを返す)は、`code: "needs_fetch"` と次の `plan` で失敗し、人がもう一度確かめる。サーバーが知らないジョブや PDK のジョブなら 404 |
+| `GET /api/p/{project}/deps/fetch/{job}` | ジョブ: `{id, project, kind: "dependency", state, log, progress, result, error, code, created, ended}`。`state` は `queued`、`running`、`done`、`failed` のどれか。`progress` はおおよその値で、git が取得する間は `{url, bytes, limit}`(受け取った pack のバイト数)、ファイルをストアに読む間は `{url, files, of}`。`result` は操作のルートが返すもの(`POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update`、`/deps/changeset`、`/changesets/{id}/deps`)。`error` と `code` はそのルートの拒否と同じで、その追加の値(`changeset`、`problems` など)もジョブに入る。操作は、プロジェクトの依存関係のロックを取ったところで project.json と undine.lock をもう一度確かめる(ジョブはそれを変える別のジョブの後で待つことがある)。変わっていれば、何も取得も書き込みもせずに `code: "files_changed"` で失敗する。取得したところさらに取得するものがあったとき(通常の git の依存関係のマニフェストがほかのものを挙げる、rev が計画に示したのと別のコミットを返す)は、`code: "needs_fetch"` と次の `plan` で失敗し、人がもう一度確かめる。サーバーが知らないジョブや PDK のジョブなら 404 |
 | `POST /api/confirmations` `{kind: "index", index, project?}` | インデックスの取得し直しを人がクリックした後で: `{token, expires, index, url, host, commit}`(`commit` は手元の写しのもので、最初の取得の前は null)。トークンはインデックスの URL とプロジェクトに結び付く。インデックスは取得し直しと同じく確かめる(`--dep-root`、`--dep-host`。400) |
 
 プロジェクトの依存関係のジョブは一度に 1 つ動きます。ジョブは PDK のものとは別にサーバーのメモリの中にあり、再起動で失われます

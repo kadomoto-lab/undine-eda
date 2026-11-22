@@ -503,3 +503,135 @@ def test_cli_still_fetches(tmp_path, remotes):
         deps.update(prj, "ip", "v1", local_roots=[tmp_path / "local"], hosts=[HOST], allow=deps.Allow())
     assert [f["url"] for f in e.value.plan["fetches"]] == [url]
     assert not gitsrc.repo_path(url).exists()
+
+
+# ------------------------------------------------------------------ regressions (review of the first version)
+
+
+def _no_network(monkeypatch) -> list:
+    """Records every git fetch into a kept repository or an index copy (gitsrc._fetch_git), calling through."""
+    calls = []
+    real = gitsrc._fetch_git
+    monkeypatch.setattr(gitsrc, "_fetch_git", lambda repo, url, *a, **k: calls.append(url) or real(repo, url, *a, **k))
+    return calls
+
+
+def _damage(prj, name: str) -> None:
+    """Writes into an installed file through its hard link: the store's object no longer hashes to its name."""
+    f = next(p for p in sorted(deps.dep_dir(prj.path, name).iterdir()) if p.suffix == ".sym")
+    f.chmod(0o644)
+    f.write_text("damaged\n")
+
+
+def test_sync_with_a_damaged_store_object_needs_the_token(tmp_path, remotes, monkeypatch):
+    # A: an entry whose tree is recorded but one of whose objects is damaged is read again from git; over HTTP a
+    # commit only the remote has is a need, never a fetch with no token
+    _, line = _index_world(tmp_path, remotes)
+    _, prj = _project(tmp_path)
+    deps.add(prj, "amp", None, package="amp")                 # the command line fetches it
+    _damage(prj, "amp")
+    shutil.rmtree(deps.dep_dir(prj.path, "amp"))
+    shutil.rmtree(gitsrc.repo_path(line["git"]))              # the kept repository gone (a gc, another machine)
+    _, c = _server(tmp_path)
+    calls = _no_network(monkeypatch)
+    r = c.post("/api/p/p/deps/sync", json={})
+    assert r.status_code == 409 and r.json()["code"] == "needs_fetch", r.text
+    assert [(f["url"], f["commit"]) for f in r.json()["plan"]["fetches"]] == [(line["git"], line["commit"])]
+    assert calls == [] and not deps.dep_dir(prj.path, "amp").exists()
+    job = _fetch(c, r.json()["plan"])                          # confirmed: read again from the remote
+    assert job["state"] == "done", job
+    assert calls == [line["git"]]
+    assert (deps.dep_dir(prj.path, "amp") / "amp_cell.sym").read_text() == SYM
+
+
+def test_a_commit_gone_between_check_and_read_is_a_need_not_a_fetch(tmp_path, remotes, monkeypatch):
+    # B: has_commit said kept, then the kept repository lost it: the later read never reaches the network
+    _, line = _index_world(tmp_path, remotes)
+    _, prj = _project(tmp_path)
+    with cas.store_lock(shared=True):
+        gitsrc.fetch(line["git"], None, line["commit"], line["commit"])     # kept: a plan needs no fetch
+    _, c = _server(tmp_path)
+    calls = _no_network(monkeypatch)
+    real = gitsrc.has_commit
+    seen = []
+
+    def vanishing(url, commit):                                # kept at the first look, gone after it
+        if url == line["git"] and not seen:
+            seen.append(commit)
+            shutil.rmtree(gitsrc.repo_path(url))
+            return True
+        return real(url, commit)
+    monkeypatch.setattr(gitsrc, "has_commit", vanishing)
+    r = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"})
+    assert seen and r.status_code == 409 and r.json()["code"] == "needs_fetch", r.text
+    assert calls == [] and "amp" not in prj.library_specs()
+    # sync: the entry was there when looked at, gone when fetched
+    monkeypatch.setattr(gitsrc, "has_commit", real)
+    deps.add(prj, "amp", None, package="amp")
+    shutil.rmtree(deps.dep_dir(prj.path, "amp"))
+    monkeypatch.setenv("UNDINE_STORE", str(tmp_path / "store2"))     # its files not in this store
+    ix.Index(str(tmp_path / "local" / "index")).update()
+    with cas.store_lock(shared=True):
+        gitsrc.fetch(line["git"], None, line["commit"], line["commit"])
+    calls.clear()
+    seen.clear()
+    monkeypatch.setattr(gitsrc, "has_commit", vanishing)
+    r = c.post("/api/p/p/deps/sync", json={})
+    assert seen and r.status_code == 409 and r.json()["code"] == "needs_fetch", r.text
+    assert calls == [] and not deps.dep_dir(prj.path, "amp").exists()
+
+
+def test_a_plan_with_rows_of_one_url_differing_by_a_missing_field_is_confirmed(tmp_path, remotes):
+    # C: rows (url, v1, subdir None) and (url, v1, subdir "sub") sort at the confirmation; confirm, fetch, done
+    _, prj = _project(tmp_path)
+    _, c = _server(tmp_path)
+    repo = tmp_path / "mono"
+    _commit(repo, {"inv.sym": SYM, "sub/buf.sym": SYM}, "v1", "v1")
+    url = remotes.add(f"https://{HOST}/mono.git", repo)
+    prj.meta["libraries"] |= {"a": {"git": url, "rev": "v1"}, "b": {"git": url, "rev": "v1", "subdir": "sub"}}
+    prj.save()
+    r = c.post("/api/p/p/deps/lock")
+    assert r.status_code == 409, r.text
+    plan = r.json()["plan"]
+    assert sorted((f["url"], f["rev"], f["subdir"] or "") for f in plan["fetches"]) == \
+        [(url, "v1", ""), (url, "v1", "sub")]
+    job = _fetch(c, plan)
+    assert job["state"] == "done", job
+    lock = deps.read_lock(prj.path)["libraries"]
+    assert lock["a"]["commit"] == lock["b"]["commit"]
+    assert (deps.dep_dir(prj.path, "b") / "buf.sym").is_file()
+
+
+def test_one_click_while_the_dependencies_are_busy_opens_nothing(tmp_path, remotes):
+    # D: the one-click plan does not wait behind a running operation, and says so before anything is opened
+    root, srv, cs = tc.setup()
+    srv.dep_roots, srv.dep_hosts = [tmp_path.resolve()], [HOST]
+    c = TestClient(create_app(srv, None))
+    repo, _ = _plain(tmp_path / "ip", ["buf"])
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    prj = srv.project("p")
+    with deps._deps_lock(prj.path):
+        r = c.post("/api/p/p/deps/changeset", json={"action": "add", "name": "ip", "git": url, "rev": "v1"})
+    assert r.status_code == 409 and r.json()["code"] == "busy", r.text
+    assert not (prj.path / ".git").exists() and cs.list("p") == []
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_queued_job_is_refused_when_an_earlier_one_changed_the_files(tmp_path, remotes):
+    # E: two tokens confirmed against the same files; the second job, run after the first wrote them, is refused
+    _index_world(tmp_path, remotes)
+    _, prj = _project(tmp_path)
+    _, c = _server(tmp_path)
+    repo, _ = _plain(tmp_path / "ip")
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    p1 = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"}).json()["plan"]
+    p2 = c.post("/api/p/p/deps", json={"name": "ip", "git": url, "rev": "v1"}).json()["plan"]
+    t1, t2 = _confirm(c, p1).json()["token"], _confirm(c, p2).json()["token"]
+    with deps._deps_lock(prj.path):                            # the first job waits for the lock, the second behind it
+        j1 = c.post("/api/p/p/deps/fetch", json={"token": t1}).json()["job"]
+        j2 = c.post("/api/p/p/deps/fetch", json={"token": t2}).json()["job"]
+    j1, j2 = _wait(c, "p", j1), _wait(c, "p", j2)
+    assert j1["state"] == "done", j1
+    assert j2["state"] == "failed" and j2["code"] == "files_changed", j2
+    assert "changed since the fetch was confirmed" in j2["error"]
+    assert "ip" not in prj.library_specs() and not gitsrc.repo_path(url).exists()

@@ -7,7 +7,8 @@
 // with the next plan, which the person confirms again.
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, X } from "lucide-react";
-import { api, needsFetchOf, type DepFetchJob, type FetchPlan, type FetchRow } from "./api";
+import { api, ApiError, needsFetchOf, type DepFetchJob, type FetchPlan, type FetchRow } from "./api";
+import { useEscape } from "./dialog";
 import { apiErrorText, msg, resolveText, useI18n, type UiText } from "./i18n";
 
 /** A size in bytes in words (B, kB, MB, GB). */
@@ -18,14 +19,29 @@ export const sizeText = (n: number): string => {
   return `${i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 };
 
+// the fields every job has; the rest of a failed job's fields are its refusal's (changeset, problems, packages ...)
+const JOB_KEYS = new Set(["id", "project", "kind", "state", "log", "progress", "result", "error", "code", "created", "ended"]);
+const STATUS: Record<string, number> = { untrusted: 403, files_changed: 403, forbidden: 403, not_direct: 400,
+  invalid_request: 400, not_found: 404 };
+/** A job that failed with a route's code, as the ApiError that route would have raised: the same handlers read it
+ * (a changeset kept open for review, a refused resolution's problems, a PDK locked packages do not accept ...). */
+export function jobError(j: DepFetchJob): ApiError | null {
+  if (j.state !== "failed" || !j.code || j.code === "needs_fetch") return null;
+  const params = Object.fromEntries(Object.entries(j).filter(([k]) => !JOB_KEYS.has(k)));
+  return new ApiError(STATUS[j.code] ?? 409, j.error ?? j.code, j.code, params);
+}
+
 /** The plan a failed job carries (code needs_fetch), or null. */
 const nextPlan = (j: DepFetchJob): FetchPlan | null =>
   j.state === "failed" && j.code === "needs_fetch" && j.plan && Array.isArray(j.plan.fetches) ? j.plan : null;
 
-export function FetchConfirmDialog({ plan: first, onClose, onDone, pollMs = 1000 }: {
+export function FetchConfirmDialog({ plan: first, onClose, onDone, onFailed, pollMs = 1000 }: {
   plan: FetchPlan;
   onClose: () => void;
   onDone: (result: unknown) => void | Promise<void>;   // the operation ran: what its route would have returned
+  // the fetch ran but the operation was refused with a route's code (jobError): the caller says it as it says that
+  // route's error, and closes the dialog; without it the dialog shows the words
+  onFailed?: (e: ApiError) => void | Promise<void>;
   pollMs?: number;
 }) {
   const { t } = useI18n();
@@ -37,24 +53,15 @@ export function FetchConfirmDialog({ plan: first, onClose, onDone, pollMs = 1000
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
-  // Esc closes wherever the focus is (the dialog.tsx rule), and never reaches the editor behind
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      close.current();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  // Esc closes this dialog when it is the topmost (the dialog.tsx rule), and never reaches the editor behind
+  useEscape(onClose);
 
   const ended = async (j: DepFetchJob) => {
     if (j.state === "done") { await onDone(j.result); return; }
     const next = nextPlan(j);
-    if (next) { setPlan(next); setJob(null); setAgain(true); }   // shown again: the person clicks Fetch again
+    if (next) { setPlan(next); setJob(null); setAgain(true); return; }   // shown again: the person clicks Fetch again
+    const refused = jobError(j);
+    if (refused && onFailed) await onFailed(refused);
   };
 
   const follow = async (id: string) => {

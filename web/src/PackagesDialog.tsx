@@ -8,6 +8,7 @@ import { AlertTriangle, Loader2, PackagePlus, RefreshCw, Search, X } from "lucid
 import { api, indexNotFetchedOf, keptChangesetOf, needsFetchOf, type DepAdd, type DepChangeset, type FetchPlan, type IndexInfo,
   type IndexNotFetched, type IndexWhere, type PackageFit, type PackageInfo, type PackageSummary } from "./api";
 import { FetchConfirmDialog } from "./FetchConfirmDialog";
+import { useEscape } from "./dialog";
 import { apiErrorText, msg, resolveText, useI18n, type UiText } from "./i18n";
 
 const fitText = (fit: PackageFit): UiText | null =>
@@ -75,19 +76,8 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
       });
   }, [picked, index, project, tick]);
 
-  // Esc closes wherever the focus is (the dialog.tsx rule), and never reaches the editor behind
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      close.current();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  // Esc closes this dialog when it is the topmost (the dialog.tsx rule), and never reaches the editor behind
+  useEscape(onClose);
 
   const pick = (name: string) => { setPicked(name); setLocal(name); setReq(""); setErr(""); };
   // Refresh shows what is fetched first; the token is asked for (api.refreshIndex: confirmIndex) only on Fetch
@@ -225,6 +215,12 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
         const out = result as DepChangeset<DepAdd>;
         setFetchPlan(null);
         await onAdded(name, out.result, out);
+      }} onFailed={(e) => {
+        // the add refused after the fetch: said as the route's refusal would be
+        setFetchPlan(null);
+        const kept = keptChangesetOf(e);
+        if (kept && onKept) onKept(e, kept);
+        else if (live.current) setErr(apiErrorText(e));
       }} />}
     </div>
   );

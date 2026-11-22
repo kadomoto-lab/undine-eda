@@ -1,13 +1,13 @@
 """Design API (HTTP). The web UI is one client of it; scripts and agents are others."""
 from __future__ import annotations
 
-import hashlib
 import hmac
 import json
 import re
 import sys
 import threading
 import time
+import dataclasses
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -1422,6 +1422,10 @@ def _err(e: Exception) -> HTTPException:
         err.code = "index_not_fetched"
         err.extra = {"index": e.name, "url": e.url, "host": gitsrc.remote_host(e.url)}
         return err
+    if isinstance(e, deps.FilesChanged):              # project.json or undine.lock changed since the confirmation
+        err = HTTPException(403, str(e))
+        err.code = "files_changed"
+        return err
     if isinstance(e, deps.DepsBusy):                  # another dependency operation of the project is running
         err = HTTPException(409, str(e))
         err.code = "busy"
@@ -2259,18 +2263,12 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             return srv.project(meta["preview"])
         return srv.project(real)
 
-    def _files_sha(path: Path) -> str:
-        """What a dependency fetch token binds of the project: project.json and undine.lock, byte for byte."""
-        h = hashlib.sha256()
-        for name in ("project.json", deps.LOCK):
-            p = path / name
-            data = p.read_bytes() if p.is_file() else b""
-            h.update(len(data).to_bytes(8, "big") + data)
-        return h.hexdigest()
+    _files_sha = deps.files_sha                # what a dependency fetch token binds of the project
 
     def _fetch_key(f: dict) -> tuple:
-        return (f.get("url"), f.get("rev") or None, f.get("commit") or None, f.get("subdir") or None,
-                f.get("tree") or None)
+        """A fetch row as compared at the confirmation: strings only ("" for none), so that rows of one URL that
+        differ by a missing field still sort."""
+        return tuple(str(f.get(k) or "") for k in ("url", "rev", "commit", "subdir", "tree"))
 
     def _confirm_dependency(req: Confirm) -> dict:
         if req.op not in ("add", "update", "remove", "lock", "sync"):
@@ -2299,9 +2297,14 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """Runs the operation of `request` with what `allow` lets it fetch: what the route that named it returns."""
         op, args, reason = request["op"], {k: request.get(k) for k in _DEP_KEYS}, request.get("reason", "")
         if request.get("adopt"):
+            # the operation runs in a changeset made from the project: the files as confirmed, under its dependency
+            # lock, before the changeset is opened
+            prj = srv.project(real)
+            with deps._deps_lock(prj.path):
+                deps._check_files(prj, allow)
             body = DepChangeset(action=op, **{k: v for k, v in args.items() if v is not None}, reason=reason,
                                 title=request.get("title"))
-            return _one_click(real, body, actor, allow)
+            return _one_click(real, body, actor, dataclasses.replace(allow, files=None))
         if request.get("changeset"):
             cid = request["changeset"]
             out = changesets.dep_op(real, cid, op, args, actor, reason, local_roots=srv.dep_roots,
@@ -2322,6 +2325,8 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             r = {"libraries": deps.sync(prj, guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts,
                                         allow=allow)}
         else:
+            with deps._deps_lock(prj.path):          # remove takes the lock itself: checked, then let go
+                deps._check_files(prj, allow)
             r = {"ok": True, **deps.remove(prj, args["name"], guard=srv.lock)}
         srv.deps_changed(real)
         return r
@@ -2343,7 +2348,9 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             if _files_sha(prj.path) != bound["files_sha"]:
                 raise PermissionError(f"project.json or {deps.LOCK} of {prj.name} changed since the fetch was "
                                       "confirmed: confirm the fetch again")
-            allow = deps.Allow(frozenset(tuple(f) for f in bound["fetches"]))
+            # the files are checked again by the operation once it holds the dependency lock (a job may wait
+            # behind another that changes them)
+            allow = deps.Allow(frozenset(tuple(f) for f in bound["fetches"]), files=bound["files_sha"])
             actor = x_undine_actor
 
             def run(say) -> dict:
@@ -2486,9 +2493,11 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             if req.action != "remove" and not allow.fetches:
                 try:
                     plan = deps.plan_fetch(prj, req.action, _dep_args(req), srv.dep_roots, srv.dep_hosts)
-                except (deps.NeedsFetch, ix.IndexNotFetched):
-                    raise
-                except Exception:                    # the operation itself says it, in the changeset (discarded)
+                except (deps.NeedsFetch, ix.IndexNotFetched, deps.DepsBusy):
+                    raise                            # before anything is opened: 409 busy, needs_fetch ...
+                except Exception:
+                    # a refusal of the operation itself (a resolution, a repository that is not one ...): it says
+                    # the same in the changeset, which is then discarded (slice 1's contract)
                     return
                 if plan["fetches"]:
                     raise deps.NeedsFetch(plan)

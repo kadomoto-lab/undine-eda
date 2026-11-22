@@ -291,11 +291,16 @@ def _plain(url: str) -> str:
     return str(Path(url).expanduser()) if url.startswith("~/") else url
 
 
-def fetch(url: str, source: str | None, want: str, commit: str | None = None) -> str:
+class NotKept(GitSourceError):
+    """fetch(network=False) of a commit the kept repository does not have: nothing was fetched."""
+
+
+def fetch(url: str, source: str | None, want: str, commit: str | None = None, network: bool = True) -> str:
     """Fetches `want` (a branch, tag or commit; `commit` when the lock gives one) of `url` into its kept repository;
     returns the full commit. `source`: what git fetches from (deps._source's result over HTTP), else `url` itself.
     A depth-1 fetch first; all heads and tags only when the server does not serve `want` by itself, as phase 0 did.
-    `commit` given and already kept: no network."""
+    `commit` given and already kept: no network. `network` False: only that; anything else is NotKept, decided under
+    the repository's lock (a fetch no person confirmed never reaches the network, even when the commit went meanwhile)."""
     _check_url(url)
     if commit is not None:
         _check_commit(commit)
@@ -308,6 +313,9 @@ def fetch(url: str, source: str | None, want: str, commit: str | None = None) ->
         if commit is not None and has_commit(url, commit):
             _keep(repo, commit)
             return commit
+        if not network:
+            raise NotKept(f"{url} @ {(commit or want)[:12]} is not in the store's copy of the repository, and this "
+                          "operation may not fetch it")
         _ensure_repo(repo, commit)
         _clear_stale_locks(repo)
         try:

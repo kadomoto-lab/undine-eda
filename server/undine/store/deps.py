@@ -168,6 +168,28 @@ class NeedsFetch(DepError):
         return {"plan": self.plan}
 
 
+class NotKept(DepError):
+    """A commit an operation may not fetch (offline, or over HTTP not confirmed) that the kept repository does not
+    have: nothing was fetched. Over HTTP the operation turns it into a need (NeedsFetch)."""
+
+
+class FilesChanged(DepError):
+    """project.json or undine.lock is no longer what the person confirmed the fetch for (Allow.files), checked once the
+    operation holds the project's dependency lock: nothing was fetched or written. Over HTTP 403 files_changed."""
+
+    code = "files_changed"
+
+
+def files_sha(project_path: Path) -> str:
+    """What a dependency fetch confirmation binds of a project: project.json and undine.lock, byte for byte."""
+    h = hashlib.sha256()
+    for name in ("project.json", LOCK):
+        p = project_path / name
+        data = p.read_bytes() if p.is_file() else b""
+        h.update(len(data).to_bytes(8, "big") + data)
+    return h.hexdigest()
+
+
 class Planned(Exception):
     """plan_fetch's stop before anything is staged or written (Allow.plan_only): `plan` as NeedsFetch's."""
 
@@ -182,9 +204,11 @@ class Allow:
     confirmed, `want` a commit or a rev, `commit` for a rev the commit the plan showed (None when it was not known; a
     fetch that gives another one is a new need). A local repository under --dep-root needs no confirmation, and an
     index is never fetched (index.IndexNotFetched). `plan_only`: stop once the plan is known (Planned), before
-    anything is staged or written. An operation given no Allow (None: the command line) fetches what it needs."""
+    anything is staged or written. `files`: the files_sha the confirmation was for; an operation checks it once it holds
+    the project's dependency lock (FilesChanged). An operation given no Allow (None: the command line) fetches what it needs."""
     fetches: frozenset = frozenset()
     plan_only: bool = False
+    files: str | None = None              # files_sha the person confirmed for (checked under the deps lock)
 
     @property
     def urls(self) -> frozenset:
@@ -202,6 +226,14 @@ def as_allow(allow) -> Allow | None:
     if allow is None or isinstance(allow, Allow):
         return allow
     return Allow(frozenset((t[0], t[1], t[2] if len(t) > 2 else None) for t in allow))
+
+
+def _check_files(prj, allow: Allow | None) -> None:
+    """FilesChanged when project.json or undine.lock is no longer what the person confirmed (Allow.files). The caller
+    holds the project's dependency lock, so nothing of ours changes them before this operation writes."""
+    if allow is not None and allow.files is not None and files_sha(prj.path) != allow.files:
+        raise FilesChanged(f"project.json or {LOCK} of {prj.name} changed since the fetch was confirmed (another "
+                           "operation ran first): nothing was fetched or written; confirm the fetch again")
 
 
 def _waits(allow: Allow | None) -> bool:
@@ -656,7 +688,7 @@ def _read_commit(name: str, spec: dict, commit: str | None, source: str | None, 
     try:
         if commit is None or not gitsrc.has_commit(url, commit):
             if offline:
-                raise DepError(_not_here([f"{name} @ {str(commit)[:12]}"]))
+                raise NotKept(_not_here([f"{name} @ {str(commit)[:12]}"]))
             commit = gitsrc.fetch(url, source, commit or spec.get("rev") or "HEAD", commit)
         if kind == "tree":
             got = gitsrc.blob_tree(url, commit, sub, files)
@@ -1338,6 +1370,7 @@ class _Graph:
         key = (url, want)
         if key in self.commits:
             return self.commits[key]
+        network = True
         if self.allow is not None:
             blocked = False
             try:
@@ -1345,6 +1378,7 @@ class _Graph:
             except HostNotAllowed:
                 src, blocked = None, True
             confirmed = not blocked and self.may_fetch(url, want, src)
+            network = confirmed
             kept = commit is not None and not blocked and gitsrc.has_commit(url, commit)
             if not confirmed and not kept:
                 hint = commit or gitsrc.last_commit(url, want)
@@ -1357,7 +1391,13 @@ class _Graph:
         else:
             src = self.source(spec)
         try:
-            got = gitsrc.fetch(url, src, want, commit)
+            # kept but not confirmed: read locally only; gone meanwhile (a gc, a fetch past the limit) is a need
+            got = gitsrc.fetch(url, src, want, commit) if network else \
+                gitsrc.fetch(url, src, want, commit, network=False)
+        except gitsrc.NotKept:
+            self.need(url, want, rev=None if commit else spec.get("rev") or "HEAD", commit=commit,
+                      subdir=spec.get("subdir"), line=line, package=package, known=line is not None)
+            return None
         except gitsrc.GitSourceError as e:
             raise DepError(f"{local}: {e}") from None
         if self.allow is not None and commit is None and gitsrc.is_remote_source(src):
@@ -1508,8 +1548,13 @@ class _Graph:
             key = (node.git, node.commit, node.subdir, node.files_mode)
             try:
                 if key not in self.trees:
-                    _, files, value = _read_commit(node.id, spec, node.commit, self.source(spec), self.kind, False,
-                                                   node.files_mode)
+                    try:
+                        _, files, value = _read_commit(node.id, spec, node.commit, self.source(spec), self.kind,
+                                                       self.offline_for(spec, node.commit), node.files_mode)
+                    except NotKept:                      # gone since it was read: a need, said by run()
+                        self.need(node.git, node.commit, rev=None, commit=node.commit, subdir=node.subdir,
+                                  package=node.package)
+                        continue
                     if node.manifest is not None and self.kind == "sha":
                         mf.check_files(node.manifest, files, f"{node.git} @ {node.commit[:12]}"
                                        + (f":{node.subdir}" if node.subdir else ""))
@@ -1682,8 +1727,15 @@ class _Graph:
                                    and entry_hash(have) == entry_hash(entry)):
                     continue                             # as installed (or a plain entry sync installs later)
                 spec = _spec_of(entry)
-                staged[n] = _staged(self.prj.path, n, entry, node.files, lambda s=spec: self.source(s),
-                                    self.offline_for(spec, entry.get("commit")))
+                try:
+                    staged[n] = _staged(self.prj.path, n, entry, node.files, lambda s=spec: self.source(s),
+                                        self.offline_for(spec, entry.get("commit")))
+                except NotKept:      # a damaged object, and the commit only a remote has: confirmed first
+                    if self.allow is None:
+                        raise
+                    self.need(entry["git"], entry["commit"], rev=None, commit=entry["commit"],
+                              subdir=entry.get("subdir"), package=entry.get("package") or n, known=True)
+            self.settle_open()
         except BaseException:
             for st in staged.values():
                 shutil.rmtree(st, ignore_errors=True)
@@ -1816,6 +1868,7 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
                 **({"package": package} if package else {})}
     with _deps_lock(prj.path, _waits(allow)):
         _reread(prj)
+        _check_files(prj, allow)
         _not_taken(prj, name)
         lock = read_lock(prj.path)                       # a lock this Undine cannot write: refused before fetching
         _own_dir(prj.path, name)
@@ -1913,6 +1966,7 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
     _dep_spec(prj, name)
     with _deps_lock(prj.path, _waits(allow)):
         _reread(prj)
+        _check_files(prj, allow)
         base = _dep_spec(prj, name)                      # as the operation before this one left it
         lock = read_lock(prj.path)                       # a lock this Undine cannot write: refused before fetching
         indexed = is_index_spec(base)
@@ -2416,12 +2470,14 @@ def _current(project_path: Path, name: str, want: dict) -> bool:
     return bool(have) and have.get("commit") == want.get("commit") and _content_ok(dep_dir(project_path, name), want)
 
 
-def _fetch_missing(wanted: list[tuple[str, dict]], source: Callable[[int], str | None], offline: bool) -> None:
+def _fetch_missing(wanted: list[tuple[str, dict]], source: Callable[[int], str | None], offline: bool,
+                   may: Callable[[int], bool] = lambda i: True) -> list[int]:
     """Brings the commit of each (local name, lock entry) of `wanted` into its kept repository, all before anything
     is staged, once per URL and commit (the packages of one repository share it); refuses naming every package that
     is not there offline (once, by its first name), or whose fetch failed. source(i): what git fetches wanted[i]
-    from, checked before git reads its repository."""
-    missing, failed = [], []
+    from, checked before git reads its repository. may(i) False (over HTTP, not confirmed): never fetched; returns
+    the indexes of those not there (a need for the caller)."""
+    missing, failed, unconfirmed = [], [], []
     there: dict[tuple[str, str], bool] = {}
     for i, (name, want) in enumerate(wanted):
         url, commit = want["git"], want["commit"]
@@ -2429,6 +2485,10 @@ def _fetch_missing(wanted: list[tuple[str, dict]], source: Callable[[int], str |
             if (url, commit) not in there:
                 there[url, commit] = gitsrc.has_commit(url, commit)
                 if not there[url, commit] and not offline:
+                    if not may(i):
+                        unconfirmed.append(i)
+                        there[url, commit] = True        # said once, as a need
+                        continue
                     gitsrc.fetch(url, source(i), commit, commit)
                     there[url, commit] = True
             if not there[url, commit]:
@@ -2440,6 +2500,7 @@ def _fetch_missing(wanted: list[tuple[str, dict]], source: Callable[[int], str |
         raise DepError(_not_here(missing))
     if failed:
         raise DepError(f"could not fetch {'; '.join(failed)}; nothing was changed")
+    return unconfirmed
 
 
 def _index_line(e: dict) -> ix.Line | None:
@@ -2521,6 +2582,7 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
     command = f"lib sync {prj.name}"
     with _deps_lock(prj.path, wait):
         _reread(prj)
+        _check_files(prj, allow)
         lock = read_lock(prj.path)
         specs = _git_specs(prj)
         for name, spec in specs.items():                 # all refused before anything is read, nothing half done
@@ -2559,6 +2621,12 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
                 return sources[id]
             missing = [id for id, files in stored.items() if files is None]
             g = _Graph(prj, lock, local_roots, command, hosts, allow) if allow is not None else None
+
+            def need(id: str) -> None:                  # an entry only a remote has, not confirmed
+                e = entries[id]
+                g.need(e["git"], e["commit"], rev=None, commit=e["commit"], subdir=e.get("subdir"),
+                       line=_index_line(e), package=e.get("package") or first[id], known=True)
+                g.needs[(e["git"], e["commit"], e.get("subdir") or None)]["tree"] = entry_hash(e)[1]
             for id in missing:
                 if g is None:
                     source(id)
@@ -2572,26 +2640,48 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
                 if offline or (not blocked and (g.may_fetch(e["git"], e["commit"], src)
                                                 or gitsrc.has_commit(e["git"], e["commit"]))):
                     continue
-                g.need(e["git"], e["commit"], rev=None, commit=e["commit"], subdir=e.get("subdir"),
-                       line=_index_line(e), package=e.get("package") or first[id], known=True)
-                g.needs[(e["git"], e["commit"], e.get("subdir") or None)]["tree"] = entry_hash(e)[1]
+                need(id)
             if g is not None:
                 g.settle()
-            _fetch_missing([(first[id], entries[id]) for id in missing], lambda i: source(missing[i]), offline)
+
+            def may(i: int) -> bool:                    # a fetch this sync may make (over HTTP: confirmed)
+                if g is None:
+                    return True
+                try:
+                    return g.may_fetch(entries[missing[i]]["git"], entries[missing[i]]["commit"], source(missing[i]))
+                except HostNotAllowed:
+                    return False
+            for i in _fetch_missing([(first[id], entries[id]) for id in missing], lambda i: source(missing[i]),
+                                    offline, may):
+                need(missing[i])                         # gone since it was looked at: never fetched unconfirmed
+            if g is not None:
+                g.settle_open()
+
+            def off(id: str) -> bool:                   # a read that may not fetch (offline, or not confirmed)
+                return offline or (g is not None and g.offline_for(_spec_of(entries[id]), entries[id]["commit"]))
             out, todo, files_of = [], [], {}
             try:
                 for name, (id, want, marker, _) in plan.items():
                     if name in current:
                         out.append(_row(name, "ok", want["commit"], want))
                         continue
-                    if id not in files_of:
-                        kind, value = entry_hash(want)
-                        _, files_of[id], _ = _resolve(prj.path, name, _spec_of(want), want["commit"],
-                                                      lambda i=id: source(i), kind, value, stored[id], offline,
-                                                      _mode(want), parse=False)
-                    staging = _staged(prj.path, name, want, files_of[id], lambda i=id: source(i), offline)
+                    try:
+                        if id not in files_of:
+                            kind, value = entry_hash(want)
+                            _, files_of[id], _ = _resolve(prj.path, name, _spec_of(want), want["commit"],
+                                                          lambda i=id: source(i), kind, value, stored[id], off(id),
+                                                          _mode(want), parse=False)
+                        staging = _staged(prj.path, name, want, files_of[id], lambda i=id: source(i), off(id))
+                    except NotKept:
+                        # a damaged object in the store, and the commit only a remote has: a need over HTTP
+                        if g is None or offline:
+                            raise
+                        need(id)
+                        continue
                     todo.append((name, staging, marker))
                     out.append(_row(name, "installed", want["commit"], want))
+                if g is not None:
+                    g.settle_open()
                 env = environment(prj.pdk)
                 with _committing(prj, guard):
                     lock = _lock_of(prj, env)             # as it is now (a PDK change meanwhile is kept)
@@ -2688,11 +2778,15 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
         if not _stale(_git_specs(prj), lock, prj.meta) and not _incomplete(prj, lock):
             if allow is not None and allow.plan_only:
                 raise Planned({"op": "lock", "fetches": [], "complete": True})
+            if allow is not None and allow.files is not None:
+                with _deps_lock(prj.path):               # the tools are written: the files as confirmed first
+                    _check_files(prj, allow)
             with _in_store(prj):                         # nothing to fetch: no wait behind a fetch in progress
                 lock, created, _ = _record_env(prj, guard, [])
             return {"lock": lock, "resolved": [], "created": created}
     with _deps_lock(prj.path, _waits(allow)):
         _reread(prj)
+        _check_files(prj, allow)
         start = read_lock(prj.path)
         lock = upgrade(copy.deepcopy(start) if start is not None else {"libraries": {}}) if upgrade else start
         specs = _git_specs(prj)

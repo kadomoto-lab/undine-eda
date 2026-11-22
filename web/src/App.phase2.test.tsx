@@ -342,3 +342,29 @@ it("shows the newer version of a package from an index, opens Packages, and upda
   expect(screen.getByText(t("app:dependency.updatePackage", { library: "analog_ip" }))).toBeTruthy();
   expect((screen.getByDisplayValue("^1.2") as HTMLInputElement)).toBeTruthy();
 });
+
+it("a resolution refused after the person's fetch shows every problem in the refusal dialog, as the direct route's does", async () => {
+  const plan = { op: "add", complete: false, project: "p", request: { op: "add", name: "dac", git: "https://example.org/dac.git", adopt: true },
+    fetches: [{ url: "https://example.org/dac.git", rev: "HEAD", commit: null, subdir: null, tree: null, size: null, license: null,
+      package: null, version: null, host: "example.org", allowed: true }] };
+  mocked.addDepInChangeset.mockRejectedValue(new ApiError(409, "this needs 1 fetch", "needs_fetch", { plan }));
+  render(<App />);
+  await settle();
+  fireEvent.click(screen.getByTitle(t("app:dependency.addHint")));
+  await settle();
+  const form = screen.getByRole("dialog", { name: t("app:dependency.add") });
+  const inputs = form.querySelectorAll("input");
+  fireEvent.change(inputs[0], { target: { value: "dac" } });
+  fireEvent.change(inputs[1], { target: { value: "https://example.org/dac.git" } });
+  fireEvent.click(within(form).getByRole("button", { name: t("common:actions.add") }));
+  await settle();
+  const problems = [{ code: "conflict", message: "sar_common: two versions: 1.3.1 and 2.0.0", chains: ["p -> analog_ip -> sar_common 1.3.1", "p -> dac -> sar_common 2.0.0"] }];
+  mocked.confirmDependencyFetch.mockResolvedValue({ token: "tok", expires: 0, plan });
+  mocked.depsFetch.mockResolvedValue({ job: { id: "j1", project: "p", kind: "dependency", state: "failed", log: [], progress: null,
+    result: null, error: "1 problem with the dependencies", code: "resolution_refused", problems, created: 0, ended: 0 } });
+  fireEvent.click(within(screen.getByRole("dialog", { name: t("app:depFetch.title") })).getByRole("button", { name: t("app:depFetch.start") }));
+  await settle();
+  expect(screen.queryByRole("dialog", { name: t("app:depFetch.title") })).toBeNull();
+  const refused = screen.getByRole("dialog", { name: t("app:refusal.resolution") });
+  expect(within(refused).getByTestId("refusal-list").textContent).toContain("p -> dac -> sar_common 2.0.0");
+});

@@ -757,7 +757,8 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   manifest を読み、ジョブは rev がまだそれを返すかを確かめます。違えば、いま返す commit が新しい取得になります。
   `POST /api/confirmations {kind: "dependency", project, ...request, fetches}` は何も取得せずに計画を作り直し、違う計画は拒否します
   (400)。トークンはプロジェクト、リクエスト、取得、project.json と undine.lock のハッシュに結び付くので、確認と取得の間にファイルが
-  変われば 403 で、トークンは使い切ります。ジョブ(専用の `fetchjobs.Jobs`、種類 `dependency`)は、確かめた取得だけを許して
+  変われば 403 で、トークンは使い切ります。操作はプロジェクトの依存関係のロックを取ったところでハッシュをもう一度確かめ(ジョブは
+  ファイルを変える別のジョブの後で待つことがあります)、変わっていれば `files_changed` で失敗します。ジョブ(専用の `fetchjobs.Jobs`、種類 `dependency`)は、確かめた取得だけを許して
   操作を動かします。確かめた URL は `gitsrc.ConfirmedRemote` として許されたホストの外でも通り、全 ref を取る代わりの方法も
   使えます。許されていないホストは拒否ではなく `allowed: false` の行になります(ダイアログが注意を出します)。進み具合は
   `gitsrc.PROGRESS`(git の実行中は pack のバイト数、次に読んだファイル)で、おおよその値です。`GET /api/packages` と
@@ -767,7 +768,10 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   通りません)。コマンドラインはこれまでどおり取得します。ブラウザの取得のダイアログ(web/src/FetchConfirmDialog.tsx)は計画を示し、
   クリックしたときだけトークンを求めます。Packages のダイアログは、更新の前に index の URL を示します。`test_api_phase1.py` の
   テストは、どのツール、`undine call` のコマンド、クライアントのメソッドも `deps/fetch`、更新、新しい種類に届かないことも確かめます。
-  取得のルートはジョブを始める前に計画を作り直しません。ジョブに許した取得が、確かめたものだけにとどめます。ジョブは再起動で
+  取得のルートはジョブを始める前に計画を作り直しません。ジョブに許した取得が、確かめたものだけにとどめます。確かめていない読み
+  込みは、残したリポジトリが確かめた後にコミットを失ったとき(`gitsrc.fetch(network=False)`、`deps.NotKept`)も、壊れたストアの
+  オブジェクトを git から読み直すとき(sync とステージングは allow を見る `offline_for` を使います)も、ネットワークには行かず、
+  取得が要るものになります。ジョブは再起動で
   失われます。取得したものはストアに残ります。
 - **エージェントのツール**(MCP と組み込みのエージェント): `search_packages`、`get_package`、`get_dependency_status`、
   `propose_dependency`(エージェントの changeset での追加 / 更新 / 削除)。パッケージと index の文字列(説明、README、セル名、

@@ -61,11 +61,19 @@ dependencies, or whose name is not its key, is refused there with the `lib lock 
 `sync` and `status` work from the lock's graph alone (resolve.lock_graph): sync installs every entry project.json's
 dependencies reach, under each of its names, and removes what nothing reaches any more; status has one row per local
 name, with the package, who places it, the PDK check and what the trust rule would refuse in it.
+
+Fetches a person confirms (phase 4, docs/design/packages.md, Confirmation token). An operation started over HTTP is
+given an `allow` (Allow): it fetches from a remote only the (URL, commit or rev) a person confirmed, a local repository
+under --dep-root as before, and never an index (index.IndexNotFetched). Anything else it would fetch is collected while
+the resolution goes on with what is known (an index line gives a package's commit, tree, size, licence and
+dependencies), and the operation ends with NeedsFetch and that plan, nothing fetched or written. plan_fetch makes the
+plan alone. The command line (allow None) fetches what it needs, as before.
 """
 from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 import fcntl
 import hashlib
 import json
@@ -126,6 +134,80 @@ class DepsBusy(DepError):
     """Another operation holds the project's dependency lock (.undine/deps.lock), and the caller asked not to wait for
     it (`wait=False`): a changeset's restore, which holds the changesets' lock that a dependency operation in that
     changeset waits for at its commit."""
+
+
+class HostNotAllowed(DepError):
+    """Over HTTP, a remote URL whose host is not one allowed_hosts gives, and that no person confirmed (_source)."""
+
+    def __init__(self, message: str, url: str, host: str | None):
+        super().__init__(message)
+        self.url, self.host = url, host
+
+
+class NeedsFetch(DepError):
+    """An operation over HTTP that would fetch from a remote what no person confirmed (phase 4, Confirmation token):
+    nothing was fetched or changed. `plan`: {op, fetches: [{url, rev, commit, subdir, tree, size, license, package,
+    version, host, allowed}], complete}; `complete` False when what is fetched may name more (a plain git dependency's
+    manifest, read only once it is fetched), so a second confirmation may follow. Over HTTP 409 needs_fetch."""
+
+    code = "needs_fetch"
+
+    def __init__(self, plan: dict):
+        n = len(plan["fetches"])
+        urls = ", ".join(dict.fromkeys(f["url"] for f in plan["fetches"]))
+        blocked = sorted({f["host"] or f["url"] for f in plan["fetches"] if not f["allowed"]})
+        hosts = (f" ({', '.join(blocked)} {'is' if len(blocked) == 1 else 'are'} not among the hosts this server "
+                 "fetches from without asking)") if blocked else ""
+        super().__init__(f"this needs {n} fetch{'es' if n != 1 else ''} a person confirms first: {urls}{hosts}; "
+                         "confirm it in Undine's fetch dialog, or run the same operation from the command line; "
+                         "nothing was changed")
+        self.plan = plan
+
+    @property
+    def extra(self) -> dict:
+        return {"plan": self.plan}
+
+
+class Planned(Exception):
+    """plan_fetch's stop before anything is staged or written (Allow.plan_only): `plan` as NeedsFetch's."""
+
+    def __init__(self, plan: dict):
+        super().__init__("planned")
+        self.plan = plan
+
+
+@dataclasses.dataclass(frozen=True)
+class Allow:
+    """What an operation started over HTTP may fetch from a remote (phase 4): the (url, want, commit) triples a person
+    confirmed, `want` a commit or a rev, `commit` for a rev the commit the plan showed (None when it was not known; a
+    fetch that gives another one is a new need). A local repository under --dep-root needs no confirmation, and an
+    index is never fetched (index.IndexNotFetched). `plan_only`: stop once the plan is known (Planned), before
+    anything is staged or written. An operation given no Allow (None: the command line) fetches what it needs."""
+    fetches: frozenset = frozenset()
+    plan_only: bool = False
+
+    @property
+    def urls(self) -> frozenset:
+        return frozenset(u for u, _, _ in self.fetches)
+
+    def may(self, url: str, want: str) -> bool:
+        return any(u == url and w == want for u, w, _ in self.fetches)
+
+    def shown(self, url: str, want: str) -> str | None:
+        return next((c for u, w, c in self.fetches if u == url and w == want), None)
+
+
+def as_allow(allow) -> Allow | None:
+    """None, an Allow, or a collection of (url, want[, commit]) as an Allow."""
+    if allow is None or isinstance(allow, Allow):
+        return allow
+    return Allow(frozenset((t[0], t[1], t[2] if len(t) > 2 else None) for t in allow))
+
+
+def _waits(allow: Allow | None) -> bool:
+    """Whether an operation waits for the project's dependency lock: a plan only (plan_fetch, a confirmation) does
+    not wait behind a running fetch, it is DepsBusy."""
+    return allow is None or not allow.plan_only
 
 
 # ------------------------------------------------------------------ files
@@ -468,7 +550,7 @@ def allowed_hosts(dep_hosts=()) -> list[str]:
     return list(dict.fromkeys(h for h in hosts if h))
 
 
-def _source(spec: dict, local_roots: list[Path] | None, command: str, hosts=()) -> str | None:
+def _source(spec: dict, local_roots: list[Path] | None, command: str, hosts=(), confirmed=frozenset()) -> str | None:
     """What git fetches `spec` from, checked before any fetch. `local_roots` None (the CLI): the URL as written. A list
     (HTTP: serve --dep-root): a local repository only when it is an existing directory whose real path and git
     directory (and that one's common directory) are under one of them, and then that git directory, so that git reads
@@ -476,19 +558,24 @@ def _source(spec: dict, local_roots: list[Path] | None, command: str, hosts=()) 
     one allowed_hosts(`hosts`) gives (serve --dep-host), and then as a gitsrc.HttpRemote, which the all-refs fallback
     is not used for. Applies to a URL from the request and to one project.json, a manifest or an index line names
     alike: a project.json from a clone or an adopted changeset can name any path on the disk or any host, and what is
-    fetched becomes readable through the browser. `command`: the CLI command that does it anyway."""
+    fetched becomes readable through the browser. `command`: the CLI command that does it anyway. `confirmed` (phase
+    4): remote URLs a person confirmed in the fetch dialog, which pass whatever their host, as a
+    gitsrc.ConfirmedRemote; another host is HostNotAllowed."""
     if local_roots is None:
         return None
     _check_spec(spec)
     src = _local_path(spec["git"])
     if src is None:
         url = spec["git"]
+        if url in confirmed and gitsrc.remote_host(url) is not None:
+            return gitsrc.ConfirmedRemote(url)
         host, allowed = gitsrc.remote_host(url), allowed_hosts(hosts)
         if host is None or host not in allowed:
-            raise DepError(f"{url}: from the browser this server fetches only from {', '.join(allowed) or 'no host'} "
-                           f"(the hosts of the indexes this machine configures, and --dep-host); not from "
-                           f"{host or 'a URL with no host'}. Start the server with `--dep-host {host or 'HOST'}`, or "
-                           f"run `python -m undine {command}` from the command line")
+            raise HostNotAllowed(
+                f"{url}: from the browser this server fetches only from {', '.join(allowed) or 'no host'} (the hosts "
+                f"of the indexes this machine configures, and --dep-host); not from {host or 'a URL with no host'}. "
+                f"Start the server with `--dep-host {host or 'HOST'}`, or run `python -m undine {command}` from the "
+                "command line", url, host)
         return gitsrc.HttpRemote(url)
     _under_roots(spec, src, local_roots, command)
     if not src.is_dir():
@@ -1033,9 +1120,14 @@ class _Graph:
     resolve runs with them: PDK compatibility and cell names. Then what to write: the lock's tables and one install
     per (package, local name)."""
 
-    def __init__(self, prj, lock: dict | None, local_roots: list[Path] | None, command: str, hosts=()):
+    def __init__(self, prj, lock: dict | None, local_roots: list[Path] | None, command: str, hosts=(),
+                 allow: Allow | None = None):
         from undine.pdks import compat
         self.prj, self.lock = prj, lock
+        self.allow = allow                               # None: the command line, which fetches what it needs
+        self.needs: dict[tuple, dict] = {}               # (url, want, subdir) -> a fetch no person confirmed
+        self.fetched: dict[tuple, dict] = {}             # the same, for a confirmed rev fetched (plan)
+        self.op = command.split(" ")[1] if " " in command else command
         self.fmt = lock_format(lock) if lock else FORMAT
         self.kind = "tree" if self.fmt >= 2 else "sha"
         self.local_roots, self.command, self.hosts = local_roots, command, tuple(hosts)
@@ -1049,7 +1141,9 @@ class _Graph:
         self.target = compat.project_target(pin, prj.pdk)
         self.indexes: dict[str, ix.Index] = {}
         self.refreshed: set[str] = set()
-        self.refresh_on_miss = True                      # a choice that fails fetches the indexes once and tries again
+        # a choice that fails fetches the indexes once and tries again; never over HTTP (an index is refreshed by a
+        # person's confirmed refresh only)
+        self.refresh_on_miss = allow is None
         self.prefer = True                               # locked versions first (update: the newest instead)
         self.choice: dict[tuple[str, str], ix.Line] = {}
         self.chosen: dict[tuple, ix.Line] = {}           # (git, commit, subdir) -> the index line pinned there
@@ -1062,30 +1156,97 @@ class _Graph:
         git is about to read its repository."""
         url = spec["git"]
         if url not in self.sources:
-            self.sources[url] = _source(spec, self.local_roots, self.command, self.hosts)
+            self.sources[url] = _source(spec, self.local_roots, self.command, self.hosts,
+                                        self.allow.urls if self.allow is not None else frozenset())
         return self.sources[url]
+
+    def may_fetch(self, url: str, want: str, src) -> bool:
+        """Whether this operation may fetch `want` of `url` from `src` (source()'s result): from the command line
+        anything, over HTTP a local repository under --dep-root (a checked git directory), and a remote one a person
+        confirmed."""
+        return (self.allow is None or (src is not None and not gitsrc.is_remote_source(src))
+                or self.allow.may(url, want))
+
+    def offline_for(self, spec: dict, commit: str | None) -> bool:
+        """Whether a read of `commit` of spec's repository must not fetch (a store object found damaged: read again
+        from git) because no person confirmed it."""
+        if self.allow is None:
+            return False
+        try:
+            src = self.source(spec)
+        except HostNotAllowed:
+            return True
+        return not self.may_fetch(spec["git"], commit or spec.get("rev") or "HEAD", src)
+
+    def need(self, url: str, want: str, *, rev: str | None, commit: str | None, subdir: str | None,
+             line: ix.Line | None = None, package: str | None = None, known: bool = False) -> None:
+        """Notes a fetch no person confirmed (plan()). `known`: what it holds is known without it (an index line), so
+        it can name nothing more."""
+        self.needs.setdefault((url, want, subdir or None), {
+            "url": url, "rev": rev, "commit": commit, "subdir": subdir or None,
+            "tree": line.tree if line is not None else None, "size": line.size if line is not None else None,
+            "license": line.license if line is not None else None,
+            "package": line.name if line is not None else package,
+            "version": str(line.vers) if line is not None else None, "host": gitsrc.remote_host(url),
+            "allowed": self._allowed(url), "known": known})
+
+    def _allowed(self, url: str) -> bool:
+        """Whether url's host is one a fetch over HTTP may reach without the person's confirmation."""
+        host = gitsrc.remote_host(url)
+        try:
+            return host is not None and host in allowed_hosts(self.hosts)
+        except DepError:
+            return False
+
+    def plan(self) -> dict:
+        """What this operation would fetch that no person confirmed: NeedsFetch's plan. With them, the confirmed
+        revs it fetched (a rev is fetched again in the next round, which shows the commit it gave)."""
+        found = dict(self.needs)
+        if self.needs:
+            found |= {k: v for k, v in self.fetched.items() if k not in found}
+        rows = sorted(found.values(), key=lambda f: (f["url"], f["rev"] or "", f["commit"] or "", f["subdir"] or ""))
+        return {"op": self.op, "fetches": [{k: v for k, v in f.items() if k != "known"} for f in rows],
+                "complete": all(f["known"] for f in rows)}
+
+    def settle_open(self) -> None:
+        """NeedsFetch when a fetch no person confirmed is needed. Called once the resolution is done, or refused: a
+        refusal found while fetches are open may come from what was not fetched, and is said after the fetch."""
+        if self.needs:
+            raise NeedsFetch(self.plan())
+
+    def settle(self) -> None:
+        """settle_open, then, with Allow.plan_only, Planned: the plan is known and nothing is staged or written."""
+        self.settle_open()
+        if self.allow is not None and self.allow.plan_only:
+            raise Planned(self.plan())
 
     # -- indexes
 
     def index(self, url: str) -> ix.Index:
-        """The local copy of index `url`: over HTTP a local one only below --dep-root (as a local git URL)."""
+        """The local copy of index `url`: over HTTP a local one only below --dep-root (as a local git URL), and never
+        fetched (index.IndexNotFetched)."""
         if url not in self.indexes:
             try:
                 src = (_source({"git": url}, self.local_roots, self.command, self.hosts)
                        if self.local_roots is not None else None)
             except DepError as e:
                 raise DepError(f"index {url}: {e}") from None
-            self.indexes[url] = ix.Index(url, src)
+            self.indexes[url] = ix.Index(url, src, fetch=self.allow is None)
         return self.indexes[url]
 
     def lines(self, url: str, name: str) -> list[ix.Line]:
         try:
             return self.index(url).versions(name)
+        except ix.IndexNotFetched as e:
+            raise ix.IndexNotFetched(e.url, ix.nickname(e.url, self.prj.meta)) from None
         except ix.IndexReadError as e:
             raise DepError(str(e)) from None
 
     def refresh(self, urls) -> bool:
-        """Fetches the indexes `urls` again (once per operation); True when one was fetched."""
+        """Fetches the indexes `urls` again (once per operation); True when one was fetched. Over HTTP (allow) none:
+        the local copies are read as they are."""
+        if self.allow is not None:
+            return False
         done = False
         for url in urls:
             if url in self.refreshed:
@@ -1164,18 +1325,53 @@ class _Graph:
             return None
         return self.pin(resolve.Requirement(dep.local, dep.package, version=req, index=url), line, node.id)
 
-    def commit_of(self, local: str, spec: dict, commit: str | None) -> str:
+    def commit_of(self, local: str, spec: dict, commit: str | None, line: ix.Line | None = None,
+                  package: str | None = None) -> str | None:
         """The commit spec's rev names, or `commit` itself, in the kept repository (fetched when it is not there):
-        one fetch per URL and rev in an operation, however many packages that repository holds."""
+        one fetch per URL and rev in an operation, however many packages that repository holds. Over HTTP a fetch no
+        person confirmed is noted (need) instead, and the answer is what is known without it: `commit`, else the
+        commit the rev gave at its last fetch when the kept repository still has it (a hint, so that the plan reads on
+        through its manifest), else None. A confirmed rev that now gives another commit than the plan showed is
+        noted again (the person confirms what it holds now)."""
+        url = spec["git"]
         want = commit or spec.get("rev") or "HEAD"
-        key = (spec["git"], want)
-        if key not in self.commits:
-            src = self.source(spec)
+        key = (url, want)
+        if key in self.commits:
+            return self.commits[key]
+        if self.allow is not None:
+            blocked = False
             try:
-                self.commits[key] = gitsrc.fetch(spec["git"], src, want, commit)
-            except gitsrc.GitSourceError as e:
-                raise DepError(f"{local}: {e}") from None
-        return self.commits[key]
+                src = self.source(spec)
+            except HostNotAllowed:
+                src, blocked = None, True
+            confirmed = not blocked and self.may_fetch(url, want, src)
+            kept = commit is not None and not blocked and gitsrc.has_commit(url, commit)
+            if not confirmed and not kept:
+                hint = commit or gitsrc.last_commit(url, want)
+                self.need(url, want, rev=None if commit else spec.get("rev") or "HEAD", commit=hint,
+                          subdir=spec.get("subdir"), line=line, package=package, known=line is not None)
+                if hint is not None and gitsrc.has_commit(url, hint):
+                    self.commits[key] = hint
+                    return hint
+                return None
+        else:
+            src = self.source(spec)
+        try:
+            got = gitsrc.fetch(url, src, want, commit)
+        except gitsrc.GitSourceError as e:
+            raise DepError(f"{local}: {e}") from None
+        if self.allow is not None and commit is None and gitsrc.is_remote_source(src):
+            shown = self.allow.shown(url, want)
+            if shown is not None and got != shown:
+                self.need(url, want, rev=spec.get("rev") or "HEAD", commit=got, subdir=spec.get("subdir"),
+                          package=package)
+            else:          # a confirmed rev: fetched again by the next round's plan too, which then shows `got`
+                self.fetched.setdefault((url, want, spec.get("subdir") or None), {
+                    "url": url, "rev": spec.get("rev") or "HEAD", "commit": got, "subdir": spec.get("subdir") or None,
+                    "tree": None, "size": None, "license": None, "package": package, "version": None,
+                    "host": gitsrc.remote_host(url), "allowed": self._allowed(url), "known": False})
+        self.commits[key] = got
+        return got
 
     def why_2(self, local: str, m: mf.Manifest) -> str:
         if m.dependencies:
@@ -1195,7 +1391,18 @@ class _Graph:
         _check_spec(spec)
         if req.commit is not None:
             _check_commit(req.local, req.commit)
-        commit = self.commit_of(req.local, spec, req.commit)
+        line = self.chosen.get((req.git, req.commit, req.subdir or None)) if req.index is not None else None
+        commit = self.commit_of(req.local, spec, req.commit, line, req.package)
+        if commit is None:
+            # not fetched (noted for the plan): what the index line says stands in for the manifest, so the plan goes
+            # on through the package's own index requirements; a git one is read only once it is fetched
+            if line is None:
+                return resolve.Node("?", git=req.git, rev=req.rev, subdir=req.subdir, commit=None)
+            m = mf.Manifest(line.name, line.vers, license=line.license, pdk=line.pdk_req(),
+                            dependencies={d.local: mf.IndexDep(d.local, d.package, str(d.req), d.index)
+                                          for d in line.deps})
+            return resolve.Node("?", git=req.git, rev=req.rev, subdir=req.subdir, commit=req.commit,
+                                files_mode="include" if self.fmt >= 2 else "all", manifest=m, index=req.index)
         try:
             data = gitsrc.read_file(req.git, commit, req.subdir, mf.MANIFEST, mf.MAX_BYTES)
         except gitsrc.GitSourceError as e:
@@ -1289,7 +1496,10 @@ class _Graph:
     def cells(self, res: resolve.Resolution) -> list[resolve.Problem]:
         """resolve's last check, once every manifest is in: the tree of each node read from git goes into the store
         (its [files] include and [exports] checked), then the cells of every package, of the project's libraries and
-        of the PDK must have different names (Resolution 4). Only plain dependencies: nothing to refuse."""
+        of the PDK must have different names (Resolution 4). Only plain dependencies: nothing to refuse. With fetches
+        no person confirmed (needs) nothing is read: the operation ends with their plan (settle)."""
+        if self.needs:
+            return []
         problems = []
         for node in res.nodes.values():
             if node.fixed or node in self.hashes:
@@ -1342,6 +1552,7 @@ class _Graph:
             try:
                 self.choice = self.solve(wants, fixed) if wants else {}
             except ResolveError as e:
+                self.settle_open()
                 raise ResolveError(walked + e.problems) from None
             self.unpinned = {}
             pinned = {k: (self.pin(r, self.choice[(r.index, r.package)]) if r.index is not None and r.git is None
@@ -1355,13 +1566,16 @@ class _Graph:
                 if self._more(found):
                     walked = e.problems
                     continue
+                self.settle_open()
                 raise ResolveError(e.problems) from None
             if self._more(found):
                 walked = []
                 continue
             break
         else:
+            self.settle_open()
             raise ResolveError([resolve.Problem("index", "the index requirements kept growing: nothing was changed")])
+        self.settle_open()
         if self.fmt < 2:
             for id, node in res.nodes.items():
                 keys = [k for k, i in res.direct.items() if i == id]
@@ -1468,7 +1682,8 @@ class _Graph:
                                    and entry_hash(have) == entry_hash(entry)):
                     continue                             # as installed (or a plain entry sync installs later)
                 spec = _spec_of(entry)
-                staged[n] = _staged(self.prj.path, n, entry, node.files, lambda s=spec: self.source(s))
+                staged[n] = _staged(self.prj.path, n, entry, node.files, lambda s=spec: self.source(s),
+                                    self.offline_for(spec, entry.get("commit")))
         except BaseException:
             for st in staged.values():
                 shutil.rmtree(st, ignore_errors=True)
@@ -1567,7 +1782,7 @@ def _result_cells(item: dict, d: Path, m: mf.Manifest | None) -> dict:
 
 def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | None = None, guard=None,
         local_roots: list[Path] | None = None, *, package: str | None = None, version: str | None = None,
-        index: str | None = None, hosts=()) -> dict:
+        index: str | None = None, hosts=(), allow: Allow | None = None) -> dict:
     """Adds a dependency, hashed as the lock's format says (`sha` in format 1, `tree` in format 2), with every
     package its manifest needs, resolved together with what is locked (held as locked, never fetched again). Nothing
     is written until every manifest is read and the whole graph checked (ResolveError lists every problem).
@@ -1580,8 +1795,12 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
 
     `git` None: a package from an index (`pkg add`): `package` (default: `name`), `version` a requirement (default:
     the newest version that fits, written to project.json as ^<that version>) and `index` a nickname or URL
-    (default: the default index); the lock must be format 2."""
+    (default: the default index); the lock must be format 2.
+
+    `allow` (phase 4, HTTP): what may be fetched from a remote (Allow); anything else ends with NeedsFetch and its
+    plan, nothing fetched or written, and an index with no local copy is index.IndexNotFetched."""
     from undine.store.project import check_name
+    allow = as_allow(allow)
     check_name(name)
     _not_taken(prj, name)
     if package is not None and not (isinstance(package, str) and mf.NAME.match(package)):
@@ -1595,7 +1814,7 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
     else:
         spec = {"git": git, **({"rev": rev} if rev else {}), **({"subdir": subdir} if subdir else {}),
                 **({"package": package} if package else {})}
-    with _deps_lock(prj.path):
+    with _deps_lock(prj.path, _waits(allow)):
         _reread(prj)
         _not_taken(prj, name)
         lock = read_lock(prj.path)                       # a lock this Undine cannot write: refused before fetching
@@ -1605,7 +1824,7 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
             raise DepError(f"{name}: {what} has that name, and .undine/deps would shadow it: choose another local "
                            "name; nothing was changed")
         g = _Graph(prj, lock, local_roots, f"lib add {prj.name} {name} {git}" if git else
-                   f"pkg add {prj.name} {package or name}", hosts)
+                   f"pkg add {prj.name} {package or name}", hosts, allow)
         if git is not None:
             _check_spec(spec)
         with _in_store(prj):
@@ -1616,6 +1835,7 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
             if git is None and version is None:          # cargo add: the newest that fits, as ^<it>
                 spec["version"] = f"^{res.nodes[res.direct[name]].version}"
             libs, pkgs, installs = g.tables(res)
+            g.settle()
             staged = g.stage(installs)
             try:
                 env = environment(prj.pdk)               # for a new lock; the tools answer before the guard
@@ -1675,7 +1895,8 @@ def _dep_spec(prj, name: str) -> dict:
 
 
 def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list[Path] | None = None, *,
-           version: str | None = None, hosts=(), replace: dict | None = None, expect: dict | None = None) -> dict:
+           version: str | None = None, hosts=(), replace: dict | None = None, expect: dict | None = None,
+           allow: Allow | None = None) -> dict:
     """Moves a dependency to `rev` (default: its rev again, e.g. a branch that moved), hashed as the lock's format says
     (a format 2 lock's entry gets a `tree` and loses its `sha`; a package moves onto its [files] include set). Its
     packages are resolved again with it, every other locked package held as locked; a package no longer reached is
@@ -1686,9 +1907,11 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
     first; the packages only it reaches move with it. `replace` (migrate): a git dependency's requirement replaced by
     this index one, resolved and installed in the same way. `expect` (migrate): {spec, entry, commit, tree}, what the
     caller checked: refused when project.json's requirement or the lock entry is no longer that, or when the
-    resolution chose another commit or tree."""
+    resolution chose another commit or tree. `allow`: as add's; over HTTP the index is read as its local copy is (a
+    person refreshes it first)."""
+    allow = as_allow(allow)
     _dep_spec(prj, name)
-    with _deps_lock(prj.path):
+    with _deps_lock(prj.path, _waits(allow)):
         _reread(prj)
         base = _dep_spec(prj, name)                      # as the operation before this one left it
         lock = read_lock(prj.path)                       # a lock this Undine cannot write: refused before fetching
@@ -1708,7 +1931,7 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
                 raise DepError(f"{name} is a git dependency: give a rev, not a version")
             spec = dict(base, **({"rev": rev} if rev else {}), **({"version": version} if version else {}))
         _own_dir(prj.path, name)
-        g = _Graph(prj, lock, local_roots, f"lib update {prj.name} {name}", hosts)
+        g = _Graph(prj, lock, local_roots, f"lib update {prj.name} {name}", hosts, allow)
         if indexed:
             g.prefer = False
             g.refresh([index_spec(name, spec, prj.meta)[2]])
@@ -1721,6 +1944,7 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
             target = g.graph.direct.get(name)
             res = g.run(direct, g.fixed(keys, {target} if target else set()))
             libs, pkgs, installs = g.tables(res)
+            g.settle()
             got = libs.get(name) or {}
             if expect is not None and (got.get("commit"), got.get("tree")) != (expect["commit"], expect["tree"]):
                 raise DepError(f"{name}: the index now names another commit for it ({str(got.get('commit'))[:12]}, "
@@ -2218,6 +2442,51 @@ def _fetch_missing(wanted: list[tuple[str, dict]], source: Callable[[int], str |
         raise DepError(f"could not fetch {'; '.join(failed)}; nothing was changed")
 
 
+def _index_line(e: dict) -> ix.Line | None:
+    """The line the local copy of a lock entry's index has for its package and version at its commit (read only, no
+    fetch), for a fetch plan's size and licence; None when there is none."""
+    url, package, version = e.get("index"), e.get("package"), e.get("version")
+    if not (isinstance(url, str) and isinstance(package, str) and isinstance(version, str)):
+        return None
+    try:
+        idx = ix.Index(url, fetch=False)
+        if not idx.fetched():
+            return None
+        return next((x for x in idx.versions(package) if str(x.vers) == version and x.commit == e.get("commit")),
+                    None)
+    except (ix.IndexReadError, gitsrc.GitSourceError, ValueError):
+        return None
+
+
+def plan_fetch(prj, op: str, args: dict | None = None, local_roots: list[Path] | None = None, hosts=()) -> dict:
+    """What operation `op` ("add", "update", "remove", "lock" or "sync", with add's or update's `args`) would fetch
+    from a remote that no person confirmed, over HTTP (`local_roots`, `hosts` as the server's): NeedsFetch's plan,
+    {op, fetches, complete}, `fetches` empty when it needs none. Nothing is fetched (but a local repository under
+    --dep-root, which needs no confirmation), staged or written; an index with no local copy is
+    index.IndexNotFetched. The confirmation of a dependency fetch checks the request against it."""
+    args = args or {}
+    allow = Allow(plan_only=True)
+    try:
+        if op == "add":
+            add(prj, args.get("name"), args.get("git"), args.get("rev"), args.get("subdir"), local_roots=local_roots,
+                package=args.get("package"), version=args.get("version"), index=args.get("index"), hosts=hosts,
+                allow=allow)
+        elif op == "update":
+            update(prj, args.get("name"), args.get("rev"), local_roots=local_roots, version=args.get("version"),
+                   hosts=hosts, allow=allow)
+        elif op == "lock":
+            relock(prj, local_roots=local_roots, hosts=hosts, allow=allow)
+        elif op == "sync":
+            sync(prj, local_roots=local_roots, hosts=hosts, allow=allow, wait=False)
+        elif op == "remove":
+            return {"op": op, "fetches": [], "complete": True}         # a removal fetches nothing
+        else:
+            raise DepError(f"no dependency operation {op!r} (add, update, remove, lock, sync)")
+    except (NeedsFetch, Planned) as e:
+        return e.plan
+    raise AssertionError(f"{op} went past its plan")
+
+
 def _row(name: str, action: str, commit, entry: dict | None) -> dict:
     """A sync result row: {name, action, commit}, as phase 1 gave it, and `package` for a package's names."""
     package = (entry or {}).get("package")
@@ -2226,7 +2495,7 @@ def _row(name: str, action: str, commit, entry: dict | None) -> dict:
 
 
 def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool | None = None,
-         hosts=(), wait: bool = True) -> list[dict]:
+         hosts=(), wait: bool = True, allow: Allow | None = None) -> list[dict]:
     """Installs every dependency exactly as locked: each of project.json's git dependencies and every package their lock
     entries reach (`packages`, through `deps`), under each of its local names. Frozen: a dependency of project.json that
     the lock does not pin as named (not locked, or another git / rev / subdir / package), or whose locked graph cannot
@@ -2242,7 +2511,11 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
     one installed from the store or as locked reads none, so it is not checked. An install that matches its lock entry
     but is not in the store is imported into it. Returns one row per name ({name, action, commit}, `package` for a
     package), and `warning` on a package the locked PDK does not fit: it is installed all the same (status reports
-    it). `wait` False: DepsBusy, nothing done, when another operation holds the project's dependency lock."""
+    it). `wait` False: DepsBusy, nothing done, when another operation holds the project's dependency lock. `allow`
+    (phase 4, HTTP): an entry missing from the store that only a remote has is fetched only when a person confirmed it
+    (Allow), else NeedsFetch with every such entry (url, commit, tree, and the size and licence its index's local copy
+    gives), before anything is fetched."""
+    allow = as_allow(allow)
     if offline is None:
         offline = os.environ.get("UNDINE_OFFLINE") == "1"
     command = f"lib sync {prj.name}"
@@ -2281,11 +2554,29 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
                 if id not in sources:
                     spec = _spec_of(entries[id])
                     _check_spec(spec)
-                    sources[id] = _source(spec, local_roots, command, hosts)
+                    sources[id] = _source(spec, local_roots, command, hosts,
+                                          allow.urls if allow is not None else frozenset())
                 return sources[id]
             missing = [id for id, files in stored.items() if files is None]
+            g = _Graph(prj, lock, local_roots, command, hosts, allow) if allow is not None else None
             for id in missing:
-                source(id)
+                if g is None:
+                    source(id)
+                    continue
+                e = entries[id]
+                blocked = False
+                try:
+                    src = source(id)
+                except HostNotAllowed:
+                    src, blocked = None, True
+                if offline or (not blocked and (g.may_fetch(e["git"], e["commit"], src)
+                                                or gitsrc.has_commit(e["git"], e["commit"]))):
+                    continue
+                g.need(e["git"], e["commit"], rev=None, commit=e["commit"], subdir=e.get("subdir"),
+                       line=_index_line(e), package=e.get("package") or first[id], known=True)
+                g.needs[(e["git"], e["commit"], e.get("subdir") or None)]["tree"] = entry_hash(e)[1]
+            if g is not None:
+                g.settle()
             _fetch_missing([(first[id], entries[id]) for id in missing], lambda i: source(missing[i]), offline)
             out, todo, files_of = [], [], {}
             try:
@@ -2380,7 +2671,7 @@ def _warn_unfit(prj, lock: dict, rows: list[dict]) -> None:
 
 
 def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
-           upgrade: Callable[[dict], dict] | None = None, hosts=()) -> dict:
+           upgrade: Callable[[dict], dict] | None = None, hosts=(), allow: Allow | None = None) -> dict:
     """`lib lock`: resolves the git dependencies the lock does not pin as project.json names them (not locked, or
     another git / rev / subdir / package) or whose locked graph is incomplete (_incomplete: then at its locked commit),
     with the packages their manifests need, every other locked package held as locked; all or nothing, fetching them
@@ -2389,15 +2680,18 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
     origin; its PDK pin (an object) is moved by the PDK commands. `upgrade` (pdkops.upgrader's converter): the lock is
     converted to format 2 in memory first, resolved in format 2 and written once, so a refused resolution leaves the
     lock as it was. A trust given to an entry whose commit or files change goes. Returns {lock, resolved: the entries
-    resolved, created: whether this call made the lock}."""
+    resolved, created: whether this call made the lock}. `allow`: as add's."""
+    allow = as_allow(allow)
     _reread(prj)
     if upgrade is None:
         lock = read_lock(prj.path)
         if not _stale(_git_specs(prj), lock, prj.meta) and not _incomplete(prj, lock):
+            if allow is not None and allow.plan_only:
+                raise Planned({"op": "lock", "fetches": [], "complete": True})
             with _in_store(prj):                         # nothing to fetch: no wait behind a fetch in progress
                 lock, created, _ = _record_env(prj, guard, [])
             return {"lock": lock, "resolved": [], "created": created}
-    with _deps_lock(prj.path):
+    with _deps_lock(prj.path, _waits(allow)):
         _reread(prj)
         start = read_lock(prj.path)
         lock = upgrade(copy.deepcopy(start) if start is not None else {"libraries": {}}) if upgrade else start
@@ -2410,10 +2704,14 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
                 index_spec(name, specs[name], prj.meta)
             else:
                 _check_spec(specs[name])
-        g = _Graph(prj, lock, local_roots, f"lib lock {prj.name}", hosts)
+        g = _Graph(prj, lock, local_roots, f"lib lock {prj.name}", hosts, allow)
         for name in todo:
             if not is_index_spec(specs[name]):
-                g.source(specs[name])
+                try:
+                    g.source(specs[name])
+                except HostNotAllowed:
+                    if allow is None:
+                        raise                            # over HTTP a fetch to confirm: noted when it is reached
         with _in_store(prj):
             keys = g.walked(exclude=set(todo))
             direct = g.held(keys)
@@ -2426,6 +2724,7 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
                 direct[name] = g.requirement(name, specs[name], specs[name].get("package"), at)
             res = g.run(direct, g.fixed(keys, {g.graph.direct[n] for n in todo if n in g.graph.direct}))
             libs, pkgs, installs = g.tables(res)
+            g.settle()
             staged = g.stage(installs)
             fmt = g.fmt
             try:

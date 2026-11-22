@@ -144,6 +144,45 @@ export function keptChangesetOf(e: unknown): string | null {
   return e instanceof ApiError && typeof e.params?.changeset === "string" ? e.params.changeset : null;
 }
 
+// ------------------------------------------------------------------ fetches a person confirms (phase 4)
+
+/** One fetch of a plan: the URL in full, the commit (null for a rev not fetched yet: known after the fetch), the
+ * tree, size and licence an index line gives (null for a plain git dependency), and whether its host is one the server
+ * fetches from without asking. */
+export interface FetchRow {
+  url: string; rev: string | null; commit: string | null; subdir: string | null; tree: string | null;
+  size: number | null; license: string | null; package: string | null; version: string | null;
+  host: string | null; allowed: boolean;
+}
+/** The operation a plan brings back (POST /api/confirmations takes it as it is). */
+export interface FetchRequest {
+  op: "add" | "update" | "remove" | "lock" | "sync"; name?: string; git?: string; rev?: string; subdir?: string;
+  package?: string; version?: string; index?: string; changeset?: string; adopt?: boolean; reason?: string; title?: string;
+}
+/** What an operation over HTTP would fetch that no person confirmed (409 needs_fetch's params.plan): complete false
+ * when what it fetches may name more (a second confirmation may follow). */
+export interface FetchPlan { op: string; fetches: FetchRow[]; complete: boolean; project: string; request: FetchRequest }
+/** A dependency fetch running on the server (POST /deps/fetch): progress is approximate (a pack's bytes, then the files
+ * read); a failure carries the route's code, needs_fetch with the next plan. Kept in memory only. */
+export interface DepFetchJob {
+  id: string; project: string; kind: "dependency"; state: "queued" | "running" | "done" | "failed"; log: string[];
+  progress: { url?: string; bytes?: number; limit?: number; files?: number; of?: number } | null;
+  result: unknown; error: string | null; code: string | null; plan?: FetchPlan; created: number; ended: number | null;
+}
+/** A needs_fetch refusal's plan; null for any other error. */
+export function needsFetchOf(e: unknown): FetchPlan | null {
+  if (!(e instanceof ApiError) || e.code !== "needs_fetch") return null;
+  const plan = e.params?.plan as FetchPlan | undefined;
+  return plan && Array.isArray(plan.fetches) && plan.request ? plan : null;
+}
+/** An index with no local copy (409 index_not_fetched): a read never fetches it, a person's refresh does. */
+export interface IndexNotFetched { index: string; url: string; host: string | null }
+export function indexNotFetchedOf(e: unknown): IndexNotFetched | null {
+  if (!(e instanceof ApiError) || e.code !== "index_not_fetched") return null;
+  const p = e.params ?? {};
+  return { index: String(p.index ?? ""), url: String(p.url ?? ""), host: typeof p.host === "string" ? p.host : null };
+}
+
 // ------------------------------------------------------------------ trust (server/undine/store/trust.py)
 
 /** One line the trust rule would refuse: where (the dependency's file, from .undine/deps), what kind and the line. */
@@ -840,6 +879,9 @@ const enc = encodeURIComponent;
 const P = (p: string) => `/api/p/${enc(p)}`;
 const L = (p: string, l: string) => `${P(p)}/l/${enc(l)}`;
 const LY = (p: string, l: string, c: string) => `${L(p, l)}/layout/${enc(c)}`;
+const confirmIndex = (name: string, project?: string) =>
+  req<{ token: string; expires: number; index: string; url: string; host: string | null; commit: string | null }>(
+    "/api/confirmations", { kind: "index", index: name, ...(project ? { project } : {}) });
 
 export const api = {
   pdks: () => req<PdkInfo[]>("/api/pdks"),
@@ -860,8 +902,9 @@ export const api = {
   // 400 not_direct (placedByOf) for a name a package placed; version: a package from an index's new requirement
   depUpdate: (p: string, name: string, rev?: string, version?: string) =>
     req<DepUpdate>(`${P(p)}/deps/${enc(name)}/update`, { rev: rev || null, ...(version ? { version } : {}) }),
-  // the library browser's Packages section (store/packages.py): the first read of an index fetches it, then the local
-  // copy is read until refreshIndex; project: for the indexes its project.json names and the PDK fit
+  // the library browser's Packages section (store/packages.py): a read never fetches an index (409 index_not_fetched,
+  // indexNotFetchedOf); the local copy is read until refreshIndex; project: for the indexes its project.json names and
+  // the PDK fit
   packages: (q: string, index?: string, project?: string) =>
     req<IndexWhere & { packages: PackageSummary[] }>(`/api/packages?${new URLSearchParams({ q,
       ...(index ? { index } : {}), ...(project ? { project } : {}) })}`),
@@ -869,8 +912,21 @@ export const api = {
     req<PackageInfo>(`/api/packages/${enc(name)}?${new URLSearchParams({ ...(index ? { index } : {}),
       ...(project ? { project } : {}) })}`),
   indexes: (project?: string) => req<{ indexes: IndexInfo[] }>(`/api/indexes${project ? `?project=${enc(project)}` : ""}`),
-  refreshIndex: (name: string, project?: string) =>
-    req<IndexWhere>(`/api/indexes/${enc(name)}/refresh${project ? `?project=${enc(project)}` : ""}`, {}),
+  // only after the person clicked to fetch the index (its URL shown): the token is for that index, once
+  confirmIndex,
+  // the confirmation, then the refresh with its token
+  refreshIndex: async (name: string, project?: string) => {
+    const { token } = await confirmIndex(name, project);
+    return req<IndexWhere>(`/api/indexes/${enc(name)}/refresh${project ? `?project=${enc(project)}` : ""}`, { token });
+  },
+  // only after the person clicked Fetch in the dialog that shows the plan (FetchConfirmDialog): the token is for that
+  // operation and exactly those fetches, once; then POST /deps/fetch runs the operation as a job
+  confirmDependencyFetch: (plan: FetchPlan) =>
+    req<{ token: string; expires: number; plan: FetchPlan }>("/api/confirmations", {
+      kind: "dependency", project: plan.project, ...plan.request,
+      fetches: plan.fetches.map(({ url, rev, commit, subdir, tree }) => ({ url, rev, commit, subdir, tree })) }),
+  depsFetch: (p: string, token: string) => req<{ job: DepFetchJob }>(`${P(p)}/deps/fetch`, { token }),
+  depsFetchStatus: (p: string, job: string) => req<DepFetchJob>(`${P(p)}/deps/fetch/${enc(job)}`),
   depRemove: (p: string, name: string) => req<DepRemove>(`${P(p)}/deps/${enc(name)}/remove`, {}),
   // the browser's own operations, each in a small changeset adopted at once (DepChangeset): refusals as the direct
   // routes', and an adopt refused (409 merge_conflict ...) with params.changeset, left open (keptChangesetOf)

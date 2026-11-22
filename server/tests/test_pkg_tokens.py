@@ -1,0 +1,505 @@
+"""Phase 4 of docs/design/packages.md, slice 2: the confirmation token for dependency fetches and index refreshes
+over HTTP, and dependency fetches as jobs with progress.
+
+Over HTTP a dependency operation fetches from a remote only what a person confirmed: a route answers 409 needs_fetch
+with the plan (URL, commit or rev, tree, size, licence, host), the browser asks for a token of kind 'dependency' after
+the person's click, and POST /deps/fetch runs the operation as a job. A local repository under --dep-root needs no
+token. An index is never fetched by a read (409 index_not_fetched); a refresh needs a token of kind 'index'. The
+command line fetches as before.
+
+Nothing here reaches the network: a "remote" is a URL on a made-up host that git rewrites to a local repository under
+the test's directory (url.<base>.insteadOf, given through GIT_CONFIG_COUNT), so Undine treats it as remote (its host
+is checked, a token is needed) while git reads a local directory."""
+import copy
+import json
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fastapi.testclient import TestClient  # noqa: E402
+import test_changeset as tc  # noqa: E402
+from test_pkg_index import World, _commit, _project  # noqa: E402
+from undine import tools  # noqa: E402
+from undine.pdks import fetchjobs  # noqa: E402
+from undine.server.api import Server, create_app  # noqa: E402
+from undine.store import cas, deps, gitsrc  # noqa: E402
+from undine.store import index as ix  # noqa: E402
+
+pytestmark = pytest.mark.skipif(not shutil.which("git"), reason="needs git")
+
+NOW = {"undine": "0.1.0 (abc1234)", "pixi_lock": None, "klayout": {"version": "0.30.12", "from": "pixi"},
+       "xschem": None, "ngspice": None, "magic": None, "netgen": None}
+BANNERS = {"klayout": "KLayout 0.30.12", "xschem": None, "ngspice": None, "magic": None, "netgen": None}
+SYM = "v {}\nK {type=subcircuit}\n"
+HOST = "git.example.org"                  # an allowed host (--dep-host)
+OTHER = "other.example"                   # a host this server does not fetch from without asking
+
+
+@pytest.fixture(autouse=True)
+def _store(fresh_store):
+    return fresh_store
+
+
+@pytest.fixture(autouse=True)
+def _tools_here(monkeypatch):
+    monkeypatch.setattr(tools, "tools_record", lambda: copy.deepcopy(NOW))
+    monkeypatch.setattr(tools, "version", lambda n: BANNERS[n])
+    monkeypatch.setattr(tools, "xschem_library", lambda: None)
+    monkeypatch.delenv("UNDINE_OFFLINE", raising=False)
+
+
+class Remotes:
+    """Made-up remote URLs that git rewrites to local repositories (git's url.<base>.insteadOf, through
+    GIT_CONFIG_COUNT): Undine sees a remote host, git reads a directory under the test's own."""
+
+    def __init__(self, monkeypatch):
+        self.mp, self.map = monkeypatch, {}
+
+    def add(self, url: str, repo: Path) -> str:
+        self.map[url] = repo
+        self.mp.setenv("GIT_CONFIG_COUNT", str(len(self.map)))
+        for i, (u, r) in enumerate(self.map.items()):
+            self.mp.setenv(f"GIT_CONFIG_KEY_{i}", f"url.file://{r}.insteadOf")
+            self.mp.setenv(f"GIT_CONFIG_VALUE_{i}", u)
+        return url
+
+
+@pytest.fixture
+def remotes(monkeypatch) -> Remotes:
+    return Remotes(monkeypatch)
+
+
+def _server(tmp_path: Path, **kw) -> tuple[Server, TestClient]:
+    srv = Server(tmp_path / "projects", {}, [], dep_roots=[tmp_path / "local"], dep_hosts=[HOST], **kw)
+    return srv, TestClient(create_app(srv, None))
+
+
+def _plain(d: Path, cells=("inv",), tag: str = "v1", manifest: str | None = None) -> tuple[Path, str]:
+    """A plain git library (cells at the top), tagged; with `manifest`, a package."""
+    files = {f"{c}.sym": SYM for c in cells}
+    if manifest is not None:
+        files["undine-package.toml"] = manifest
+    return d, _commit(d, files, tag, tag)
+
+
+def _remote_package(w: World, remotes: Remotes, name: str, version: str, url: str) -> dict:
+    """Package `name` `version` in a local repository that the index lists at the remote `url` (with a size and a
+    licence), the tree computed from the local copy: the remote's kept repository stays empty."""
+    repo, commit = w.package(name, version)
+    with cas.store_lock(shared=True):
+        gitsrc.fetch(str(repo), None, f"v{version}")
+        files = gitsrc.blob_tree(str(repo), commit, None, "include")
+    remotes.add(url, repo)
+    line = {"name": name, "vers": version, "git": url, "commit": commit, "tree": cas.tree_hash(files), "deps": [],
+            "license": "MIT", "size": 4096, "yanked": False}
+    w.append(line)
+    return line
+
+
+def _files(prj) -> dict:
+    return {n: (prj.path / n).read_text() if (prj.path / n).is_file() else None for n in ("project.json", deps.LOCK)}
+
+
+def _confirm(c: TestClient, plan: dict, **over):
+    body = {"kind": "dependency", "project": plan.get("project", "p"), **plan["request"], "fetches": plan["fetches"],
+            **over}
+    return c.post("/api/confirmations", json=body)
+
+
+def _wait(c: TestClient, project: str, job: dict, timeout: float = 60) -> dict:
+    end = time.monotonic() + timeout
+    while job["state"] in ("queued", "running"):
+        assert time.monotonic() < end, job
+        time.sleep(0.05)
+        r = c.get(f"/api/p/{project}/deps/fetch/{job['id']}")
+        assert r.status_code == 200, r.text
+        job = r.json()
+    return job
+
+
+def _fetch(c: TestClient, plan: dict, project: str = "p") -> dict:
+    """The person's click: the token, then the fetch job, followed to its end."""
+    r = _confirm(c, plan)
+    assert r.status_code == 200, r.text
+    r = c.post(f"/api/p/{project}/deps/fetch", json={"token": r.json()["token"]})
+    assert r.status_code == 200, r.text
+    return _wait(c, project, r.json()["job"])
+
+
+def _index_world(tmp_path: Path, remotes: Remotes) -> tuple[World, dict]:
+    w = World(tmp_path / "local")
+    w.default()
+    line = _remote_package(w, remotes, "amp", "1.0.0", f"https://{HOST}/amp.git")
+    ix.Index(str(w.index)).update()                   # fetched before (a person's refresh)
+    return w, line
+
+
+# ------------------------------------------------------------------ a remote needs the person's token
+
+
+def test_dependency_fetch_needs_token(tmp_path, remotes):
+    _, line = _index_world(tmp_path, remotes)
+    _, prj = _project(tmp_path)
+    srv, c = _server(tmp_path)
+    before = _files(prj)
+    r = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp", "version": "^1"})
+    assert r.status_code == 409 and r.json()["code"] == "needs_fetch", r.text
+    plan = r.json()["plan"]
+    assert plan["project"] == "p" and plan["op"] == "add" and plan["complete"] is True
+    assert plan["request"] == {"op": "add", "name": "amp", "package": "amp", "version": "^1"}
+    [f] = plan["fetches"]
+    assert (f["url"], f["commit"], f["tree"], f["size"], f["license"]) == \
+        (line["git"], line["commit"], line["tree"], 4096, "MIT")
+    assert (f["rev"], f["package"], f["version"], f["host"], f["allowed"]) == (None, "amp", "1.0.0", HOST, True)
+    assert _files(prj) == before and not gitsrc.repo_path(line["git"]).exists()      # nothing fetched or written
+    # a plain git dependency named by a rev: the commit is not known before the fetch
+    repo, _ = _plain(tmp_path / "ip")
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    r = c.post("/api/p/p/deps", json={"name": "ip", "git": url, "rev": "v1"})
+    assert r.status_code == 409, r.text
+    [f] = r.json()["plan"]["fetches"]
+    assert (f["url"], f["rev"], f["commit"], f["tree"], f["size"]) == (url, "v1", None, None, None)
+    assert r.json()["plan"]["complete"] is False                # its manifest may name more, read once fetched
+    assert _files(prj) == before and not gitsrc.repo_path(url).exists()
+    # the one-click route and a changeset's: refused the same way, the one-click before any changeset is opened
+    r = c.post("/api/p/p/deps/changeset", json={"action": "add", "name": "ip", "git": url, "rev": "v1"})
+    assert r.status_code == 409 and r.json()["plan"]["request"]["adopt"] is True, r.text
+    # local repositories under --dep-root need no token (the 200s of test_api_phase2.py)
+    local, _ = _plain(tmp_path / "local" / "lib")
+    r = c.post("/api/p/p/deps", json={"name": "loc", "git": str(local), "rev": "v1"})
+    assert r.status_code == 200, r.text
+
+
+def test_token_bound_to_url_commit_tree(tmp_path, remotes):
+    _, line = _index_world(tmp_path, remotes)
+    _, prj = _project(tmp_path)
+    srv, c = _server(tmp_path)
+    plan = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"}).json()["plan"]
+    f = plan["fetches"][0]
+    for bad in ({**f, "commit": "0" * 40}, {**f, "tree": "sha256:" + "0" * 64},
+                {**f, "url": f"https://{HOST}/other.git"}):
+        r = _confirm(c, plan, fetches=[bad])
+        assert r.status_code == 400 and "show the fetch dialog again" in r.json()["detail"], r.text
+    r = _confirm(c, plan, fetches=[])
+    assert r.status_code == 400, r.text
+    r = _confirm(c, plan, name="ip", git=f"https://{HOST}/ip.git")    # an operation whose plan is not that one
+    assert r.status_code == 400, r.text
+    with deps._deps_lock(prj.path):              # another operation of the project fetching: the plan does not wait
+        r = _confirm(c, plan)
+    assert r.status_code == 409 and r.json()["code"] == "busy", r.text
+    tok = _confirm(c, plan).json()["token"]
+    # undine.lock changed between the confirmation and the fetch: 403, and the token is used up
+    lock = deps.read_lock(prj.path)
+    deps.write_lock(prj.path, {**lock, "tools": {**lock["tools"], "magic": {"version": "8.3", "from": "pixi"}}})
+    r = c.post("/api/p/p/deps/fetch", json={"token": tok})
+    assert r.status_code == 403 and "changed since the fetch was confirmed" in r.json()["detail"], r.text
+    deps.write_lock(prj.path, lock)
+    r = c.post("/api/p/p/deps/fetch", json={"token": tok})
+    assert r.status_code == 403 and "used already" in r.json()["detail"], r.text
+    assert not gitsrc.repo_path(line["git"]).exists()
+    # a token of another project, or of another kind, is refused
+    tok = _confirm(c, plan).json()["token"]
+    srv.store.create("q")
+    assert c.post("/api/p/q/deps/fetch", json={"token": tok}).status_code == 403
+    trust_tok, _ = srv.confirmations.issue({"kind": "trust", "project": "p", "name": "amp", "key": "x", "tree": "y"})
+    r = c.post("/api/p/p/deps/fetch", json={"token": trust_tok})
+    assert r.status_code == 403 and "trusting a dependency, not a dependency fetch" in r.json()["detail"], r.text
+    assert c.post("/api/p/p/deps/fetch", json={}).status_code == 403
+
+
+def test_token_single_use_and_expires(tmp_path, remotes, monkeypatch):
+    _, line = _index_world(tmp_path, remotes)
+    _, prj = _project(tmp_path)
+    srv, c = _server(tmp_path)
+    plan = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"}).json()["plan"]
+    tok = _confirm(c, plan).json()["token"]
+    r = c.post("/api/p/p/deps/fetch", json={"token": tok})
+    assert r.status_code == 200, r.text
+    job = _wait(c, "p", r.json()["job"])
+    assert job["state"] == "done", job
+    assert job["result"]["version"] == "1.0.0" and job["result"]["cells"] == ["amp_cell"]
+    assert deps.read_lock(prj.path)["libraries"]["amp"]["tree"] == line["tree"]
+    assert (deps.dep_dir(prj.path, "amp") / "amp_cell.sym").is_file()
+    r = c.post("/api/p/p/deps/fetch", json={"token": tok})
+    assert r.status_code == 403 and "used already" in r.json()["detail"], r.text
+    # five minutes: a token past its time is refused (and gone)
+    monkeypatch.setattr(fetchjobs, "TTL", -1)
+    r = c.post("/api/p/p/deps/amp/remove")
+    assert r.status_code == 200, r.text
+    plan = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"}).json()
+    assert "plan" not in plan                                  # in the store now: added with no fetch
+    repo, _ = _plain(tmp_path / "ip")
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    plan = c.post("/api/p/p/deps", json={"name": "ip", "git": url, "rev": "v1"}).json()["plan"]
+    tok = _confirm(c, plan).json()["token"]
+    r = c.post("/api/p/p/deps/fetch", json={"token": tok})
+    assert r.status_code == 403 and "expired" in r.json()["detail"], r.text
+
+
+def test_fetch_job_progress_and_kind(tmp_path, remotes):
+    _, line = _index_world(tmp_path, remotes)
+    _project(tmp_path)
+    _, c = _server(tmp_path)
+    plan = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"}).json()["plan"]
+    job = _fetch(c, plan)
+    assert job["state"] == "done" and job["kind"] == "dependency" and job["project"] == "p", job
+    p = job["progress"]
+    assert p["url"] == line["git"] and ("files" in p or "bytes" in p), p
+    if "files" in p:
+        assert p["files"] == p["of"] >= 2                      # the cell and the manifest
+    # the PDK's job route does not know a dependency job, nor the other way round
+    assert c.get(f"/api/p/p/pdk/fetch/{job['id']}").status_code == 404
+    assert c.get("/api/p/p/deps/fetch/nope").status_code == 404
+
+
+def test_progress_reports_bytes_while_git_fetches(tmp_path, monkeypatch):
+    seen = []
+    repo, commit = _plain(tmp_path / "ip")
+    token = gitsrc.PROGRESS.set(lambda **p: seen.append(p))
+    try:
+        with cas.store_lock(shared=True):
+            gitsrc.fetch(str(repo), None, "v1")
+            gitsrc.blob_tree(str(repo), commit, None)
+    finally:
+        gitsrc.PROGRESS.reset(token)
+    assert any("bytes" in p and p["url"] == str(repo) and p["limit"] == gitsrc.MAX_BYTES for p in seen), seen
+    assert seen[-1] == {"url": str(repo), "files": 1, "of": 1}
+
+
+# ------------------------------------------------------------------ indexes
+
+
+def test_index_refresh_needs_token(tmp_path):
+    w = World(tmp_path / "local")
+    w.default()
+    w.publish("amp", "1.0.0")
+    other = World(tmp_path / "local", "acme-index")
+    _project(tmp_path, {"indexes": {"acme": str(other.index)}})
+    srv, c = _server(tmp_path)
+    r = c.post("/api/indexes/undine/refresh")
+    assert r.status_code == 403 and "an index refresh needs the person's confirmation" in r.json()["detail"], r.text
+    dep_tok, _ = srv.confirmations.issue({"kind": "dependency", "project": "", "request": {}, "fetches": []})
+    r = c.post("/api/indexes/undine/refresh", json={"token": dep_tok})
+    assert r.status_code == 403 and "not an index refresh" in r.json()["detail"], r.text
+    assert not ix.Index(str(w.index)).fetched()
+    r = c.post("/api/confirmations", json={"kind": "index", "index": "undine"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["url"] == str(w.index) and body["index"] == "undine" and body["host"] is None and body["commit"] is None
+    tok = c.post("/api/confirmations", json={"kind": "index", "index": "undine", "project": "p"}).json()["token"]
+    r = c.post("/api/indexes/acme/refresh", json={"token": tok}, params={"project": "p"})   # another index
+    assert r.status_code == 403 and f"for index {w.index}" in r.json()["detail"], r.text
+    assert not ix.Index(str(other.index)).fetched()
+    tok = c.post("/api/confirmations", json={"kind": "index", "index": "undine"}).json()["token"]
+    r = c.post("/api/indexes/undine/refresh", json={"token": tok}, params={"project": "p"})  # another project
+    assert r.status_code == 403, r.text
+    tok = c.post("/api/confirmations", json={"kind": "index", "index": "undine"}).json()["token"]
+    r = c.post("/api/indexes/undine/refresh", json={"token": tok})
+    assert r.status_code == 200 and r.json()["commit"] == ix.Index(str(w.index)).commit(), r.text
+    assert c.post("/api/indexes/undine/refresh", json={"token": tok}).status_code == 403     # used up
+    # a project's own index, by its nickname there
+    r = c.post("/api/confirmations", json={"kind": "index", "index": "acme", "project": "p"})
+    assert r.status_code == 200 and r.json()["index"] == "acme", r.text
+    r = c.post("/api/indexes/acme/refresh", json={"token": r.json()["token"]}, params={"project": "p"})
+    assert r.status_code == 200 and ix.Index(str(other.index)).fetched(), r.text
+
+
+def test_package_reads_never_fetch_index(tmp_path, monkeypatch):
+    w = World(tmp_path / "local")
+    w.default()
+    w.publish("amp", "1.0.0")
+    _, prj = _project(tmp_path)
+    _, c = _server(tmp_path)
+    for path in ("/api/packages", "/api/packages/amp"):
+        r = c.get(path, params={"project": "p"})
+        assert r.status_code == 409 and r.json()["code"] == "index_not_fetched", r.text
+        assert r.json()["params"] == {"index": "undine", "url": str(w.index), "host": None}
+    # nor does an add, an update or a lock that reads it
+    before = _files(prj)
+    r = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"})
+    assert r.status_code == 409 and r.json()["code"] == "index_not_fetched", r.text
+    assert _files(prj) == before and not ix.Index(str(w.index)).fetched()
+    prj.meta["libraries"]["amp"] = {"version": "^1"}
+    prj.save()
+    r = c.post("/api/p/p/deps/lock")
+    assert r.status_code == 409 and r.json()["code"] == "index_not_fetched", r.text
+    assert not ix.Index(str(w.index)).fetched()
+    # once a person refreshed it: an update reads the copy as it is, never fetching it again
+    del prj.meta["libraries"]["amp"]
+    prj.save()
+    ix.Index(str(w.index)).update()
+    assert c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"}).status_code == 200
+    w.publish("amp", "1.1.0")
+    monkeypatch.setattr(ix.Index, "update", lambda self: pytest.fail(f"fetched index {self.url}"))
+    r = c.post("/api/p/p/deps/amp/update", json={})
+    assert r.status_code == 200 and deps.read_lock(prj.path)["libraries"]["amp"]["version"] == "1.0.0", r.text
+    assert c.get("/api/packages/amp").json()["newest"] == "1.0.0"
+
+
+# ------------------------------------------------------------------ hosts and revs
+
+
+def test_confirmed_url_outside_allowed_hosts(tmp_path, remotes):
+    _, prj = _project(tmp_path)
+    _, c = _server(tmp_path)
+    repo, commit = _plain(tmp_path / "ip")
+    url = remotes.add(f"https://{OTHER}/ip.git", repo)
+    r = c.post("/api/p/p/deps", json={"name": "ip", "git": url, "rev": "v1"})
+    assert r.status_code == 409, r.text
+    plan = r.json()["plan"]
+    [f] = plan["fetches"]
+    assert (f["host"], f["allowed"]) == (OTHER, False)
+    assert f"{OTHER} is not among the hosts" in r.json()["detail"]
+    job = _fetch(c, plan)
+    assert job["state"] == "done", job
+    assert deps.read_lock(prj.path)["libraries"]["ip"]["commit"] == commit
+    assert (deps.dep_dir(prj.path, "ip") / "inv.sym").is_file()
+    # the confirmation passed only that URL: a lock that needs it again (another rev) asks again
+    _commit(repo, {"buf.sym": SYM}, "v2", "v2")
+    r = c.post("/api/p/p/deps/ip/update", json={"rev": "v2"})
+    assert r.status_code == 409 and r.json()["plan"]["fetches"][0]["rev"] == "v2", r.text
+    assert r.json()["plan"]["request"] == {"op": "update", "name": "ip", "rev": "v2"}
+
+
+def test_git_rev_needs_second_round(tmp_path, remotes):
+    _, prj = _project(tmp_path)
+    _, c = _server(tmp_path)
+    b_url = f"https://{HOST}/b.git"
+    brepo, bcommit = _plain(tmp_path / "b", ["b_cell"], manifest='[package]\nname = "b"\nversion = "1.0.0"\n')
+    remotes.add(b_url, brepo)
+    arepo, acommit = _plain(tmp_path / "a", ["a_cell"], manifest=(
+        '[package]\nname = "a"\nversion = "1.0.0"\n\n[dependencies]\n'
+        f'b = {{ git = "{b_url}", rev = "v1" }}\n'))
+    a_url = remotes.add(f"https://{HOST}/a.git", arepo)
+    r = c.post("/api/p/p/deps", json={"name": "a", "git": a_url, "rev": "v1"})
+    assert r.status_code == 409, r.text
+    plan = r.json()["plan"]
+    assert [(f["url"], f["rev"], f["commit"]) for f in plan["fetches"]] == [(a_url, "v1", None)]
+    assert plan["complete"] is False
+    # the first round fetches a; its manifest names b, which no one confirmed: the job fails with the new plan
+    job = _fetch(c, plan)
+    assert job["state"] == "failed" and job["code"] == "needs_fetch", job
+    plan2 = job["plan"]
+    assert [(f["url"], f["rev"], f["commit"]) for f in plan2["fetches"]] == [(a_url, "v1", acommit), (b_url, "v1", None)]
+    assert plan2["request"] == plan["request"] and "a" not in prj.library_specs()
+    # the plan made now reads a's manifest from what the first round kept: the same plan, so the person confirms it
+    r = c.post("/api/p/p/deps", json={"name": "a", "git": a_url, "rev": "v1"})
+    assert r.status_code == 409 and r.json()["plan"]["fetches"] == plan2["fetches"], r.text
+    job = _fetch(c, plan2)
+    assert job["state"] == "done", job
+    lock = deps.read_lock(prj.path)
+    assert lock["libraries"]["a"]["commit"] == acommit and lock["packages"]["b"]["commit"] == bcommit
+    assert (deps.dep_dir(prj.path, "b") / "b_cell.sym").is_file()
+
+
+def test_a_rev_that_moved_since_it_was_confirmed_is_confirmed_again(tmp_path, remotes):
+    _, prj = _project(tmp_path)
+    _, c = _server(tmp_path)
+    repo, first = _plain(tmp_path / "ip")
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    with cas.store_lock(shared=True):
+        gitsrc.fetch(url, None, "v1")                       # fetched once before: the plan shows that commit
+    plan = c.post("/api/p/p/deps", json={"name": "ip", "git": url, "rev": "v1"}).json()["plan"]
+    assert plan["fetches"][0]["commit"] == first
+    tok = _confirm(c, plan).json()["token"]
+    _git_retag(repo)
+    r = c.post("/api/p/p/deps/fetch", json={"token": tok})
+    job = _wait(c, "p", r.json()["job"])
+    assert job["state"] == "failed" and job["code"] == "needs_fetch", job
+    moved = job["plan"]["fetches"][0]
+    assert moved["rev"] == "v1" and moved["commit"] not in (None, first)
+    assert "ip" not in prj.library_specs()
+
+
+def _git_retag(repo: Path) -> None:
+    _commit(repo, {"buf.sym": SYM}, "moved")
+    subprocess.run(["git", "-C", str(repo), "tag", "-f", "v1"], check=True, capture_output=True)
+
+
+# ------------------------------------------------------------------ sync, lock and changesets
+
+
+def test_sync_and_lock_over_http_need_the_token(tmp_path, remotes, monkeypatch):
+    _, line = _index_world(tmp_path, remotes)
+    _, prj = _project(tmp_path)
+    deps.add(prj, "amp", None, package="amp")                 # the command line fetches it
+    _, c = _server(tmp_path)
+    shutil.rmtree(deps.dep_dir(prj.path, "amp"))              # a fresh clone on another machine
+    monkeypatch.setenv("UNDINE_STORE", str(tmp_path / "store2"))
+    ix.Index(str(tmp_path / "local" / "index")).update()
+    r = c.post("/api/p/p/deps/sync", json={})
+    assert r.status_code == 409, r.text
+    plan = r.json()["plan"]
+    assert plan["request"] == {"op": "sync"}
+    [f] = plan["fetches"]
+    assert (f["url"], f["commit"], f["tree"], f["size"], f["license"]) == \
+        (line["git"], line["commit"], line["tree"], 4096, "MIT")
+    job = _fetch(c, plan)
+    assert job["state"] == "done" and job["result"]["libraries"][0]["action"] == "installed", job
+    assert (deps.dep_dir(prj.path, "amp") / "amp_cell.sym").is_file()
+    # lib lock of a requirement written by hand: the same
+    repo, _ = _plain(tmp_path / "ip")
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    prj.meta["libraries"]["ip"] = {"git": url, "rev": "v1"}
+    prj.save()
+    r = c.post("/api/p/p/deps/lock")
+    assert r.status_code == 409 and r.json()["plan"]["request"] == {"op": "lock"}, r.text
+    job = _fetch(c, r.json()["plan"])
+    assert job["state"] == "done" and [x["name"] for x in job["result"]["resolved"]] == ["ip"], job
+
+
+def test_changeset_and_one_click_operations_fetch_through_the_token(tmp_path, remotes):
+    root, srv, cs = tc.setup()
+    srv.dep_roots, srv.dep_hosts = [tmp_path.resolve()], [HOST]
+    c = TestClient(create_app(srv, None))
+    repo, commit = _plain(tmp_path / "ip", ["buf"])
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    # the one-click Add: refused before any changeset is opened (no git-setup either), then the job adopts it
+    r = c.post("/api/p/p/deps/changeset", json={"action": "add", "name": "ip", "git": url, "rev": "v1"})
+    assert r.status_code == 409, r.text
+    assert not (srv.project("p").path / ".git").exists() and cs.list("p") == []
+    job = _fetch(c, r.json()["plan"])
+    assert job["state"] == "done" and job["result"]["status"] == "applied", job
+    prj = srv.project("p")
+    assert deps.read_lock(prj.path)["libraries"]["ip"]["commit"] == commit
+    assert (deps.dep_dir(prj.path, "ip") / "buf.sym").is_file()
+    # an operation in an open changeset: its plan names the changeset, and the job records it there
+    _commit(repo, {"amp.sym": SYM}, "v2", "v2")
+    cid = cs.create("p", "move ip", actor="user")["id"]
+    r = c.post(f"/api/p/p/changesets/{cid}/deps", json={"action": "update", "name": "ip", "rev": "v2"})
+    assert r.status_code == 409 and r.json()["plan"]["request"]["changeset"] == cid, r.text
+    job = _fetch(c, r.json()["plan"])
+    assert job["state"] == "done" and job["result"]["op"] is not None, job
+    work = srv.project(f"p~{cid}")
+    assert (deps.dep_dir(work.path, "ip") / "amp.sym").is_file()
+    assert not (deps.dep_dir(srv.project("p").path, "ip") / "amp.sym").exists()      # the project as it was
+    shutil.rmtree(root, ignore_errors=True)
+
+
+# ------------------------------------------------------------------ the command line
+
+
+def test_cli_still_fetches(tmp_path, remotes):
+    _, prj = _project(tmp_path)
+    repo, commit = _plain(tmp_path / "ip")
+    url = remotes.add(f"https://{OTHER}/ip.git", repo)       # any host, no token: the command line
+    r = deps.add(prj, "ip", url, "v1")
+    assert r["commit"] == commit and (deps.dep_dir(prj.path, "ip") / "inv.sym").is_file()
+    w = World(tmp_path / "local")
+    w.default()
+    line = _remote_package(w, remotes, "amp", "1.0.0", f"https://{HOST}/amp.git")
+    assert not ix.Index(str(w.index)).fetched()
+    r = deps.add(prj, "amp", None, package="amp")              # the index fetched on first read, the package too
+    assert r["version"] == "1.0.0" and deps.read_lock(prj.path)["libraries"]["amp"]["tree"] == line["tree"]
+    # the HTTP form of the same call, with no confirmation, fetches nothing
+    shutil.rmtree(gitsrc.repo_path(url))
+    with pytest.raises(deps.NeedsFetch) as e:
+        deps.update(prj, "ip", "v1", local_roots=[tmp_path / "local"], hosts=[HOST], allow=deps.Allow())
+    assert [f["url"] for f in e.value.plan["fetches"]] == [url]
+    assert not gitsrc.repo_path(url).exists()

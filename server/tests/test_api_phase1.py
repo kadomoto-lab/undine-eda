@@ -437,12 +437,15 @@ def test_the_netlist_hash_changes_when_a_format_2_dependency_is_updated(tmp_path
 def test_no_agent_tool_or_client_method_reaches_a_confirmation_or_a_pdk_fetch():
     from undine.agents import agent_tools
 
-    names = [t["name"] for t in agent_tools.TOOLS]
-    assert names and not [n for n in names if "confirm" in n or ("pdk" in n and "fetch" in n) or "token" in n]
+    names = [t["name"] for t in agent_tools.TOOLS] + list(agent_tools.BY_NAME)    # BY_NAME: what `undine call` runs
+    assert names and not [n for n in names if "confirm" in n or "fetch" in n or "token" in n or "refresh" in n]
     src = Path(__file__).resolve().parents[1] / "undine"
     for f in [*sorted((src / "agents").glob("*.py")), src / "client.py"]:
         text = f.read_text()
-        for word in ("/api/confirmations", "pdk/fetch", "fetchjobs", "confirmations.", "pdkops.fetch"):
+        # phase 4: the dependency fetch and the index refresh, their jobs and the new kinds of token too
+        for word in ("/api/confirmations", "pdk/fetch", "fetchjobs", "confirmations.", "pdkops.fetch",
+                     "deps/fetch", "/refresh", "dep_jobs", "plan_fetch", "deps.Allow", "Allow(", "PROGRESS",
+                     '"kind": "dependency"', '"kind": "index"', "'kind': 'dependency'", "'kind': 'index'"):
             assert word not in text, (f.name, word)
     from undine.agents.client import Undine
-    assert not [m for m in dir(Undine) if "confirm" in m or "fetch" in m]
+    assert not [m for m in dir(Undine) if "confirm" in m or "fetch" in m or "refresh" in m or "token" in m]

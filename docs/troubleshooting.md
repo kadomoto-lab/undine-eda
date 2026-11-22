@@ -467,11 +467,11 @@ pixi run python -m undine serve --dep-root ~/ip
 The whole message ends with `not from gitlab.com. Start the server with --dep-host gitlab.com, or run python -m
 undine lib add ... from the command line`.
 
-**Cause.** A dependency or an index was added, updated, locked or synced through the browser or the HTTP API, and
-one of its URLs is on a host that is neither one of the indexes this machine configures (the default index's,
-`github.com`, and those in `$UNDINE_HOME/config.toml`) nor one given with `--dep-host`. The URL may come from the
-request, project.json, a package's manifest or an index line. A cloned `project.json` can name any host, so its own
-`indexes` add none.
+**Cause.** An index was read or refreshed, or a package from it added, updated or locked, through the browser or the
+HTTP API, and the index's URL is on a host that is neither one of the indexes this machine configures (the default
+index's, `github.com`, and those in `$UNDINE_HOME/config.toml`) nor one given with `--dep-host`. A cloned
+`project.json` can name any host, so its own `indexes` add none. (A repository on such a host is not refused: the
+browser's Fetch dialog shows it with a warning, and fetches it once you confirm it.)
 
 **Fix.** Run the command the message names from the command line, which fetches from any host. Or restart the
 server with that host:

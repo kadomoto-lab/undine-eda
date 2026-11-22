@@ -3,12 +3,13 @@ import { AlertTriangle, Bot, Box, ChevronDown, ChevronRight, CircuitBoard, Cpu, 
 import { tabViewOf, type ChangeItem } from "./panels/changeItems";
 import type { GitStatus, LiveWriter, SymbolAffectedView, Writer } from "./api";
 import { api, ChatImage, CellInfo, ChangesetMerge, DepsStatus, LibraryInfo, PdkInfo, ProbeResult, ProjectInfo, ToolRecord, ViewKind } from "./api";
-import { incompatibleOf, keptChangesetOf, problemsOf, type DepAdd, type DepChangeset, type DepUpdate, type ResolvedDep,
-  type TrustCounts } from "./api";
+import { incompatibleOf, keptChangesetOf, needsFetchOf, problemsOf, type DepAdd, type DepChangeset, type DepUpdate,
+  type FetchPlan, type ResolvedDep, type TrustCounts } from "./api";
 import { LayoutEditor } from "./editors/LayoutEditor";
 import { LanguageMenu } from "./LanguageMenu";
 import { PdkFetchDialog, pdkStateText } from "./PdkFetchDialog";
 import { PackagesDialog } from "./PackagesDialog";
+import { FetchConfirmDialog } from "./FetchConfirmDialog";
 import { TrustDialog } from "./TrustDialog";
 import { Logo } from "./Logo";
 import { ChatPanel, Selection, WorkTarget } from "./panels/ChatPanel";
@@ -181,6 +182,9 @@ export function App() {
   const [showPackages, setShowPackages] = useState(false);   // the Packages section: an index's packages
   const [trustName, setTrustName] = useState<string | null>(null);   // the Trust dialog of that dependency
   const [refusal, setRefusal] = useState<Refusal | null>(null);      // a refusal with its list (resolution, PDK)
+  // a dependency operation that needs a fetch from another machine (409 needs_fetch): the Fetch dialog with its plan,
+  // and what to do with the operation's result once the person's fetch ran it
+  const [fetching, setFetching] = useState<{ plan: FetchPlan; done: (result: unknown) => void | Promise<void> } | null>(null);
   const pdkMenuRef = useRef<HTMLDivElement>(null);
   const [cells, setCells] = useState<Record<string, CellInfo[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -246,6 +250,7 @@ export function App() {
       toast(out.status === "open" ? msg("app:pdk.movedInChangeset", { to, id: out.changeset }) : t("app:pdk.moved", { to }));
       adoptWarning(out);
     } catch (e) {
+      if (askFetch(e, async () => { await loadProject(project); await loadDeps(project); })) return;
       // locked packages that do not accept that PDK: each with its chain and why, in a dialog
       const listed = listedRefusal(e, to);
       if (listed) setRefusal(listed);
@@ -265,6 +270,14 @@ export function App() {
       }
     }
     if (out.deps_warning) toast(msg("app:dependency.adoptedWarning", { warning: out.deps_warning }), "error");
+  };
+  /** A dependency operation that needs a fetch from another machine (needs_fetch): the Fetch dialog shows the plan,
+   * and `done` takes the operation's result once the person's fetch ran it. False for any other error. */
+  const askFetch = (e: unknown, done: (result: unknown) => void | Promise<void>): boolean => {
+    const plan = needsFetchOf(e);
+    if (!plan) return false;
+    setFetching({ plan, done });
+    return true;
   };
   /** An adopt the project refused (a conflict): the changeset stays open, and the person may review it. */
   const keptOpen = (e: unknown): boolean => {
@@ -790,6 +803,14 @@ export function App() {
         { name: "package", label: msg("app:dependency.package"), hint: msg("app:dependency.packageHint"), mono: true },
       ],
       submit: async (v) => {
+        const added = async (r: DepAdd) => {
+          await loadProject(project);
+          await loadDeps(project);
+          toggleLib(v.name, true);
+          const result = addedText(v.name, r);
+          if (result) setTimeout(() => ask({ title: msg("app:dependency.addedTitle", { name: v.name }), message: result, fields: [], submitLabel: msg("common:actions.ok") }), 0);
+          else toast(msg("app:dependency.installed", { name: v.name, count: r.cells.length, commit: r.commit.slice(0, 7) }));
+        };
         let r: DepAdd;
         try {
           const out = await api.addDepInChangeset(project, v.name, v.git, v.rev, v.subdir, v.package?.trim());
@@ -797,18 +818,15 @@ export function App() {
           adoptWarning(out);
         } catch (e) {
           if (keptOpen(e)) return;
+          // from another machine: the form closes, the Fetch dialog shows what is fetched, and the add goes on there
+          if (askFetch(e, async (res) => { const out = res as DepChangeset<DepAdd>; adoptWarning(out); await added(out.result); })) return;
           // every problem of the resolution at once, in a dialog over this form (which keeps what was typed)
           const listed = listedRefusal(e);
           if (!listed) throw e;
           setRefusal(listed);
           return firstLine(e);
         }
-        await loadProject(project);
-        await loadDeps(project);
-        toggleLib(v.name, true);
-        const result = addedText(v.name, r);
-        if (result) setTimeout(() => ask({ title: msg("app:dependency.addedTitle", { name: v.name }), message: result, fields: [], submitLabel: msg("common:actions.ok") }), 0);
-        else toast(msg("app:dependency.installed", { name: v.name, count: r.cells.length, commit: r.commit.slice(0, 7) }));
+        await added(r);
       },
     });
   };
@@ -860,30 +878,36 @@ export function App() {
           adoptWarning(out);
         } catch (e) {
           if (keptOpen(e)) return;
+          if (askFetch(e, async (res) => { const out = res as DepChangeset<DepUpdate>; adoptWarning(out); await gitUpdated(lib, out.result); })) return;
           const listed = listedRefusal(e);
           if (!listed) throw e;
           setRefusal(listed);
           return firstLine(e);
         }
-        const lines: UiText[] = [`${(r.from ?? "-").slice(0, 7)} → ${r.to.slice(0, 7)}`, ""];
-        for (const k of ["added", "modified", "removed"] as const) r.changed[k].forEach((f) => lines.push(msg(`app:dependency.${k}`, { file: f })));
-        if (!r.changed.added.length && !r.changed.modified.length && !r.changed.removed.length) lines.push(msg("app:dependency.noChanges"));
-        // the packages it needs that came, moved or went with it
-        const moved = (r.packages_changed ?? []).filter((x) => x.package);
-        if (moved.length) {
-          lines.push("", msg("app:dependency.packagesChanged"), ...moved.map((x) => {
-            const named = { package: x.package!, from: short(x.from), to: short(x.to) };
-            return msg(x.from === null ? "app:dependency.packageAdded" : x.to === null ? "app:dependency.packageDropped" : "app:dependency.packageMoved", named);
-          }));
-        }
-        if (r.used_by.length) lines.push("", msg("app:dependency.usedBy"), ...r.used_by);
-        await loadProject(project);
-        await loadDeps(project);
-        await loadCells(lib);
-        setTimeout(() => ask({ title: msg("app:dependency.updated", { library: lib }), message: joinText(lines), fields: [], submitLabel: msg("common:actions.ok") }), 0);
+        await gitUpdated(lib, r);
       },
     });
     return done;
+  };
+  /** A git dependency moved: the files that changed, the packages that moved with it and the cells that use them. */
+  const gitUpdated = async (lib: string, r: DepUpdate) => {
+    if (!project) return;
+    const lines: UiText[] = [`${(r.from ?? "-").slice(0, 7)} → ${r.to.slice(0, 7)}`, ""];
+    for (const k of ["added", "modified", "removed"] as const) r.changed[k].forEach((f) => lines.push(msg(`app:dependency.${k}`, { file: f })));
+    if (!r.changed.added.length && !r.changed.modified.length && !r.changed.removed.length) lines.push(msg("app:dependency.noChanges"));
+    // the packages it needs that came, moved or went with it
+    const moved = (r.packages_changed ?? []).filter((x) => x.package);
+    if (moved.length) {
+      lines.push("", msg("app:dependency.packagesChanged"), ...moved.map((x) => {
+        const named = { package: x.package!, from: short(x.from), to: short(x.to) };
+        return msg(x.from === null ? "app:dependency.packageAdded" : x.to === null ? "app:dependency.packageDropped" : "app:dependency.packageMoved", named);
+      }));
+    }
+    if (r.used_by.length) lines.push("", msg("app:dependency.usedBy"), ...r.used_by);
+    await loadProject(project);
+    await loadDeps(project);
+    await loadCells(lib);
+    setTimeout(() => ask({ title: msg("app:dependency.updated", { library: lib }), message: joinText(lines), fields: [], submitLabel: msg("common:actions.ok") }), 0);
   };
 
   /** A package from an index moves to the newest version its requirement accepts, or a new requirement given here. */
@@ -902,23 +926,29 @@ export function App() {
           adoptWarning(out);
         } catch (e) {
           if (keptOpen(e)) return;
+          if (askFetch(e, async (res) => { const out = res as DepChangeset<DepUpdate>; adoptWarning(out); await packageUpdated(lib, out.result); })) return;
           const listed = listedRefusal(e);
           if (!listed) throw e;
           setRefusal(listed);
           return firstLine(e);
         }
-        await loadProject(project);
-        await loadDeps(project);
-        await loadCells(lib);
-        const moved = (r.packages_changed ?? []).filter((x) => x.package);
-        const lines: UiText[] = moved.length ? moved.map((x) => {
-          const named = { package: x.package!, from: short(x.from), to: short(x.to) };
-          return msg(x.from === null ? "app:dependency.packageAdded" : x.to === null ? "app:dependency.packageDropped" : "app:dependency.packageMoved", named);
-        }) : [msg("app:dependency.noChanges")];
-        if (r.used_by.length) lines.push("", msg("app:dependency.usedBy"), ...r.used_by);
-        setTimeout(() => ask({ title: msg("app:dependency.updated", { library: lib }), message: joinText(lines), fields: [], submitLabel: msg("common:actions.ok") }), 0);
+        await packageUpdated(lib, r);
       },
     });
+  };
+  /** A package from an index moved: the packages that came, moved or went with it, and the cells that use them. */
+  const packageUpdated = async (lib: string, r: DepUpdate) => {
+    if (!project) return;
+    await loadProject(project);
+    await loadDeps(project);
+    await loadCells(lib);
+    const moved = (r.packages_changed ?? []).filter((x) => x.package);
+    const lines: UiText[] = moved.length ? moved.map((x) => {
+      const named = { package: x.package!, from: short(x.from), to: short(x.to) };
+      return msg(x.from === null ? "app:dependency.packageAdded" : x.to === null ? "app:dependency.packageDropped" : "app:dependency.packageMoved", named);
+    }) : [msg("app:dependency.noChanges")];
+    if (r.used_by.length) lines.push("", msg("app:dependency.usedBy"), ...r.used_by);
+    setTimeout(() => ask({ title: msg("app:dependency.updated", { library: lib }), message: joinText(lines), fields: [], submitLabel: msg("common:actions.ok") }), 0);
   };
 
   const removeDep = async (lib: string) => {
@@ -935,7 +965,10 @@ export function App() {
       const said = [...(also.length ? [msg("app:dependency.removedPackages", { list: also.join(", ") })] : []),
         ...(r?.kept ?? []).map((k) => msg("app:dependency.keptRow", { name: k.name, list: k.placed_by.join(", ") }))];
       if (said.length) toast(joinText(said));
-    } catch (e) { if (!keptOpen(e)) toast(apiErrorText(e), "error"); }
+    } catch (e) {
+      if (keptOpen(e) || askFetch(e, async () => { await loadProject(project); await loadDeps(project); })) return;
+      toast(apiErrorText(e), "error");
+    }
   };
 
   // after a rescan or a fetch: the PDKs, the project (which PDK it resolves to) and its lock status read again
@@ -1000,8 +1033,14 @@ export function App() {
       submit: async (v) => {
         if (v.action === "sync") {
           // a refusal (the lock does not pin what project.json names; offline and not in the store) throws: the
-          // dialog stays open with the server's message
-          const r = await api.depsSync(project);
+          // dialog stays open with the server's message; an entry only another machine has: the Fetch dialog
+          let r: Awaited<ReturnType<typeof api.depsSync>>;
+          try {
+            r = await api.depsSync(project);
+          } catch (e) {
+            if (askFetch(e, async () => { await loadProject(project); await loadDeps(project); })) return;
+            throw e;
+          }
           toast(r.libraries.length ? joinText(r.libraries.map((x) => msg("app:dependency.syncRow", { name: x.name, state: dependencyState(x.action) })), ", ") : msg("app:lock.empty"));
           // installed all the same: a package the locked PDK does not fit (GET /deps reports it as an issue too)
           for (const x of r.libraries) if (x.warning) toast(msg("app:dependency.syncWarning", { name: x.name, warning: x.warning }), "error");
@@ -1012,6 +1051,7 @@ export function App() {
           try {
             r = await api.depsLock(project);
           } catch (e) {
+            if (askFetch(e, async () => { await loadProject(project); await loadDeps(project); })) return;
             const listed = listedRefusal(e);
             if (!listed) throw e;
             setRefusal(listed);
@@ -1206,6 +1246,8 @@ export function App() {
     <div className="app">
       <DialogHost />
       {pdkFetch && project && <PdkFetchDialog project={project} onClose={() => setPdkFetch(false)} onFetched={() => pdksChanged()} />}
+      {fetching && <FetchConfirmDialog plan={fetching.plan} onClose={() => setFetching(null)}
+        onDone={async (result) => { const { done } = fetching; setFetching(null); await done(result); }} />}
       {showPackages && project && <PackagesDialog project={project} readOnly={inPreview} onClose={() => setShowPackages(false)}
         taken={(n) => !!info?.libraries.some((l) => l.name === n)} onAdded={packageAdded}
         onKept={(e) => { setShowPackages(false); keptOpen(e); }} />}

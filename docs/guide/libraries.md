@@ -115,7 +115,15 @@ e6d28176...)`. Run the sync once with the network.
     every URL: the request's own, and those a cloned `project.json`, a manifest or an index line names. A
     project's own `indexes` adds no host, since a clone brings it. They also do not fetch every branch and tag of a
     repository to find a commit its server does not serve by itself; run that operation once from the command
-    line.
+    line. A repository on another host is fetched only once a person confirms its URL in the Fetch dialog (next).
+
+From the browser nothing is fetched from another machine until you confirm it. An Add, Update, sync or lock that needs
+a fetch opens the **Fetch dependencies** dialog: each URL in full, the commit (for a plain git dependency named by a
+branch or tag, known only after the fetch), the tree, the size and the licence, and a warning for a host the server
+does not fetch from without asking. **Fetch** runs the operation on the server and shows its progress (approximate).
+When what it fetched names more to fetch (a plain git dependency whose manifest names another), the dialog shows the
+new list and you click **Fetch** again. A local repository under `--dep-root` is fetched with no dialog, and the
+command line fetches without asking. No agent tool can confirm a fetch.
 
 Every fetch, from the command line too, stops once it has received `UNDINE_FETCH_MAX` bytes (1 GiB by default), and
 the store's copy of that repository is removed, so nothing of it stays.
@@ -239,8 +247,9 @@ struck through), its repository and commit, its exported cells, what it needs, a
 and why not.
 
 **Add** takes a local name (the package's by default) and a version requirement (`^` the newest by default; click a
-version to require exactly it), and adds the package as `pkg add` does. The first read of an index fetches it on the
-server; after that the local copy is read until the refresh button fetches it again. From the browser an index is read
+version to require exactly it), and adds the package as `pkg add` does. Reading an index never fetches it: an index
+with no local copy says so, and the refresh button shows the index's URL and fetches it once you click **Fetch**; after
+that the local copy is read until the refresh button fetches it again. From the browser an index is read
 under the same rule as a git dependency: a local one only below `--dep-root`, a remote one only on the host of a
 configured index or one given with `serve --dep-host`
 ([troubleshooting](../troubleshooting.md#adding-from-the-browser-from-the-browser-this-server-fetches-only-from)).

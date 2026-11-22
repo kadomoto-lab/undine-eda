@@ -24,6 +24,7 @@ vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")
   activity: vi.fn(async () => ({ records: [], last: 0, writer: null })),
   deps: vi.fn(),
   depsSync: vi.fn(), depsLock: vi.fn(), addDepInChangeset: vi.fn(), setPdkInChangeset: vi.fn(),
+  confirmDependencyFetch: vi.fn(), depsFetch: vi.fn(), depsFetchStatus: vi.fn(),
   depUpdate: vi.fn(), indexes: vi.fn(async () => ({ indexes: [] })), packageInfo: vi.fn(),
   packages: vi.fn(async () => ({ index: "u", index_name: "undine", commit: null, packages: [] })),
   trustList: vi.fn(), trustConfirm: vi.fn(), trust: vi.fn(), untrust: vi.fn(),
@@ -63,7 +64,8 @@ beforeEach(async () => {
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
   await setLocale("en");
-  for (const k of ["project", "deps", "depsLock", "addDepInChangeset", "setPdkInChangeset", "trustList", "trustConfirm", "trust", "untrust"] as const) mocked[k].mockReset();
+  for (const k of ["project", "deps", "depsLock", "addDepInChangeset", "setPdkInChangeset", "trustList", "trustConfirm", "trust", "untrust",
+    "confirmDependencyFetch", "depsFetch", "depsFetchStatus"] as const) mocked[k].mockReset();
   mocked.project.mockResolvedValue({ name: "p", pdk: null, pdk_requested: null, libraries: LIBS });
   mocked.deps.mockResolvedValue(status({ libraries: ROWS }));
   location.hash = "#/p/p";
@@ -223,6 +225,39 @@ it("says the changeset stays open for review when the project refused to adopt a
   fireEvent.click(within(kept).getByRole("button", { name: t("app:review") }));
   await settle();
   expect(screen.queryByRole("dialog", { name: t("app:dependency.keptTitle") })).toBeNull();
+});
+
+it("an add that needs a fetch from another machine closes the form, opens the Fetch dialog and adds once fetched", async () => {
+  const plan = { op: "add", complete: false, project: "p", request: { op: "add", name: "dac", git: "https://example.org/dac.git", adopt: true },
+    fetches: [{ url: "https://example.org/dac.git", rev: "HEAD", commit: null, subdir: null, tree: null, size: null, license: null,
+      package: null, version: null, host: "example.org", allowed: false }] };
+  mocked.addDepInChangeset.mockRejectedValue(new ApiError(409, "this needs 1 fetch a person confirms first: https://example.org/dac.git",
+    "needs_fetch", { plan }));
+  render(<App />);
+  await settle();
+  fireEvent.click(screen.getByTitle(t("app:dependency.addHint")));
+  await settle();
+  const form = screen.getByRole("dialog", { name: t("app:dependency.add") });
+  const inputs = form.querySelectorAll("input");
+  fireEvent.change(inputs[0], { target: { value: "dac" } });
+  fireEvent.change(inputs[1], { target: { value: "https://example.org/dac.git" } });
+  fireEvent.click(within(form).getByRole("button", { name: t("common:actions.add") }));
+  await settle();
+  expect(screen.queryByRole("dialog", { name: t("app:dependency.add") })).toBeNull();
+  const fetchDialog = screen.getByRole("dialog", { name: t("app:depFetch.title") });
+  expect(within(fetchDialog).getByRole("alert").textContent).toContain(t("app:depFetch.hostWarning", { host: "example.org" }));
+  expect(mocked.confirmDependencyFetch).not.toHaveBeenCalled();
+  mocked.confirmDependencyFetch.mockResolvedValue({ token: "tok", expires: 0, plan });
+  mocked.depsFetch.mockResolvedValue({ job: { id: "j1", project: "p", kind: "dependency", state: "done", log: [], progress: null,
+    error: null, code: null, created: 0, ended: 0,
+    result: { changeset: "cs-000005", status: "applied", result: { name: "dac", commit: C, cells: ["dac8"] } } } });
+  fireEvent.click(within(fetchDialog).getByRole("button", { name: t("app:depFetch.start") }));
+  await settle();
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(mocked.confirmDependencyFetch).toHaveBeenCalledWith(plan);
+  expect(mocked.depsFetch).toHaveBeenCalledWith("p", "tok");
+  expect(screen.queryByRole("dialog", { name: t("app:depFetch.title") })).toBeNull();
+  expect(document.querySelector(".toasts")?.textContent ?? "").toContain(t("app:dependency.installed", { name: "dac", count: 1, commit: C.slice(0, 7) }));
 });
 
 it("says the project was made a git repository when a one-click add did it", async () => {

@@ -1,11 +1,13 @@
 // The library browser's Packages section (docs/design/packages.md, UI): search an index, read a package's versions,
-// licence, dependencies, exported cells and whether each version fits this project's PDK, and add it. The first read
-// of an index fetches it on the server (under --dep-root / --dep-host); after that the local copy is read until
-// Refresh fetches it again.
+// licence, dependencies, exported cells and whether each version fits this project's PDK, and add it. A read never
+// fetches an index (index_not_fetched): the person fetches it with Refresh, which shows the index's URL and asks for a
+// confirmation token only on the click; after that the local copy is read until Refresh fetches it again. An add that
+// needs a fetch from another machine (needs_fetch) opens the Fetch dialog (FetchConfirmDialog).
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, PackagePlus, RefreshCw, Search, X } from "lucide-react";
-import { api, keptChangesetOf, type DepAdd, type DepChangeset, type IndexInfo, type IndexWhere, type PackageFit, type PackageInfo,
-  type PackageSummary } from "./api";
+import { api, indexNotFetchedOf, keptChangesetOf, needsFetchOf, type DepAdd, type DepChangeset, type FetchPlan, type IndexInfo,
+  type IndexNotFetched, type IndexWhere, type PackageFit, type PackageInfo, type PackageSummary } from "./api";
+import { FetchConfirmDialog } from "./FetchConfirmDialog";
 import { apiErrorText, msg, resolveText, useI18n, type UiText } from "./i18n";
 
 const fitText = (fit: PackageFit): UiText | null =>
@@ -34,6 +36,9 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
   const [busy, setBusy] = useState<"refresh" | "add" | null>(null);
   const [err, setErr] = useState<UiText>("");
   const [tick, setTick] = useState(0);     // a refresh reads the search and the package again
+  const [notFetched, setNotFetched] = useState<IndexNotFetched | null>(null);   // the index has no local copy
+  const [asking, setAsking] = useState(false);    // Refresh clicked: the index's URL shown, waiting for Fetch
+  const [fetchPlan, setFetchPlan] = useState<FetchPlan | null>(null);       // an add that needs a fetch
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
@@ -45,8 +50,14 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
     setSearching(true);
     const h = setTimeout(() => {
       api.packages(query.trim(), index, project)
-        .then((r) => { if (live.current) { setFound(r); setErr(""); } })
-        .catch((e) => { if (live.current) { setFound(null); setErr(apiErrorText(e)); } })
+        .then((r) => { if (live.current) { setFound(r); setErr(""); setNotFetched(null); } })
+        .catch((e) => {
+          if (!live.current) return;
+          setFound(null);
+          const nf = indexNotFetchedOf(e);
+          setNotFetched(nf);
+          setErr(nf ? "" : apiErrorText(e));
+        })
         .finally(() => { if (live.current) setSearching(false); });
     }, debounceMs);
     return () => clearTimeout(h);
@@ -57,7 +68,11 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
     if (!picked) return;
     api.packageInfo(picked, index, project)
       .then((r) => { if (live.current) { setInfo(r); setLocal((v) => v || r.name); } })
-      .catch((e) => { if (live.current) setErr(apiErrorText(e)); });
+      .catch((e) => {
+        if (!live.current) return;
+        const nf = indexNotFetchedOf(e);
+        if (nf) setNotFetched(nf); else setErr(apiErrorText(e));
+      });
   }, [picked, index, project, tick]);
 
   // Esc closes wherever the focus is (the dialog.tsx rule), and never reaches the editor behind
@@ -75,13 +90,16 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
   }, []);
 
   const pick = (name: string) => { setPicked(name); setLocal(name); setReq(""); setErr(""); };
+  // Refresh shows what is fetched first; the token is asked for (api.refreshIndex: confirmIndex) only on Fetch
   const refresh = async () => {
+    setAsking(false);
     setBusy("refresh");
     setErr("");
-    try { await api.refreshIndex(index, project); setTick((n) => n + 1); }
+    try { await api.refreshIndex(index, project); setNotFetched(null); setTick((n) => n + 1); }
     catch (e) { setErr(apiErrorText(e)); }
     finally { if (live.current) setBusy(null); }
   };
+  const indexUrl = notFetched?.url || indexes.find((x) => x.name === index)?.url || "";
   const name = local.trim() || info?.name || "";
   const nameErr = name && taken(name) ? msg("app:library.exists") : null;
   const add = async () => {
@@ -93,7 +111,9 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
       await onAdded(name, out.result, out);
     } catch (e) {
       const kept = keptChangesetOf(e);
-      if (kept && onKept) onKept(e, kept);
+      const plan = needsFetchOf(e);
+      if (plan) setFetchPlan(plan);                  // from another machine: the person confirms the fetch first
+      else if (kept && onKept) onKept(e, kept);
       else if (live.current) setErr(apiErrorText(e));
     } finally {
       if (live.current) setBusy(null);
@@ -119,9 +139,22 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
             </select>
             <div className="searchbox grow"><Search size={13} />
               <input autoFocus placeholder={t("app:packages.search")} value={query} onChange={(e) => setQuery(e.target.value)} /></div>
-            <button className="icon" title={t("app:packages.refresh")} disabled={busy !== null} onClick={refresh}>
+            <button className="icon" title={t("app:packages.refresh")} disabled={busy !== null} onClick={() => setAsking(true)}>
               {busy === "refresh" ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}</button>
           </div>
+          {notFetched && !asking && (
+            <div className="note" data-testid="index-not-fetched">{t("app:packages.notFetched", { index: notFetched.index })}{" "}
+              <button type="button" className="ghost" onClick={() => setAsking(true)}>{t("app:packages.fetchIndex", { index: notFetched.index })}</button>
+            </div>)}
+          {asking && (
+            <div className="note" role="group" aria-label={t("app:packages.fetchIndex", { index })}>
+              <div className="small">{t("app:packages.fetchIndexFrom", { index, url: indexUrl })}</div>
+              {notFetched?.host && <div className="faint small">{t("app:packages.fetchIndexHost", { host: notFetched.host })}</div>}
+              <div className="modalfoot">
+                <button type="button" className="ghost" onClick={() => setAsking(false)}>{t("common:actions.cancel")}</button>
+                <button type="button" className="primary" onClick={refresh}>{t("app:packages.fetchIndexStart")}</button>
+              </div>
+            </div>)}
           {found && <div className="faint small mono" title={found.index}>
             {t("app:packages.copy", { index: found.index_name, commit: (found.commit ?? "").slice(0, 12) })}</div>}
           <div className="pkgpanes">
@@ -188,6 +221,11 @@ export function PackagesDialog({ project, readOnly, taken, onClose, onAdded, onK
           </div>
         </div>
       </div>
+      {fetchPlan && <FetchConfirmDialog plan={fetchPlan} onClose={() => setFetchPlan(null)} onDone={async (result) => {
+        const out = result as DepChangeset<DepAdd>;
+        setFetchPlan(null);
+        await onAdded(name, out.result, out);
+      }} />}
     </div>
   );
 }

@@ -27,6 +27,16 @@ def _client(tmp_path: Path, **kw) -> TestClient:
     return TestClient(create_app(Server(tmp_path / "projects", {}, [], dep_roots=[tmp_path], **kw), None))
 
 
+def _refresh(c: TestClient, name: str = "undine", project: str | None = None):
+    """A person's refresh of an index: the confirmation (kind 'index'), then the refresh with its token."""
+    body = {"kind": "index", "index": name, **({"project": project} if project else {})}
+    r = c.post("/api/confirmations", json=body)
+    if r.status_code != 200:
+        return r
+    return c.post(f"/api/indexes/{name}/refresh", json={"token": r.json()["token"]},
+                  params={"project": project} if project else None)
+
+
 def _world(tmp_path: Path) -> World:
     w = World(tmp_path)
     w.default()
@@ -41,6 +51,7 @@ def test_search_lists_the_newest_live_version_of_each_package(tmp_path):
     _world(tmp_path)
     _project(tmp_path)
     c = _client(tmp_path)
+    assert _refresh(c).status_code == 200                   # a read over HTTP never fetches the index itself
     r = c.get("/api/packages", params={"q": "", "project": "p"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -57,6 +68,7 @@ def test_info_gives_every_version_and_the_locked_one(tmp_path):
     _world(tmp_path)
     _, prj = _project(tmp_path)
     c = _client(tmp_path)
+    assert _refresh(c).status_code == 200
     r = c.get("/api/packages/amp", params={"project": "p"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -76,13 +88,14 @@ def test_a_dependency_row_shows_the_newer_version_from_the_local_copy(tmp_path):
     w = _world(tmp_path)
     _project(tmp_path)
     c = _client(tmp_path)
+    assert _refresh(c).status_code == 200
     assert c.post("/api/p/p/deps", json={"name": "amp", "package": "amp", "version": "~1.0"}).status_code == 200
     row = next(x for x in c.get("/api/p/p/deps").json()["libraries"] if x["name"] == "amp")
     assert row["newer"] == {"accepted": None, "newest": "1.1.0"}         # ~1.0 does not take 1.1
     w.publish("amp", "1.0.1")
     row = next(x for x in c.get("/api/p/p/deps").json()["libraries"] if x["name"] == "amp")
     assert row["newer"]["accepted"] is None                              # not fetched again: the copy as it was
-    r = c.post("/api/indexes/undine/refresh")
+    r = _refresh(c)
     assert r.status_code == 200 and r.json()["commit"] == ix.Index(str(w.index)).commit()
     row = next(x for x in c.get("/api/p/p/deps").json()["libraries"] if x["name"] == "amp")
     assert row["newer"] == {"accepted": "1.0.1", "newest": "1.1.0"}
@@ -99,7 +112,7 @@ def test_indexes_lists_the_known_ones_and_a_project_s_own(tmp_path):
     c = _client(tmp_path)
     got = {x["name"]: x for x in c.get("/api/indexes", params={"project": "p"}).json()["indexes"]}
     assert set(got) == {"undine", "acme"} and got["acme"]["commit"] is None
-    assert c.post("/api/indexes/acme/refresh", params={"project": "p"}).status_code == 200
+    assert _refresh(c, "acme", "p").status_code == 200
     got = {x["name"]: x for x in c.get("/api/indexes", params={"project": "p"}).json()["indexes"]}
     assert len(got["acme"]["commit"]) == 40
 
@@ -112,7 +125,7 @@ def test_an_index_on_an_unlisted_host_or_outside_dep_root_is_refused_before_any_
     c = _client(tmp_path)
     r = c.get("/api/packages", params={"index": "evil", "project": "p"})
     assert r.status_code == 400 and "not from idx.evil.example" in r.json()["detail"]
-    r = c.post("/api/indexes/evil/refresh", params={"project": "p"})
+    r = _refresh(c, "evil", "p")                             # refused at the confirmation already
     assert r.status_code == 400 and "--dep-host idx.evil.example" in r.json()["detail"]
     assert called == []
     # a local index outside --dep-root: refused as a local git dependency is

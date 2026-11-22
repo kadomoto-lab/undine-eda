@@ -30,6 +30,7 @@ _source over HTTP); what reaches git as an argument is checked here again. Nothi
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import fcntl
 import hashlib
 import os
@@ -42,7 +43,7 @@ import tempfile
 import time
 import urllib.parse
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Callable, Literal
 
 from undine.home import store_root
 from undine.store import cas, manifest
@@ -68,6 +69,41 @@ class GitSourceError(RuntimeError):
 class HttpRemote(str):
     """A remote URL to fetch from for a request over HTTP (deps._source, after its host check): fetched at the commit or
     rev asked for only, never by the all-refs fallback, which a person has not confirmed."""
+
+
+class ConfirmedRemote(str):
+    """A remote URL a person confirmed in the fetch dialog (deps._source with `confirmed`, phase 4): it passes outside
+    the allowed hosts, and, being confirmed, may use the all-refs fallback. Not an HttpRemote on purpose."""
+
+
+def is_remote_source(source) -> bool:
+    """Whether deps._source's result names a remote (HttpRemote, ConfirmedRemote) rather than a local git directory
+    under --dep-root (a plain str) or the URL as written (None: the command line)."""
+    return isinstance(source, (HttpRemote, ConfirmedRemote))
+
+
+# what a fetch job reports while git runs (phase 4: dependency fetches as jobs): a function taking keywords, set by the
+# job's own thread (a thread does not inherit context variables), None elsewhere. _fetch_git reports {url, bytes,
+# limit}, blob_tree {url, files, of}; about every _EVERY seconds, approximate (a pack's bytes, not the files').
+PROGRESS: contextvars.ContextVar[Callable[..., None] | None] = contextvars.ContextVar("undine_fetch_progress",
+                                                                                     default=None)
+_EVERY = 0.5
+
+
+class _Reporter:
+    """Calls PROGRESS at most every _EVERY seconds (and always when forced), never raising into the fetch."""
+
+    def __init__(self):
+        self.fn, self.last = PROGRESS.get(), 0.0
+
+    def __call__(self, force: bool = False, **p) -> None:
+        if self.fn is None:
+            return
+        now = time.monotonic()
+        if force or now - self.last >= _EVERY:
+            self.last = now
+            with contextlib.suppress(Exception):
+                self.fn(**p)
 
 
 # ------------------------------------------------------------------ git
@@ -289,7 +325,26 @@ def fetch(url: str, source: str | None, want: str, commit: str | None = None) ->
         if commit is not None and got != commit:
             raise GitSourceError(f"{url} gave {got[:12]}, not the locked {commit[:12]}")
         _keep(repo, got)
+        if commit is None:
+            _git(repo, "update-ref", _rev_ref(want), got)
         return got
+
+
+def _rev_ref(want: str) -> str:
+    return f"refs/undine-rev/{hashlib.sha256(want.encode('utf-8', 'surrogateescape')).hexdigest()}"
+
+
+def last_commit(url: str, want: str) -> str | None:
+    """The commit the last fetch of branch, tag or rev `want` of `url` gave, when the kept repository still has it;
+    None before any. Reads no network: a rev may have moved since, so this is a hint for a fetch plan (deps.plan_fetch,
+    whose manifest it lets the plan read), never what is locked."""
+    repo = repo_path(url)
+    if not (repo / "HEAD").is_file() or not (isinstance(want, str) and _REV.match(want)):
+        return None
+    r = subprocess.run(_cmd(repo, "rev-parse", "--verify", "--quiet", f"{_rev_ref(want)}^{{commit}}"), env=_env(),
+                       capture_output=True, text=True, timeout=60)
+    got = r.stdout.strip()
+    return got if r.returncode == 0 and _COMMIT.match(got) else None
 
 
 def _fetch_all(repo: Path, url: str, src: str, want: str) -> str:
@@ -348,11 +403,14 @@ def _fetch_git(repo: Path, url: str, *args: str, limit: int | None = None) -> No
                                      *args), env=_env(), stdout=subprocess.DEVNULL, stderr=err,
                                 start_new_session=True)
         deadline, over = time.monotonic() + _TIMEOUT, False
+        report = _Reporter()
         try:
             while proc.poll() is None:
-                if _received(pack_dir, before) > limit:
+                got = _received(pack_dir, before)
+                if got > limit:
                     over = True
                     break
+                report(url=url, bytes=got, limit=limit)
                 if time.monotonic() > deadline:
                     _stop_group(proc)
                     raise GitSourceError(f"git fetch took longer than {_TIMEOUT} s: try again, or check the network")
@@ -360,7 +418,10 @@ def _fetch_git(repo: Path, url: str, *args: str, limit: int | None = None) -> No
         finally:
             if proc.poll() is None:
                 _stop_group(proc)
-        over = over or _received(pack_dir, before) > limit
+        got = _received(pack_dir, before)
+        over = over or got > limit
+        if not over:
+            report(force=True, url=url, bytes=got, limit=limit)
         if over:
             shutil.rmtree(repo, ignore_errors=True)
             raise FetchTooBig(f"{url}: the fetch received more than {limit} bytes, the most one fetch may take "
@@ -545,11 +606,13 @@ def blob_tree(url: str, commit: str, subdir: str | None,
             manifest.check_files(m, [e[0] for e in entries], _manifest_where(url, commit, sub))
         out: dict[str, tuple[str, str]] = {}
         hexes: dict[str, str] = {}                        # blob id -> object hex: a blob under two paths read once
+        report = _Reporter()
         with _cat_file(repo) as proc:
-            for path, mode, oid, size in entries:
+            for i, (path, mode, oid, size) in enumerate(entries):
                 if oid not in hexes:
                     hexes[oid] = _read_blob(proc, oid, size, f"{url} @ {commit[:12]}: {path}")
                 out[path] = (mode, hexes[oid])
+                report(force=i + 1 == len(entries), url=url, files=i + 1, of=len(entries))
     return out
 
 

@@ -86,9 +86,12 @@ def test_http_add_and_update_refuse_a_host_before_any_fetch(tmp_path, monkeypatc
     before = (prj.path / "project.json").read_text()
     c = TestClient(create_app(srv, None))
     for url in ("https://evil.example/ip.git", "git@evil.example:ip.git", "ssh://evil.example/ip.git"):
+        # phase 4: a host not allowed is a fetch for the person to confirm (the dialog warns), never fetched as asked
         r = c.post("/api/p/p/deps", json={"name": "ip", "git": url, "rev": "v1"})
-        assert r.status_code == 400, r.text
-        assert "fetches only from github.com, git.example.org" in r.json()["detail"], r.text
+        assert r.status_code == 409 and r.json()["code"] == "needs_fetch", r.text
+        assert "evil.example is not among the hosts" in r.json()["detail"], r.text
+        assert [(f["url"], f["rev"], f["host"], f["allowed"]) for f in r.json()["plan"]["fetches"]] == \
+            [(url, "v1", "evil.example", False)]
     assert calls == [] and (prj.path / "project.json").read_text() == before
     assert not (prj.path / deps.LOCK).exists() or "evil" not in (prj.path / deps.LOCK).read_text()
 

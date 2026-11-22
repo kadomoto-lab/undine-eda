@@ -2117,7 +2117,7 @@ class Changesets:
         return meta, self.srv.project(meta["preview"])
 
     def dep_op(self, project: str, cid: str, action: str, args: dict, actor: str = "user", reason: str = "", *,
-               local_roots: list[Path] | None = None, hosts=()) -> dict:
+               local_roots: list[Path] | None = None, hosts=(), allow=None) -> dict:
         """A dependency operation in the changeset's working copy (docs/design/packages.md, Changesets and evidence):
         `action` "add" (args: name, git, rev, subdir, package, version, index), "update" (name, rev, version) or
         "remove" (name), run by deps.add / update / remove on the working copy, never on the project nor the
@@ -2126,7 +2126,8 @@ class Changesets:
         copy's project log (PROJECT_LOG; restore takes it back, the adopt merges it). `local_roots`, `hosts`: as
         deps.add's (serve --dep-root, --dep-host). Returns {changeset, op: {gseq, opid} (None: nothing changed),
         result: what the deps call returned}. Refusals are the deps ones (ResolveError, NotDirect, DepError ...),
-        nothing changed."""
+        nothing changed. `allow` (deps.Allow; phase 4, over HTTP): what may be fetched from a remote, a person's
+        confirmation; anything else is deps.NeedsFetch, nothing fetched or recorded."""
         project = self._real_of(project)
         if action not in _DEP_OPS:
             raise ChangesetError(f"unknown dependency operation {action!r} (add, update, remove)")
@@ -2142,10 +2143,10 @@ class Changesets:
         if action == "add":
             result = deps.add(prj, name, args.get("git"), args.get("rev"), args.get("subdir"), guard=guard,
                               local_roots=local_roots, package=args.get("package"), version=args.get("version"),
-                              index=args.get("index"), hosts=hosts)
+                              index=args.get("index"), hosts=hosts, allow=allow)
         elif action == "update":
             result = deps.update(prj, name, args.get("rev"), guard=guard, local_roots=local_roots,
-                                 version=args.get("version"), hosts=hosts)
+                                 version=args.get("version"), hosts=hosts, allow=allow)
         else:
             result = {"ok": True, **deps.remove(prj, name, guard=guard)}
         self.srv.deps_changed(meta["preview"])         # packages it moved under names already open

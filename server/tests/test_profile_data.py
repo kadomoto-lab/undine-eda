@@ -252,3 +252,81 @@ def test_pdkprofile_serves_the_builtin_toml_profiles_and_holds_no_profile_data()
     assert src.count("Profile(family=") == 1 and "Stack(" not in src.split("class Profile")[1]     # GENERIC only
     with pytest.raises(AttributeError):
         pdkprofile.SKY131
+
+
+# ------------------------------------------------------------------ the tested commits (pcell, pixi.toml, setup.sh)
+
+
+def _cli(*argv: str) -> tuple[int, str]:
+    import contextlib
+    import io
+    from undine import __main__ as cli
+    out, argv0 = io.StringIO(), sys.argv
+    sys.argv = ["undine", "--pdk-root", "/nonexistent", *argv]
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                cli.cli()
+                code = 0
+            except SystemExit as e:
+                code = e.code or 0
+    finally:
+        sys.argv = argv0
+    return code, out.getvalue()
+
+
+def test_tested_commits_come_from_the_builtin_profiles():
+    assert profiledata.tested_commits("sky130") == ("8afc8346a57fe1ab7934ba5a6056ea8b43078e71",)
+    assert profiledata.tested_commits("gf180mcu") == ("792ef67037d74c8c51811eab3ce23cf793491296",)
+    assert profiledata.tested_commits("ihp-sg13") == ("89d42ee6d2fd9b50b86a1aada6fee6673c3e6008",)
+    assert profiledata.tested_commits("mystery") == () and profiledata.tested_commits(None) == ()
+    from undine.pdks import pcell
+    assert not hasattr(pcell, "SUPPORTED")
+
+
+def test_pdk_tested_prints_each_familys_commit():
+    for fam in ("sky130", "gf180mcu", "ihp-sg13"):
+        assert _cli("pdk", "tested", fam) == (0, profiledata.tested_commits(fam)[0] + "\n")
+    assert _cli("pdk", "tested", "sky130", "--all")[1].splitlines() == list(profiledata.tested_commits("sky130"))
+    code, out = _cli("pdk", "tested", "mystery")
+    assert code == 1 and "no built-in profile lists a tested commit of 'mystery'" in out and "ihp-sg13" in out
+
+
+def test_pdk_enable_runs_ciel_enable_with_the_tested_commit(tmp_path, monkeypatch):
+    log = tmp_path / "ciel.log"
+    exe = tmp_path / "ciel"
+    exe.write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
+    exe.chmod(0o755)
+    monkeypatch.setenv("UNDINE_CIEL", str(exe))
+    assert _cli("pdk", "enable", "gf180mcu")[0] == 0
+    assert _cli("pdk", "enable", "sky130", "0" * 40)[0] == 0
+    assert log.read_text().splitlines() == ["enable --pdk-family gf180mcu 792ef67037d74c8c51811eab3ce23cf793491296",
+                                            "enable --pdk-family sky130 " + "0" * 40]
+    code, out = _cli("pdk", "enable", "mystery")
+    assert code == 1 and "name the commit" in out
+    assert _cli("pdk", "enable", "sky130", "-rf")[0] != 0                  # never an option to ciel
+    assert len(log.read_text().splitlines()) == 2
+
+
+def test_setup_sh_and_pixi_name_no_commit_literal():
+    import re
+    for f in ("setup.sh", "pixi.toml"):
+        assert not re.search(r"\b[0-9a-f]{40}\b", (REPO / f).read_text()), f
+    assert tomllib.loads((REPO / "pixi.toml").read_text())["tasks"]["pdk"] == "python -m undine pdk enable sky130"
+    assert 'pixi run python -m undine pdk tested "$PDK_FAMILY"' in (REPO / "setup.sh").read_text()
+
+
+def test_pick_pdk_prefers_a_tested_commit_from_the_profile(monkeypatch):
+    from undine.pdks import pcell
+    from undine.pdks.pdk import Pdk
+    from undine.store.project import pick_pdk
+    good, other = profiledata.tested_commits("gf180mcu")[0], "0123456789abcdef0123456789abcdef01234567"
+    pdks = {p.id: p for p in (Pdk("gf180mcuD", "gf180mcu", other, Path("/x")),
+                              Pdk("gf180mcuD", "gf180mcu", good, Path("/y")))}
+    monkeypatch.setattr(pcell, "macros_dir", lambda p: Path("/pcells"))
+    assert pick_pdk(pdks, "gf180mcuD").version == good                    # GF180 has a tested commit too now
+
+
+def test_ws_pdk_is_a_tested_gf180_commit():
+    from undine.checks import tapeout
+    assert tapeout.WS_PDK[1] in profiledata.tested_commits("gf180mcu")

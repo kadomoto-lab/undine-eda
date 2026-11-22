@@ -184,11 +184,13 @@ class PdkMove(tuple):
 
 def pick_pdk(pdks: dict[str, Pdk], spec: str) -> Pdk | None:
     """A PDK by id ("sky130A@8afc8346a57f") or by name ("sky130A"); for a name, a version whose PCells Undine runs
-    comes first, of those the version Undine is tested with (pcell.SUPPORTED), then the order of discovery."""
+    comes first, of those a version Undine is tested with (the built-in profile's [[pdk]] tested = true), then the
+    order of discovery."""
+    from undine.pdks import profiledata
     # a copy: the server's rescan adds and removes PDKs while requests read the dict
     match = [x for x in list(pdks.values()) if x.id == spec or x.name == spec]
     match.sort(key=lambda x: (x.id != spec, pcell.macros_dir(x) is None,
-                              not x.version or x.version != pcell.SUPPORTED.get(x.family)))
+                              not x.version or x.version not in profiledata.tested_commits(x.family)))
     return match[0] if match else None
 
 

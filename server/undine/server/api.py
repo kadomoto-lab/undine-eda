@@ -1875,7 +1875,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
 
     @app.post("/api/p/{project}/pdk")
     def set_pdk(project: str, req: SetPdk):
-        """Pins the project to another PDK version (e.g. from an unsupported one to pcell.SUPPORTED)."""
+        """Pins the project to another PDK version (e.g. from an unsupported one to the one Undine is tested with)."""
         try:
             if "~" in project:
                 raise ValueError("the PDK is changed in the project, not in a changeset preview")

@@ -238,3 +238,17 @@ def test_a_directory_that_is_not_a_profile_package_is_refused(tmp_path):
         profiledata.load_dir(tmp_path)
     (tmp_path / "profile.toml").write_text(mini())
     assert profiledata.load_dir(tmp_path).version == "1.0.0"
+
+
+def test_pdkprofile_serves_the_builtin_toml_profiles_and_holds_no_profile_data():
+    sky, gf, ihp = profiledata.builtin()
+    assert pdkprofile.SKY130 is sky.profiles["sky130"] and pdkprofile.GF180 is gf.profiles["gf180mcu"]
+    assert pdkprofile.IHP is ihp.profiles["ihp-sg13g2"] and pdkprofile.IHP_CMOS5L is ihp.profiles["ihp-sg13cmos5l"]
+    assert list(pdkprofile.PROFILES) == ["sky130", "gf180mcu", "ihp-sg13g2", "ihp-sg13cmos5l"]
+    b = pdkprofile.for_pdk("gf180mcuB", "gf180mcu")
+    assert b is pdkprofile.for_pdk("gf180mcuB", "gf180mcu") and b.stack is gf.profiles["gf180mcu"].stacks["gf180mcuB"]
+    assert pdkprofile.for_pdk("gf180mcuD", "gf180mcu") is pdkprofile.GF180
+    src = Path(pdkprofile.__file__).read_text()
+    assert src.count("Profile(family=") == 1 and "Stack(" not in src.split("class Profile")[1]     # GENERIC only
+    with pytest.raises(AttributeError):
+        pdkprofile.SKY131

@@ -18,7 +18,10 @@ solve() chooses the versions: for each (index URL, package) the highest version 
 has it), fits the project's PDK and that every requirement on it accepts, its own dependencies resolving too
 (depth-first with backtracking: the graphs are small). One version per package name, and one index per package name.
 It is pure: the deps layer gives it the index lines and turns its choice into git requirements pinned at the commits
-the index names (store/deps.py), which store/resolve.py walks as any other."""
+the index names (store/deps.py), which store/resolve.py walks as any other.
+
+line_text() writes a line as `pkg pack` prints it and `pkg publish` will append it (phase 5); yank_rewrite() marks
+one version yanked by rewriting its line in place."""
 from __future__ import annotations
 
 import contextlib
@@ -31,6 +34,7 @@ import shutil
 import stat
 import tempfile
 import tomllib
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -333,8 +337,9 @@ def parse_line(text: str, where: str, index: str = "") -> Line:
     if size is not None and not (isinstance(size, int) and not isinstance(size, bool) and size >= 0):
         raise IndexReadError(f"{where}: size is not a number of bytes")
     check = d.get("check")
-    if check is not None and not (isinstance(check, dict) and isinstance(check.get("url"), str)):
-        raise IndexReadError(f"{where}: check is not an object with a url")
+    if check is not None:
+        if (problem := check_problem(check)) is not None:
+            raise IndexReadError(f"{where}: check {problem}")
     yanked = d.get("yanked", False)
     if not isinstance(yanked, bool):
         raise IndexReadError(f"{where}: yanked is not true or false")
@@ -361,6 +366,87 @@ def parse_file(data: bytes, name: str, where: str, index: str = "") -> list[Line
             raise IndexReadError(f"{where}:{n}: {name} {line.vers} is listed twice")
         out[line.vers] = line
     return sorted(out.values(), key=lambda x: x.vers, reverse=True)
+
+
+def check_problem(check) -> str | None:
+    """What is wrong with a line's `check` (the link to the publisher's check report), or None: it is exactly
+    {url: an https URL, sha256: 64 lower-case hex characters}."""
+    if not isinstance(check, dict) or set(check) != {"url", "sha256"}:
+        return "is not an object of exactly url and sha256"
+    url = check["url"]
+    if not isinstance(url, str) or len(url) > 2048 or re.search(r"[\s\x00-\x1f\x7f]", url):
+        return "url is not a URL"
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+        return f"url {url!r} is not an https URL (https://host/path, with no user or password in it)"
+    if not (isinstance(check["sha256"], str) and _HEX.match(check["sha256"])):
+        return "sha256 is not 64 lower-case hex characters"
+    return None
+
+
+# ------------------------------------------------------------------ writing lines
+
+_ORDER = ("name", "vers", "git", "subdir", "commit", "tree", "pdk", "deps", "exports", "license", "description",
+          "size", "check", "yanked")
+_PDK_ORDER = ("family", "variants", "commits", "compat", "built_with")
+
+
+def line_dict(line: Line) -> dict:
+    """A line as the object line_text writes: the keys in the order of the design's example (docs/design/packages.md,
+    Index), an absent value left out, `deps` always and `yanked` always."""
+    pdk = None
+    if line.pdk is not None:
+        pdk = {k: line.pdk[k] for k in _PDK_ORDER if line.pdk.get(k) is not None}
+        pdk |= {k: v for k, v in line.pdk.items() if k not in pdk and v is not None}
+    deps = [{"name": d.local, **({"package": d.package} if d.package != d.local else {}), "req": str(d.req),
+             **({"index": d.index} if d.index else {})} for d in line.deps]
+    check = {"url": line.check["url"], "sha256": line.check["sha256"]} if line.check is not None else None
+    values = {"name": line.name, "vers": str(line.vers), "git": line.git, "subdir": line.subdir,
+              "commit": line.commit, "tree": line.tree, "pdk": pdk, "deps": deps,
+              "exports": list(line.exports) if line.exports is not None else None, "license": line.license,
+              "description": line.description, "size": line.size, "check": check, "yanked": line.yanked}
+    return {k: values[k] for k in _ORDER if values[k] is not None}
+
+
+def line_text(line: Line) -> str:
+    """One canonical JSON line of a package file, without its newline: compact, UTF-8 as it is (no \\u escapes for
+    letters), the keys in line_dict's order. parse_line reads it back to the same Line; refused (IndexReadError) when
+    it would not, or when it is longer than a line may be."""
+    text = json.dumps(line_dict(line), ensure_ascii=False, separators=(",", ":"))
+    back = parse_line(text, f"{line.label}: the line written", line.index)
+    if back != line:
+        raise IndexReadError(f"{line.label}: the line written does not read back as the same line")
+    return text
+
+
+def yank_rewrite(data: bytes, name: str, vers: Version | str, yanked: bool = True, where: str = "") -> bytes:
+    """The package file `data` with version `vers`'s line marked yanked (or not): that one line rewritten in place,
+    every other byte kept, never a line appended. The line keeps its keys in their order and their values,
+    written compactly (a line line_text wrote changes only in its yanked value); `yanked` stays where it was, or goes
+    last. Refused (IndexReadError) when the file does not parse, lists no such version, or has it yanked (or not)
+    already."""
+    v = vers if isinstance(vers, Version) else Version.parse(vers)
+    where = where or rel_path(name)
+    parse_file(data, name, where)                            # a file that does not read is not rewritten
+    lines = data.decode("utf-8").splitlines(keepends=True)
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        if not body.strip():
+            continue
+        line = parse_line(body, f"{where}:{i + 1}")
+        if line.vers != v:
+            continue
+        if line.yanked == yanked:
+            raise IndexReadError(f"{name} {v} is {'yanked' if yanked else 'not yanked'} already")
+        d = json.loads(body)
+        d["yanked"] = yanked
+        lines[i] = json.dumps(d, ensure_ascii=False, separators=(",", ":")) + raw[len(body):]
+        out = "".join(lines).encode("utf-8")
+        after = {x.vers: x for x in parse_file(out, name, where)}
+        if after[v].yanked != yanked:
+            raise IndexReadError(f"{where}: {name} {v}: the rewritten line does not say yanked {yanked}")
+        return out
+    raise IndexReadError(f"{where}: no line for {name} {v}: only a listed version is yanked")
 
 
 # ------------------------------------------------------------------ local copies

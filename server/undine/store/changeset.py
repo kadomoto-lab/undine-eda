@@ -258,9 +258,10 @@ NOTICE_TEXT = 400             # characters of a notice's text at most (a refusal
 
 
 def _cut(text: str) -> str:
-    """A notice's text as kept: control characters made spaces, then at most NOTICE_TEXT characters once encoded as
-    JSON (escapes count), so an answer that fits a notice never cuts it."""
-    t = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", text).strip()
+    """A notice's text as kept: control characters made spaces and lone surrogates (from index data or a path) made
+    U+FFFD, then at most NOTICE_TEXT characters once encoded as JSON (escapes count), so an answer that fits a notice
+    never cuts it."""
+    t = re.sub(r"[\ud800-\udfff]", "\ufffd", re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", text)).strip()
     if len(json.dumps(t, ensure_ascii=False)) - 2 <= NOTICE_TEXT:
         return t
     lo, hi = 0, len(t)                                 # the longest start that fits with the ellipsis
@@ -274,7 +275,7 @@ def _cut(text: str) -> str:
 
 
 def _text_sha(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def _never_fetched(changes: list[dict]) -> list[dict]:

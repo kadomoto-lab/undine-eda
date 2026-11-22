@@ -1021,6 +1021,21 @@ def test_a_notice_full_of_escapes_is_kept_whole_in_a_small_answer(tmp_path):
     shutil.rmtree(root, ignore_errors=True)
 
 
+def test_a_notice_with_a_lone_surrogate_is_kept_and_told_once(tmp_path):
+    """A lone surrogate (from index JSON such as "\\udc80", or a surrogate-escaped path) neither stops the notice nor
+    its dedup: it is kept as U+FFFD and the same refusal is told once."""
+    root, srv, cs = tc.setup()
+    me = _agent(srv)
+    cid = _open(me)
+    bad = "amp requires foo \udc80>=1"
+    cs.add_notice("p", cid, {"kind": "fetch_failed", "op_id": "dep-1", "name": "amp", "text": bad})
+    n = cs.get("p", cid)["notices"][-1]
+    assert n["text"] == "amp requires foo �>=1" and n["sha"] == changesetmod._text_sha(bad)
+    assert cs.resolution_failed("p", cid, "dep-1", "amp", bad) is None
+    assert len([x for x in cs.get("p", cid)["notices"] if x.get("op_id") == "dep-1"]) == 1
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def test_the_assistant_gives_notices_only_by_a_turn_that_ended_with_its_answer(tmp_path, monkeypatch):
     """4b: a turn the person stops, or one at the step limit, gives no notice: the next turn shows it again."""
     from http.server import HTTPServer

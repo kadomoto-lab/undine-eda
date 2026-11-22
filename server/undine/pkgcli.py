@@ -16,6 +16,15 @@
     pkg index list | update     the indexes known here, and fetching them again
     pkg index add NAME URL      a nickname for an index, in ~/.undine/config.toml (--project: project.json)
 
+Publishing (phase 5; LIBRARY is a project library's directory, or PROJECT/LIBRARY):
+
+    pkg init LIBRARY            write LIBRARY/undine-package.toml from the library and its project, printing what
+                                it guessed
+    pkg pack LIBRARY            the index line of the release: the package's subdirectory clean, HEAD at its tag
+                                (v<version>, or <name>-v<version> in a repository of several packages)
+    pkg check LIBRARY --no-run  the checks that need no PDK, into <project>/.undine/check/<name>-<version>/
+                                undine-check.json (DRC, LVS and specs are not run yet, so it does not pass)
+
 search, info and outdated read the local copy of each index (fetched once on first use); `pkg index update`, `pkg
 update` and a resolution that finds no version it needs fetch it again."""
 from __future__ import annotations
@@ -71,6 +80,29 @@ def add_parser(sub) -> None:
     w = pk.add_parser("why", help="the chains from the project to a package")
     w.add_argument("project")
     w.add_argument("package")
+    lib_help = "the library's directory, or PROJECT/LIBRARY"
+    ini = pk.add_parser("init", help="write undine-package.toml for a library of a project")
+    ini.add_argument("library", help=lib_help)
+    ini.add_argument("--name", help="the package name (default: the library's)")
+    ini.add_argument("--version", help="the version (default: 0.1.0)")
+    ini.add_argument("--license", help="an SPDX licence expression, e.g. Apache-2.0 (required to publish)")
+    ini.add_argument("--repository", help="the git URL consumers fetch from (default: the remote origin)")
+    ini.add_argument("--force", action="store_true", help="replace an existing undine-package.toml")
+    pa = pk.add_parser("pack", help="print the index line of the tagged release")
+    pa.add_argument("library", help=lib_help)
+    pa.add_argument("--index", help="the index the line is for (default: the default index): a requirement from "
+                    "another index gets its URL")
+    pa.add_argument("--check", metavar="FILE", help="the check report (undine-check.json) the line links")
+    pa.add_argument("--check-url", metavar="URL", help="the https URL the report is served at")
+    ck = pk.add_parser("check", help="what a publish requires, into undine-check.json")
+    ck.add_argument("library", help=lib_help)
+    ck.add_argument("--no-run", action="store_true", help="only the checks that need no PDK (DRC, LVS, symbols, "
+                    "netlists and specs are not run, so the report does not pass); required for now")
+    ck.add_argument("--index", help="the index the package is for (default: the default index)")
+    ck.add_argument("--offline", action="store_true", help="fetch no index and read no remote repository")
+    ck.add_argument("--out", metavar="FILE", help="write the report here (default: <project>/.undine/check/"
+                    "<name>-<version>/undine-check.json)")
+    ck.add_argument("--json", action="store_true", help="print the report as well")
     ixp = pk.add_parser("index", help="the indexes known here").add_subparsers(dest="index_cmd", required=True)
     for name in ("list", "update", "add"):
         x = ixp.add_parser(name)
@@ -85,12 +117,16 @@ def add_parser(sub) -> None:
 
 def run(args: argparse.Namespace, store) -> int:
     from undine.pdks.pin import PinError
-    from undine.store import deps
+    from undine.store import cas, deps, gitsrc, pkgsource
     from undine.store import index as ix
+    from undine.store import manifest as mf
 
     try:
         if args.pkg_cmd == "index":
             return _index(args, store)
+        if args.pkg_cmd in ("init", "pack", "check"):           # a library, its project found from it
+            src = pkgsource.locate(args.library, store, read_manifest=args.pkg_cmd != "init")
+            return {"init": _init, "pack": _pack, "check": _check}[args.pkg_cmd](src, args)
         if args.pkg_cmd in ("search", "info"):
             meta = store.get(args.project).meta if args.project else {}
             url = ix.url_of(args.index, meta)
@@ -129,7 +165,8 @@ def run(args: argparse.Namespace, store) -> int:
         for w in st["warnings"]:
             print(f"~ {w}")
         return 0
-    except (deps.DepError, ix.IndexReadError, PinError, OSError) as e:
+    except (deps.DepError, ix.IndexReadError, PinError, OSError, pkgsource.PackageSourceError, mf.ManifestError,
+            gitsrc.GitSourceError, cas.StoreError) as e:
         print(f"error: {e}")
         return 1
 
@@ -430,3 +467,87 @@ def _migrate(prj, args) -> int:
     for u in r.get("used_by", []):
         print(f"  used by  {u}")
     return 0
+
+
+# ------------------------------------------------------------------ publishing
+
+
+def _init(src, args) -> int:
+    from undine.store import manifest as mf
+    from undine.store import pkgsource
+    p = src.lib.path / mf.MANIFEST
+    if p.is_symlink():
+        raise pkgsource.PackageSourceError(f"{p} is a symbolic link: a manifest is a regular file; remove the link")
+    if p.exists() and not args.force:
+        raise pkgsource.PackageSourceError(f"{p} exists: edit it, or give --force to write a new one over it")
+    d = pkgsource.draft(src, name=args.name, version=args.version, license=args.license,
+                        repository=args.repository)
+    p.write_text(mf.render(d.manifest, d.notes))
+    print(f"wrote {p}")
+    for key, value in d.guessed:
+        print(f"  {key:<16} {value}")
+    for n in d.notes:
+        print(f"  # {n}")
+    for w in d.warnings:
+        print(f"~ {w}")
+    return 0
+
+
+def _pack(src, args) -> int:
+    import hashlib
+
+    from undine.store import index as ix
+    from undine.store import manifest as mf
+    from undine.store import pkgsource
+    if bool(args.check) != bool(args.check_url):
+        raise pkgsource.PackageSourceError("--check FILE and --check-url URL go together: the line links the "
+                                           "report at the URL by the SHA-256 of the file")
+    check = None
+    if args.check:
+        from pathlib import Path
+        check = {"url": args.check_url, "sha256": hashlib.sha256(Path(args.check).read_bytes()).hexdigest()}
+        if (why := ix.check_problem(check)) is not None:
+            raise pkgsource.PackageSourceError(f"--check-url: check {why}")
+    tag, commit = pkgsource.at_tag(src)
+    url = ix.url_of(args.index, src.prj.meta)
+    t = pkgsource.tree(str(src.top), commit, src.subdir, tag)
+    mf.check_files(src.manifest, list(t.files), src.where, strict=True)     # a waiver for a cell it lacks
+    print(ix.line_text(pkgsource.line_for(src, commit, t, url, check)))
+    return 0
+
+
+def _check(src, args) -> int:
+    import json
+    from pathlib import Path
+
+    from undine.store import checkreport, pkgsource
+    from undine.store import index as ix
+    if not args.no_run:
+        raise pkgsource.PackageSourceError("pkg check runs DRC, LVS and the specs in a later version of Undine: for "
+                                           "now give --no-run, for the checks that need no PDK")
+    m = pkgsource.need_manifest(src)
+    tag, commit = pkgsource.at_tag(src)
+    report = checkreport.build(src, tag, commit, index_url=ix.url_of(args.index, src.prj.meta),
+                               offline=args.offline, run=False)
+    path = Path(args.out) if args.out else checkreport.default_path(src)
+    sha = checkreport.write(path, report)
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    pkg = report["package"]
+    print(f"{m.name} {m.version} at {tag} ({commit[:12]}), tree {pkg['tree'] or '-'}")
+    f = report["files"]
+    print(f"  files    {f['count']}, {f['bytes']} bytes" + (f", the largest {f['largest']['path']} "
+                                                            f"({f['largest']['bytes']})" if f["largest"] else ""))
+    print(f"  license  {report['license']['expression'] or '-'}")
+    for d in report["dependencies"]:
+        print(f"  needs    {d['package']} {d['req']}" + (f" -> {d['resolved']}" if d.get("resolved") else ""))
+    code = report["code"]
+    flagged = sum(1 for b in code["blocks"] if b["refused"]) + sum(1 for x in code["rtl"] if x["refused"])
+    print(f"  code     {len(code['blocks'])} block(s), {len(code['rtl'])} RTL file(s), {flagged} the trust rule "
+          "refuses")
+    for w in report["warnings"]:
+        print(f"~ {w['check']}: {w['message']}")
+    for p in report["problems"]:
+        print(f"! {p['check']}: {p['message']}")
+    print(f"wrote {path} (sha256 {sha}): {'passes' if report['passed'] else 'does not pass'}")
+    return 0 if report["passed"] else 1

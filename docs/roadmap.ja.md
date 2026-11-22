@@ -26,7 +26,9 @@ commit 全体と木のハッシュで固定し、確認した後に ciel で取�
   `project.json` と `undine.lock` を `git merge` でも changeset の採用でもエントリ単位でマージし、マージした lock が
   `project.json` の求めるものを固定していない採用を拒否する([merge.ja.md](design/merge.ja.md))。
 - [ ] **段階 5: 公開。** パッケージを検証し、まとめ、公開するコマンド。その検証の報告を index からリンクする。2 つのバージョンの
-  間で何が変わったかを、セル単位まで示す報告。
+  間で何が変わったかを、セル単位まで示す報告。ここまでにできたもの: manifest の `[checks]`(DRC の deck、オプション、理由つきの
+  免除)と `[renames]`、`pkg init`(ライブラリから manifest の下書きを作る)、`pkg pack`(タグを付けたリリースの index の行)、
+  `pkg check --no-run`(検証の報告のうち PDK の要らない検証)([ライブラリを公開する](guide/libraries.ja.md#publishing-a-library))。
 - [ ] **段階 6: PDK プロファイル。** 各 PDK family のプロセスの知識を、対応する PDK のバージョンを名前で示すデータのパッケージにする。
   ここまでにできたもの: 各 family のプロファイルはデータになりました。Undine に組み込んだ ciel の family ごとのプロファイルの
   パッケージにある `profile.toml` で(置き換えた Python と欄ごとに照らしてあります)、`./setup.sh`、`pixi run pdk`、Undine による

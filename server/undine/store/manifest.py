@@ -19,6 +19,12 @@ or one from a package index (phase 3), a string or a table with neither git nor 
 
 The resolver pins an index requirement through the index (deps._Graph.index_pin, store/index.py); a resolution made
 without an index refuses it.
+
+[checks] (how `pkg check` runs DRC: the deck, its options, and waived rules per cell, each with a reason) and
+[renames] (old cell name -> new, per version) are typed here (Checks, Waiver, Manifest.renames), refused when wrong
+only for publishing (strict=True: a consumer reads them as before phase 5); `render` writes a
+Manifest back as TOML (`pkg init`). The licence is kept as written: its SPDX syntax is store/spdx.py's, checked by
+`pkg init` and `pkg check` only, so a manifest that parsed before keeps parsing.
 """
 from __future__ import annotations
 
@@ -47,6 +53,8 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 _HEXISH = re.compile(r"^[0-9a-fA-F]+$")
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 CELL_SUFFIXES = (".sch", ".sym", ".oas", ".sv", ".v")
+# the [files] include `pkg init` writes (the design's example)
+DEFAULT_INCLUDE = ("*.sch", "*.sym", "*.oas", "*.netlist.yaml", "*.intent.yaml", "rtl/**", "README.md", "LICENSE")
 _EXPORT_SUFFIXES = (".sym", ".sch", ".oas")
 
 TABLES = ("package", "pdk", "dependencies", "exports", "files", "checks", "renames")
@@ -55,7 +63,11 @@ _KEYS = {
     "pdk": ("family", "variants", "commits", "compat", "built_with"),
     "exports": ("cells",),
     "files": ("include",),
+    "checks": ("drc", "waive"),
 }
+_DRC_KEYS = ("deck", "options")
+_WAIVER_KEYS = ("cell", "rules", "reason")
+_CELL_FIX = "letters, digits and _ . + -, not starting with . + or -"
 _DEP_KEYS = ("git", "rev", "subdir", "package", "version", "index")
 _NAME_FIX = "lower-case letters, digits and _, starting with a letter, at most 64 characters"
 
@@ -93,6 +105,24 @@ class IndexDep:
     index: str | None = None
 
 
+@dataclass(frozen=True)
+class Waiver:
+    """Waived DRC rules of one cell, with the reason: they apply to that cell's own DRC run only."""
+    cell: str
+    rules: tuple[str, ...]
+    reason: str
+
+
+@dataclass
+class Checks:
+    """[checks]. drc: whether a drc table was written; deck None: the PDK's first deck; options: {name: bool | int |
+    float | str}, the deck's variables."""
+    drc: bool = False
+    deck: str | None = None
+    options: dict = field(default_factory=dict)
+    waive: tuple[Waiver, ...] = ()
+
+
 @dataclass
 class Manifest:
     name: str
@@ -105,7 +135,9 @@ class Manifest:
     dependencies: dict = field(default_factory=dict)       # {local name: GitDep | IndexDep}
     exports: tuple | None = None                           # None: every cell is public
     include: tuple | None = None                           # [files] include; None: every file
-    later: dict = field(default_factory=dict)              # [checks], [renames]: kept as written until phase 5
+    checks: Checks | None = None                           # [checks]; None: the PDK's first deck, no waiver
+    renames: dict = field(default_factory=dict)            # [renames]: {Version: {old cell: new cell}}
+    raw: dict = field(default_factory=dict, compare=False)  # [checks] and [renames] as written (parse's docstring)
 
 
 # ------------------------------------------------------------------ errors
@@ -123,8 +155,13 @@ def _err(where: str, path: str, what: str, fix: str = "") -> ManifestError:
 # ------------------------------------------------------------------ parse
 
 
-def parse(data: bytes, where: str) -> Manifest:
-    """The manifest in `data`, checked. Raises ManifestError for the first problem found."""
+def parse(data: bytes, where: str, strict: bool = False) -> Manifest:
+    """The manifest in `data`, checked. Raises ManifestError for the first problem found.
+
+    [checks] and [renames] are checked in full only with strict=True (publishing: pkg init, pack and check). A
+    consumer (a fetch, the lock, the library list) reads them as before phase 5, as tables of any content: a package
+    published or locked before they were typed keeps installing. There the typed fields are filled when the tables
+    pass the checks and left empty (checks None, renames {}) when they do not; `raw` keeps the tables as written."""
     if len(data) > MAX_BYTES:
         raise _err(where, "", f"{len(data)} bytes, more than {MAX_BYTES}", "a manifest is a short text file")
     try:
@@ -135,12 +172,13 @@ def parse(data: bytes, where: str) -> Manifest:
         doc = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise _err(where, "", f"not valid TOML: {e}", "fix the TOML at that line") from None
-    return _Parser(where).manifest(doc)
+    return _Parser(where, strict).manifest(doc)
 
 
 class _Parser:
-    def __init__(self, where: str):
+    def __init__(self, where: str, strict: bool = False):
         self.where = where
+        self.strict = strict
 
     def err(self, path: str, what: str, fix: str = "") -> ManifestError:
         return _err(self.where, path, what, fix)
@@ -197,9 +235,18 @@ class _Parser:
         m.dependencies = self.dependencies(self.table(doc, "dependencies") or {}, name)
         m.exports = self.exports(self.table(doc, "exports"))
         m.include = self.include(self.table(doc, "files"))
-        for k in ("checks", "renames"):
-            if (t := self.table(doc, k)) is not None:
-                m.later[k] = t
+        checks, renames = self.table(doc, "checks"), self.table(doc, "renames")
+        m.raw = {k: t for k, t in (("checks", checks), ("renames", renames)) if t is not None}
+        try:
+            m.checks = self.checks(checks)
+        except ManifestError:
+            if self.strict:
+                raise
+        try:
+            m.renames = self.renames(renames, version)
+        except ManifestError:
+            if self.strict:
+                raise
         return m
 
     def name(self, v, *path) -> str:
@@ -327,8 +374,7 @@ class _Parser:
         cells = self.strings(t, "cells", "exports") or ()
         for c in cells:
             if not NAME_RE.match(c):
-                raise self.err("exports.cells", f"{c!r} is not a cell name",
-                               "letters, digits and _ . + -, not starting with . + or -")
+                raise self.err("exports.cells", f"{c!r} is not a cell name", _CELL_FIX)
         return cells
 
     def include(self, t: dict | None) -> tuple | None:
@@ -342,6 +388,95 @@ class _Parser:
             if (problem := _pattern_problem(p)) is not None:
                 raise self.err("files.include", f"{p!r} {problem[0]}", problem[1])
         return pats
+
+    def cell(self, v, path: str) -> str:
+        from undine.store.project import NAME_RE
+        if not isinstance(v, str) or not NAME_RE.match(v):
+            raise self.err(path, f"{v!r} is not a cell name", _CELL_FIX)
+        return v
+
+    def checks(self, t: dict | None) -> Checks | None:
+        if t is None:
+            return None
+        self.known(t, _KEYS["checks"], "checks")
+        out = Checks()
+        drc = t.get("drc")
+        if drc is not None:
+            if not isinstance(drc, dict):
+                raise self.err("checks.drc", "not a table", 'write drc = { deck = "...", options = { ... } }')
+            self.known(drc, _DRC_KEYS, "checks", "drc")
+            deck = self.string(drc, "deck", "checks", "drc")
+            if deck is not None and (not deck or "/" in deck or "\\" in deck or deck.startswith(("-", "."))):
+                raise self.err("checks.drc.deck", f"{deck!r} is not a deck name",
+                               "name one of the PDK's KLayout DRC decks, e.g. sky130A_mr.drc, without a directory")
+            opts = drc.get("options", {})
+            if not isinstance(opts, dict):
+                raise self.err("checks.drc.options", "not a table", "write options = { feol = true, density = false }")
+            for k, v in opts.items():
+                if not _BARE_KEY.match(k):
+                    raise self.err(_kp("checks", "drc", "options", k), "not an option name",
+                                   "letters, digits, _ and -, as the deck names its variables")
+                if not isinstance(v, (bool, int, float, str)):
+                    raise self.err(_kp("checks", "drc", "options", k), f"{v!r} is not an option value",
+                                   "write true, false, a number or a string")
+            out.drc, out.deck, out.options = True, deck, dict(opts)
+        waive = t.get("waive")
+        if waive is not None:
+            if not isinstance(waive, list):
+                raise self.err("checks.waive", "not a list",
+                               'write waive = [{ cell = "...", rules = ["..."], reason = "..." }]')
+            out.waive = tuple(self.waiver(w, f"checks.waive[{i}]") for i, w in enumerate(waive))
+        return out
+
+    def waiver(self, w, at: str) -> Waiver:
+        if not isinstance(w, dict):
+            raise self.err(at, "not a table", 'write { cell = "...", rules = ["..."], reason = "..." }')
+        for k in w:
+            if k not in _WAIVER_KEYS:
+                raise self.err(f"{at}.{_kp(k)}", "unknown key (made for a newer Undine?)",
+                               f"the known keys are {', '.join(_WAIVER_KEYS)}")
+        if "cell" not in w:
+            raise self.err(f"{at}.cell", "missing", "name the cell whose own DRC run the waiver applies to")
+        cell = self.cell(w["cell"], f"{at}.cell")
+        rules = w.get("rules")
+        if not isinstance(rules, list) or not rules or not all(isinstance(r, str) and r.strip() for r in rules):
+            raise self.err(f"{at}.rules", "missing, empty or not a list of rule names",
+                           'list the DRC rules (the deck\'s categories) waived, e.g. rules = ["m1.2"]')
+        reason = w.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise self.err(f"{at}.reason", "missing or empty",
+                           "say why the rules may be waived for this cell: pkg check and the review show it")
+        return Waiver(cell, tuple(dict.fromkeys(rules)), reason)
+
+    def renames(self, t: dict | None, version: Version) -> dict:
+        if t is None:
+            return {}
+        out: dict = {}
+        for key, table in t.items():
+            at = _kp("renames", key)
+            try:
+                v = Version.parse(key)
+            except SemverError as e:
+                raise self.err(at, str(e), 'key each entry by the version that renamed, e.g. "1.2.0"') from None
+            if v > version:
+                raise self.err(at, f"after this version ({version})",
+                               "list a rename under the version that made it: this one or an earlier one")
+            if v in out:
+                raise self.err(at, f"version {v} is listed twice", "keep one entry per version")
+            if not isinstance(table, dict):
+                raise self.err(at, "not a table", 'write "1.2.0" = { old_name = "new_name" }')
+            pairs: dict = {}
+            for old, new in table.items():
+                where = _kp("renames", key, old)
+                self.cell(old, where)
+                self.cell(new, where)
+                if old == new:
+                    raise self.err(where, "renamed to itself", "drop it")
+                if new in pairs.values():
+                    raise self.err(where, f"a second cell renamed to {new}", "one new name takes one old name")
+                pairs[old] = new
+            out[v] = pairs
+        return out
 
 
 # ------------------------------------------------------------------ files
@@ -386,8 +521,9 @@ def select(include, paths) -> set[str]:
     return {x for x in paths if x == MANIFEST or any(_match(pat, x.split("/")) for pat in pats)}
 
 
-def check_files(m: Manifest, paths, where: str) -> None:
-    """Refuses a selection with no top-level cell, and exported cells the selection does not have."""
+def check_files(m: Manifest, paths, where: str, strict: bool = False) -> None:
+    """Refuses a selection with no top-level cell and exported cells the selection does not have; with strict=True
+    (publishing) also a waiver for a cell that is not among the package's top-level cells."""
     sel = select(m.include, paths)
     top = {p for p in sel if "/" not in p}
     if not any(p.endswith(CELL_SUFFIXES) for p in top):
@@ -400,6 +536,110 @@ def check_files(m: Manifest, paths, where: str) -> None:
     if missing:
         raise _err(where, "exports.cells", f"no .sym, .sch or .oas among the package's files for {', '.join(missing)}",
                    "add the cell's files to [files] include, or drop it from exports")
+    for i, w in enumerate(m.checks.waive if m.checks and strict else ()):
+        if not any(w.cell + s in top for s in CELL_SUFFIXES):
+            raise _err(where, f"checks.waive[{i}].cell", f"{w.cell} is not a cell of the package",
+                       "a waiver names a cell the package's files include (its own DRC run); fix the name or drop it")
+
+
+# ------------------------------------------------------------------ writing
+
+
+def _toml_str(s: str) -> str:
+    """A TOML basic string: quote, backslash and the control characters escaped (TOML refuses U+007F unescaped too,
+    which json.dumps leaves)."""
+    out = ['"']
+    for ch in s:
+        o = ord(ch)
+        if ch in '"\\':
+            out.append("\\" + ch)
+        elif ch in "\b\t\n\f\r":
+            out.append({"\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f", "\r": "\\r"}[ch])
+        elif o < 0x20 or o == 0x7F:
+            out.append(f"\\u{o:04X}")
+        else:
+            out.append(ch)
+    return "".join(out) + '"'
+
+
+def _toml_key(k: str) -> str:
+    return k if _BARE_KEY.match(k) else _toml_str(k)
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return repr(v)                        # inf, nan and 1e+100 are TOML as Python writes them
+    if isinstance(v, str):
+        return _toml_str(v)
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{ " + ", ".join(f"{_toml_key(k)} = {_toml_value(x)}" for k, x in v.items()) + " }" if v else "{}"
+    raise TypeError(f"no TOML form for {type(v).__name__}")
+
+
+def _dep_value(d) -> str:
+    if isinstance(d, IndexDep):
+        if d.package == d.local and d.index is None:
+            return _toml_str(d.version)
+        t = {**({"package": d.package} if d.package != d.local else {}), "version": d.version,
+             **({"index": d.index} if d.index is not None else {})}
+        return _toml_value(t)
+    t = {k: v for k, v in (("git", d.git), ("rev", d.rev), ("subdir", d.subdir)) if v is not None}
+    if d.package != d.local:
+        t["package"] = d.package
+    if d.version is not None:
+        t["version"] = str(d.version)
+    return _toml_value(t)
+
+
+def render(m: Manifest, dependency_notes: list[str] | tuple = ()) -> str:
+    """The manifest as TOML that parse() reads back to the same Manifest: the tables in the design's order, each
+    value in the restricted forms the manifest has (strings, lists of strings, inline tables). dependency_notes:
+    comment lines written under [dependencies] (what `pkg init` could not write as a requirement)."""
+    out = ["[package]", f"name = {_toml_str(m.name)}", f"version = {_toml_str(str(m.version))}"]
+    for k in ("description", "license"):
+        if getattr(m, k) is not None:
+            out.append(f"{k} = {_toml_str(getattr(m, k))}")
+    if m.authors:
+        out.append(f"authors = {_toml_value(m.authors)}")
+    if m.repository is not None:
+        out.append(f"repository = {_toml_str(m.repository)}")
+    if m.pdk is not None:
+        p = m.pdk
+        out += ["", "[pdk]", f"family = {_toml_str(p.family)}", f"variants = {_toml_value(p.variants)}"]
+        if p.compat:
+            out.append(f"compat = {_toml_value(p.compat)}")
+        if p.commits:
+            out.append(f"commits = {_toml_value(p.commits)}")
+        if p.built_with is not None:
+            out.append(f"built_with = {_toml_str(p.built_with)}")
+    if m.dependencies or dependency_notes:
+        out += ["", "[dependencies]"]
+        out += [f"{_toml_key(k)} = {_dep_value(d)}" for k, d in m.dependencies.items()]
+        out += ["# " + " ".join(n.splitlines()) for n in dependency_notes]
+    if m.exports is not None:
+        out += ["", "[exports]", f"cells = {_toml_value(m.exports)}"]
+    if m.include is not None:
+        out += ["", "[files]", f"include = {_toml_value(m.include)}"]
+    c = m.checks
+    if c is not None:
+        out += ["", "[checks]"]
+        if c.drc:
+            drc = {**({"deck": c.deck} if c.deck is not None else {}), **({"options": c.options} if c.options else {})}
+            out.append(f"drc = {_toml_value(drc)}")
+        if c.waive:
+            out.append("waive = [")
+            out += [f"  {_toml_value({'cell': w.cell, 'rules': w.rules, 'reason': w.reason})}," for w in c.waive]
+            out.append("]")
+    if m.renames:
+        out += ["", "[renames]"]
+        out += [f"{_toml_str(str(v))} = {_toml_value(pairs)}" for v, pairs in m.renames.items()]
+    return "\n".join(out) + "\n"
 
 
 # ------------------------------------------------------------------ reading
@@ -439,9 +679,9 @@ def from_archive(sha: str, where: str) -> Manifest | None:
     return None if files is None else from_files(files, where)
 
 
-def from_dir(d: Path, where: str) -> Manifest | None:
+def from_dir(d: Path, where: str, strict: bool = False) -> Manifest | None:
     """The manifest of an installed or checked-out directory; None when it has none. A manifest that is a symbolic
-    link is refused: it could name any file on the machine."""
+    link is refused: it could name any file on the machine. strict: as parse's."""
     p = Path(d) / MANIFEST
     if p.is_symlink():
         raise _err(where, "", "is a symbolic link", "a manifest is a regular file; reinstall with `undine lib sync`")
@@ -449,4 +689,4 @@ def from_dir(d: Path, where: str) -> Manifest | None:
         return None
     if not p.is_file():
         raise _err(where, "", "is not a regular file", "make it one")
-    return parse(_read(p), where)
+    return parse(_read(p), where, strict)

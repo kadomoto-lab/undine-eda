@@ -188,6 +188,92 @@ def test_a_package_file_lists_each_version_once_newest_first():
         ix.parse_file(a.encode(), "other", "f")
 
 
+CHECK = {"url": "https://github.com/me/analog_ip/releases/download/v1.2.0/undine-check.json", "sha256": "5f" * 32}
+FULL = {"name": "analog_ip", "vers": "1.2.0", "git": "https://github.com/me/analog_ip.git", "subdir": "lib",
+        "commit": "2" * 40, "tree": "sha256:" + "e" * 64,
+        "pdk": {"family": "sky130", "variants": ["sky130A"], "compat": ["sky130/2025"], "built_with": "8" * 40},
+        "deps": [{"name": "sar_common", "req": "^1.2"}, {"name": "bias", "package": "bias_gen", "req": "~0.3"},
+                 {"name": "tech_cells", "req": "^2", "index": "git@github.com:acme/undine-index.git"}],
+        "exports": ["bandgap", "ldo", "comparator"], "license": "Apache-2.0", "description": "Bandgap, LDO — für",
+        "size": 1843200, "check": CHECK, "yanked": False}
+
+
+def test_line_text_round_trips_through_parse_line_and_parse_file():
+    line = ix.parse_line(json.dumps(FULL), "x", "https://i")
+    text = ix.line_text(line)
+    assert ix.parse_line(text, "y", "https://i") == line
+    assert ix.parse_file((text + "\n").encode(), "analog_ip", "f", "https://i") == [line]
+    assert text == json.dumps(FULL, ensure_ascii=False, separators=(",", ":"))     # the design's key order, compact
+    assert "\n" not in text and "für" in text
+    bare = ix.parse_line(json.dumps(GOOD), "x")
+    assert ix.line_text(bare) == ('{"name":"analog_ip","vers":"1.2.0","git":"https://example.com/a.git",'
+                                  f'"commit":"{"a" * 40}","tree":"sha256:{"b" * 64}",'
+                                  '"deps":[{"name":"bias","package":"bias_gen","req":"~0.3"}],"yanked":false}')
+    with pytest.raises(ix.IndexReadError, match="analog_ip 1.0.0: the line written: tree 'sha256:xyz' is not a tree"):
+        ix.line_text(ix.Line("analog_ip", Version(1, 0, 0), "https://e/a.git", "a" * 40, "sha256:xyz"))
+
+
+@pytest.mark.parametrize("check, msg", [
+    ({"url": CHECK["url"]}, "exactly url and sha256"), ({**CHECK, "size": 1}, "exactly url and sha256"),
+    ({**CHECK, "url": "http://example.com/r.json"}, "not an https URL"), ({**CHECK, "url": "https:///r.json"}, "https"),
+    ({**CHECK, "url": "https://u:p@example.com/r.json"}, "no user or password"),
+    ({**CHECK, "url": "https://example.com/a b"}, "url is not a URL"), ({**CHECK, "url": 3}, "url is not a URL"),
+    ({**CHECK, "sha256": "5F" * 32}, "sha256 is not 64 lower-case hex"), ({**CHECK, "sha256": "ab"}, "sha256 is not"),
+    ("https://example.com/r.json", "exactly url and sha256"),
+])
+def test_check_needs_an_https_url_and_a_sha256(check, msg):
+    with pytest.raises(ix.IndexReadError, match=f"x: check .*{msg}"):
+        ix.parse_line(json.dumps({**GOOD, "check": check}), "x")
+    assert ix.parse_line(json.dumps({**GOOD, "check": CHECK}), "x").check == CHECK
+
+
+def test_yank_rewrites_the_one_line_and_never_appends():
+    a = ix.line_text(ix.parse_line(json.dumps(FULL), "x"))
+    b = json.dumps({**GOOD, "vers": "1.3.0"})                         # written by hand: spaces, no yanked key
+    data = f"{a}\r\n{b}\n".encode()
+    once = ix.yank_rewrite(data, "analog_ip", "1.2.0")
+    marked = a.replace('"yanked":false', '"yanked":true')
+    assert once == f"{marked}\r\n{b}\n".encode()                     # one value changed, CRLF kept
+    assert [x.yanked for x in ix.parse_file(once, "analog_ip", "f")] == [False, True]
+    twice = ix.yank_rewrite(once, "analog_ip", Version(1, 3, 0))
+    assert twice.count(b"\n") == 2 and twice.startswith(once.split(b"\n")[0])
+    assert json.loads(twice.decode().splitlines()[1]) == {**GOOD, "vers": "1.3.0", "yanked": True}
+    assert ix.yank_rewrite(once, "analog_ip", "1.2.0", yanked=False) == data
+    with pytest.raises(ix.IndexReadError, match="analog_ip 1.2.0 is yanked already"):
+        ix.yank_rewrite(once, "analog_ip", "1.2.0")
+    with pytest.raises(ix.IndexReadError, match="no line for analog_ip 9.9.9"):
+        ix.yank_rewrite(data, "analog_ip", "9.9.9")
+    with pytest.raises(ix.IndexReadError, match="listed twice"):
+        ix.yank_rewrite(f"{a}\n{a}\n".encode(), "analog_ip", "1.2.0")
+
+
+def test_a_description_with_unicode_line_breaks_keeps_the_file_readable():
+    odd = "one two three\x85four"
+    line = ix.parse_line(json.dumps({**FULL, "description": odd}), "x")
+    text = ix.line_text(line)
+    assert " " not in text and "\x85" not in text and "\\u2028" in text and "\\u0085" in text
+    other = json.dumps({**GOOD, "vers": "1.3.0", "description": odd}, ensure_ascii=False)    # raw, by hand
+    data = f"{text}\n{other}\n".encode()
+    assert [x.description for x in ix.parse_file(data, "analog_ip", "f")] == [odd, odd]
+    once = ix.yank_rewrite(data, "analog_ip", "1.3.0")
+    assert once.count(b"\n") == 2 and once.startswith(text.encode() + b"\n")
+    assert [x.yanked for x in ix.parse_file(once, "analog_ip", "f")] == [True, False]
+    assert ix.parse_file(once, "analog_ip", "f")[0].description == odd
+
+
+def test_yank_refuses_a_file_that_is_not_utf8_and_splits_lines_as_parse_file_does():
+    a = json.dumps({**GOOD, "description": "x"})
+    bad = (a.replace('"x"', '"\xff"').encode("latin-1") + b"\n")
+    assert ix.parse_file(bad, "analog_ip", "f")                     # read with replacement characters
+    with pytest.raises(ix.IndexReadError, match="not UTF-8"):
+        ix.yank_rewrite(bad, "analog_ip", "1.2.0")
+    for sep in ("\x0b", "\x0c", "\x1c", "\x1e"):                   # str.splitlines would split there; JSON refuses it
+        with pytest.raises(ix.IndexReadError, match="not JSON"):
+            ix.parse_file(f"{a}{sep}{a}\n".encode(), "analog_ip", "f")
+        with pytest.raises(ix.IndexReadError, match="not JSON"):
+            ix.yank_rewrite(f"{a}{sep}{a}\n".encode(), "analog_ip", "1.2.0")
+
+
 def test_nicknames_come_from_the_machine_and_the_project(tmp_path):
     assert ix.url_of(None) == ix.DEFAULT_URL
     (Path(ix.home()) / "config.toml").parent.mkdir(parents=True, exist_ok=True)

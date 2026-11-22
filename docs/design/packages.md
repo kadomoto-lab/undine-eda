@@ -132,6 +132,16 @@ it on the first problem, naming the key path and what to write (`<where>: undine
 yet, `[dependencies]` takes a git form, and the index forms above are parsed but refused at resolution: see
 [Phase 2 status](#phase-2-status).
 
+*Implemented (phase 5):* `[checks]` and `[renames]` are typed (`manifest.Checks`, `Waiver`, `Manifest.renames`), each
+refusal naming its key path: `drc` takes `deck` (a deck file name, no directory) and `options` (true, false, a number
+or a string each); a waiver needs a cell, at least one rule and a reason that is not empty, and its cell must be a
+top-level cell of the include set; a `[renames]` key is a version at most `[package].version`, its old and new names
+cell names, never one name to itself and never two old names to one new name in one version. These rules are
+publishing's (`pkg init`, `pack`, `check`): a consumer (a fetch, `lib sync`, the lock, the library list) reads both
+tables as before, of any content, so a package published or locked earlier keeps installing; the typed fields are
+then empty when the tables break the rules. `manifest.render` writes a manifest back as TOML that parses to the same
+manifest. See [Phase 5 status](#phase-5-status).
+
 ## Index
 
 An index is a git repository:
@@ -181,6 +191,12 @@ The commit and the tree are what pins a
 version's content; there is no signature (signing is [later](#decisions)). A version's commit and tree never change;
 **yanking** sets `yanked: true` (a PR too): resolution skips it, an existing lock keeps it and `status` warns. `check`
 is the link to the publisher's check report and its SHA-256 (see [Publishing](#publishing)).
+
+*Implemented (phase 5):* `index.line_text` writes a line as above: compact JSON, UTF-8 as it is, the keys in the
+example's order with `description` after `license`, an absent value left out, `deps` and `yanked` always; it reads
+back through `parse_line` to the same line. `check` must be exactly `{url, sha256}`: an https URL with no user or
+password, and 64 lower-case hex characters. `index.yank_rewrite` marks one version yanked (or not) by rewriting its
+line in place, every other byte of the file kept.
 
 **The default index** is `undine`: a repository in the kadomoto-lab GitHub organisation,
 `https://github.com/kadomoto-lab/undine-index.git` (created on 2026-11-20, empty so far). Its URL is in Undine's
@@ -494,6 +510,10 @@ rules, the code-block and RTL listing, and the report check (the linked file's S
 the line's commit and tree and passes). DRC and LVS in the index CI, which needs the PDK there (1.1 GB per sky130
 variant), come later ([Decisions](#decisions) 9).
 
+*Implemented (phase 5, so far):* `pkg init`, `pkg pack` and `pkg check --no-run` (store/pkgsource.py,
+store/checkreport.py), which writes the report with the checks that need no PDK; the runs are not made yet, so the
+report does not pass. See [Phase 5 status](#phase-5-status).
+
 ## Cells across versions
 
 A cell is known by its name. `[renames]` maps old names to new per version, so an update can say "`comp` is now
@@ -594,6 +614,11 @@ candidate).
 (read only, no fetch); a plain git dependency records none, and its top-level `LICENSE`, `COPYING`, `NOTICE` or
 `COPYRIGHT` files are listed. Until profile packages exist the PDK licences are a table in store/vendor.py (sky130,
 gf180mcu and ihp-sg13: Apache-2.0).
+
+*Implemented (phase 5):* store/spdx.py checks an SPDX expression by its syntax only (SPDX 2.3, Annex D: identifiers,
+`+`, `WITH`, `AND`, `OR` in upper case, parentheses, `LicenseRef-` and `DocumentRef-`). No licence list is shipped, so
+a new identifier needs no Undine release and a misspelt one is for the reviewer to see. `pkg init --license` and `pkg
+check` use it; the manifest parser does not, so a manifest that parsed before still parses.
 
 ## Changesets and evidence
 
@@ -918,7 +943,7 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
 | 2. Manifest and resolution | `undine-package.toml`; transitive dependencies from manifests (still git URLs); project-wide local names, a package installed under each; cell-name disjointness; PDK compatibility; the trust rule for code blocks and RTL | diamond installs once; conflicting requirements name both chains; two packages with a `comparator` are refused naming both; a local alias resolves, also with the Xschem netlister backend; two libraries giving one local name different packages are refused; an incompatible PDK is refused; a dependency cell with `.control` or an absolute `.include` is refused until trusted | **Done**, see [Phase 2 status](#phase-2-status) |
 | 3. Index | index format, several indexes, the default index created (`kadomoto-lab/undine-index`), `pkg search / info / add / update / lock / outdated / tree / why`, version ranges, yank, remote-host policy and fetch size limit, library browser Packages section; `pkg licenses`, `pkg vendor` (also run by the tapeout export) and `pkg sync --from-vendor` | a `file://` index in a temporary directory; yanked skipped but kept when locked; private index named in `project.json`; a dependency without `index` comes from the declaring package's index; one name from two indexes refused; an unlisted host refused over HTTP without confirmation; a fetch over the size limit stopped; a vendored bundle, with the package repository deleted and the store emptied, installs the project again offline through `sync --from-vendor` with the locked trees; a vendored file changed by hand is refused; the tapeout bundle has `vendor/` and `report.json` lists it | **Done**, see [Phase 3 status](#phase-3-status) |
 | 4. Changesets and agents | dependency operations in changesets, review of a dependency change (code blocks and RTL listed), the confirmation token, the notice after a fetch, agent tools with the DATA rule, the merge rule for `project.json` and `undine.lock` in the git merge driver (`merge.md` updated), evidence with package and PDK information outside `key` and model files and profile fields inside it | add in a changeset, adopt, restore; an agent's add records *needs fetch*, never fetches, and continues after the person's fetch; no tool returns a token; two changesets adding different packages adopt in either order; conflicting requirements are refused at adopt; an update that changes one cell outdates only results that use that cell; a README change outdates nothing | **In progress**, see [Phase 4 status](#phase-4-status) |
-| 5. Publishing | `pkg init / check / pack / publish / yank`, `[checks]`, the check report and its link in the index line and PR, semver report, spec results in the report, `[renames]`, cell-level update report, refreshed layout copies, index CI workflow (no DRC / LVS) | publish refuses without a passing report for this tree, and the PR body links the report with its SHA-256; the index CI refuses a report whose SHA-256, commit or tree differs from the line; a renamed cell is reported as renamed and references rewritten; a removed pin or a moved layout pin needs a major version; a waived rule passes `check` and is shown; publish refuses a tree the repository does not serve; tag `<name>-v<version>` in a repository of two packages; after an update the copied cell is refreshed in the changeset and its LVS is outdated, and an edited copy is listed, not replaced | **Planned** |
+| 5. Publishing | `pkg init / check / pack / publish / yank`, `[checks]`, the check report and its link in the index line and PR, semver report, spec results in the report, `[renames]`, cell-level update report, refreshed layout copies, index CI workflow (no DRC / LVS) | publish refuses without a passing report for this tree, and the PR body links the report with its SHA-256; the index CI refuses a report whose SHA-256, commit or tree differs from the line; a renamed cell is reported as renamed and references rewritten; a removed pin or a moved layout pin needs a major version; a waived rule passes `check` and is shown; publish refuses a tree the repository does not serve; tag `<name>-v<version>` in a repository of two packages; after an update the copied cell is refreshed in the changeset and its LVS is outdated, and an edited copy is listed, not replaced | **In progress**, see [Phase 5 status](#phase-5-status) |
 | 6. PDK profiles | `profile.toml` per family with `schema` and `undine`, formula registry, profile packages in the index with expected PDK tree hashes, compatibility tags, `pcell.SUPPORTED` / `pixi.toml` / `setup.sh` read from them | data profile equals today's `Profile` for sky130, GF180, IHP; an unknown field is refused; a changed deck option outdates DRC results and a changed profile field no job reads (`label`, `limits`) does not | **In progress**, see [Phase 6 status](#phase-6-status) |
 
 ### Phase 0 status
@@ -1231,6 +1256,70 @@ Still to build in phase 4: the review of a dependency change (the lock diff, lic
 agent's *needs fetch* and the person's fetch with the confirmation token and the notice, agent tools, and
 `dep_update`'s refresh of layout copies.
 
+### Phase 5 status
+
+Built so far (store/manifest.py, store/spdx.py, store/index.py, store/pkgsource.py, store/checkreport.py,
+store/trust.py and undine/pkgcli.py; tests in `test_manifest.py`, `test_pkg_index.py` and `test_pkg_publish.py`, every
+repository and index local, none touching GitHub):
+
+- **`[checks]` and `[renames]`** typed, and **`manifest.render`** (see [Packages](#packages)); **SPDX** by syntax
+  only (see [Licences](#licences)).
+- **Index lines**: `line_text`, the stricter `check`, `yank_rewrite` (see [Index](#index)).
+- **The package source** (store/pkgsource.py). `LIBRARY` is a project library's directory, the project found by
+  walking up to its `project.json`, or `PROJECT/LIBRARY` under `--root`; a dependency's or a PDK's library is refused.
+  The tag is `v<version>`, or `<name>-v<version>` when HEAD holds more than one `undine-package.toml`. `at_tag` wants
+  no tracked or untracked change under the package's subdirectory (the rest of the repository is not looked at) and
+  HEAD at the tag (an annotated one too), with the manifest committed there and byte for byte the working copy read
+  (an ignored file, or one marked skip-worktree or assume-unchanged, is in no `git status`). `served` reads the tag's
+  commit from the repository URL (`git ls-remote`). `tree` reads the include set from git's blobs into the store, as
+  a consumer's fetch does, and sums the files' bytes.
+- **`pkg init LIBRARY [--name] [--version] [--license] [--repository] [--force]`** writes the manifest: the library's
+  name, version 0.1.0, the cells with a symbol exported, the include list of the example, `[pdk]` from the project's
+  PDK (its family and variant; `commits` and `built_with` its full commit, from the installed PDK, else the lock's
+  format 2 pin), the project's index dependencies the library's schematics place as `^<locked version>` (a nickname
+  written as its URL), and `repository` from the git remote `origin`. A placed git dependency or project library is
+  written as a comment saying why. It prints each value it guessed and warns of what is missing (licence,
+  repository, a full PDK commit); an existing manifest is replaced only with `--force`.
+- **`pkg pack LIBRARY [--index I] [--check FILE --check-url URL]`** prints the index line: `git` the manifest's
+  repository, `subdir`, the tag's commit, the tree hashed from the local repository, `pdk`, `deps` (a requirement's
+  `index` as its URL when it is not the line's own index), `exports`, `license`, `size`, `description`, and `check`
+  only with both `--check` and `--check-url`. A git dependency or a manifest without `repository` is refused.
+- **The check report** (store/checkreport.py, format 1; its fields in the module's docstring) and **`pkg check
+  LIBRARY --no-run [--index I] [--offline] [--out FILE] [--json]`**, which writes it to
+  `<project>/.undine/check/<name>-<version>/undine-check.json`. Problems: the repository URL does not serve the tag
+  at that commit (with `--offline` not checked, a warning); a file over `UNDINE_PKG_FILE_MAX` (default 50 MB); an LFS
+  pointer or another file the tree refuses (the tree is then null); no licence, or not an SPDX expression; a git
+  dependency; dependencies that do not resolve from the index (fetched first unless `--offline`) for the package's
+  `built_with`; no `built_with`, or not the project's PDK commit and variant; a placed library that is neither the
+  package, a declared dependency, a PDK library nor `devices` (also the library's own name when the package is named
+  otherwise). Warnings: internal cells of a dependency placed; symbols placed with no library part; code blocks and
+  RTL the trust rule refuses. `trust.listing` lists every code block (each `.control` block with its commands,
+  `shell` and `pre_osdi` among them, `*#` line, `.include` / `.lib` and XSPICE file path, `tcleval`) and every RTL
+  file, refused or not, run on the include tree installed into a temporary directory, so only published files are
+  scanned. Per cell the symbol, netlist, DRC (deck, options, the waivers with their reasons), LVS (when the cell has
+  both a schematic and a layout) and specs entries are `not_run`; `runs.state` `not_run` is itself a problem, so a
+  `--no-run` report never passes (exit code 1). The report holds no machine path or secret: the repository's, the
+  project's, Undine's home's and the home directory's absolute paths are written as `<repository>`, `<project>`,
+  `<undine home>` and `~` (only as whole paths, so a name is never touched), a URL loses its user and password, and a
+  local index or repository path becomes `<local index>` or `<local repository>`. `checkreport.verify`, for publish
+  and the index CI,
+  refuses another SHA-256, a format or kind it does not know, another name, version, commit or tree than the line's,
+  and a report that does not pass.
+
+Still to build in phase 5: running the symbol and netlist checks, DRC with waivers and LVS in `pkg check` (KLayout,
+with a server that owns no job root), spec results and the semver report, `pkg publish` and `pkg yank`, the index CI
+(`pkg index check` and its workflow file), the cell-level update report with `[renames]`, and refreshed layout copies
+in `dep_update` (after phase 4).
+
+Differences from the text above, and additions:
+
+- `pkg check` without `--no-run` is refused until the runs are built.
+- `pkg check` writes no report for a package that is not clean at its tag: a report names one commit and tree.
+- A placed library that is not declared is a problem also when the project's PDK is not installed (then its
+  libraries cannot be told), with a hint to install it.
+- `parse_line` is stricter about `check`; that is safe while the default index lists no package.
+- `pkg init` writes `commits = [built_with]`, not a compatibility tag: tags come with PDK profiles (phase 6).
+
 ### Phase 6 status
 
 Built: `profile.toml` and its reader, the registry of formulas and stack generators, the three built-in profile
@@ -1309,6 +1398,32 @@ Decided with the user on 2026-11-22, for phase 6:
     is a new generator version, so a profile keeps drawing as it did.
 24. **The acceptance test "a changed layer colour outdates nothing" becomes "a changed profile field no job reads
     (`label`, `limits`) outdates nothing".** Profiles hold no colours: they come from the PDK's `.lyp`.
+
+Decided with the user on 2026-11-22, for phase 5:
+
+25. **Each external write of `pkg publish` and `pkg yank` is asked first.** The writes (`gh release upload`, `git
+    push` of a branch from a clone of the index, `gh pr create`, and a fork when the person cannot push to the index)
+    are each shown with the exact command and asked y/N on a terminal; without one they are refused unless `--yes`
+    is given; `--dry-run` runs none. No environment variable and no agent tool can confirm. The index's owner pushes
+    the branch to the index directly, without a fork. A write to someone's repository is the person's decision.
+26. **Undine ships the index CI workflow file; the user adds it to `kadomoto-lab/undine-index`.** A commit to that
+    repository stays the user's.
+27. **An exported cell's spec that is not met, or not measured, fails `pkg check`.** For analog IP the specs are the
+    contract.
+28. **No test touches the real GitHub; the first real publish is the user's own run.** Tests use local repositories
+    and indexes and a fake `gh`.
+29. **SPDX expressions are checked by syntax only, with no licence list.** Undine ships no third-party reference
+    data, and a new identifier needs no release.
+30. **An added symbol pin needs a minor version.** It adds to a cell's interface as a new cell adds to the package's,
+    and a consumer's existing instance leaves it unconnected.
+31. **A waiver applies to the waived cell's own DRC run only.** A cell that places it is checked in full, so an
+    abutment cell's waiver does not hide an error in the array.
+32. **`pkg check` runs KLayout DRC and LVS only.** GF180 and IHP have no Magic or Netgen decks in Undine.
+33. **`undine-check.json` is written under `<project>/.undine/check/`.** Outside the package's directory, it cannot
+    dirty the tree it describes.
+34. **The clean-worktree check covers the package's subdirectory only.** The rest of the repository (the project's
+    other libraries, `project.json`) does not enter the package's tree.
+35. **No HTTP route or UI for publishing in phase 5.** Publishing is the command line's, run by the person.
 
 ### Later
 

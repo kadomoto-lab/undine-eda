@@ -357,6 +357,125 @@ def scan_dir(d: Path) -> dict:
     return scan
 
 
+# ------------------------------------------------------------------ the listing a check report holds
+
+_WHY = {"control": "a .control block: ngspice runs it as commands", "control_line": "a *# line: ngspice runs it",
+        "unparsed": "cannot be read, so it cannot be passed", "tcl": "Xschem evaluates it as Tcl when it netlists"}
+
+
+def _value_texts(p: Path, text: str) -> list[tuple[str, str]]:
+    """(where, text) of every attribute value of a .sch, .sym or .netlist.yaml file that scan_dir reads as SPICE."""
+    from undine.schematics import xschem
+
+    def props(where: str, d: dict) -> list[tuple[str, str]]:
+        return [(f"{where} {k}", str(v)) for k, v in d.items() if v is not None]
+
+    def symbol(where: str, d: dict) -> list[tuple[str, str]]:
+        out = props(where, d)
+        if d.get("template"):
+            out += props(f"{where} template", xschem.parse_props(d["template"]))
+        return out
+    if p.name.endswith(_NETLIST):
+        raw = yaml.safe_load(text) or {}
+        if not isinstance(raw, dict):
+            raise ValueError("not a mapping")
+        out = []
+        for c in raw.get("code") or []:
+            if isinstance(c, dict):
+                out += props(f"{p.name} code {c.get('name', '')}".rstrip(), c.get("props") or {})
+        for name, inst in (raw.get("instances") or {}).items():
+            if isinstance(inst, dict):
+                out += props(f"{p.name} {name}", inst.get("props") or {})
+        return out
+    f = xschem.parse(text)
+    if p.suffix == ".sym":
+        return symbol(p.name, f.global_props)
+    out = props(p.name, f.global_props)
+    if f.code.get("S"):
+        out.append((f"{p.name} S block", f.code["S"]))
+    for c in f.comps:
+        out += props(f"{p.name} {c.props.get('name') or c.sym}", c.props)
+        if c.embedded is not None:
+            out += symbol(f"{p.name} {c.props.get('name') or c.sym} (embedded symbol)", c.embedded.global_props)
+    return out
+
+
+def _blocks(text: str, *, allowed: list[Path], env: dict) -> list[dict]:
+    """Every code block of one value: each .control block (with the commands in it), *# line, .include / .lib path
+    and XSPICE file path, whether spice_findings (rules 'sim') refuses it or not."""
+    bad = spice_findings(text, allowed=allowed, env=env)
+    refused_at = {(f.line, f.kind, f.path) for f in bad}
+    out: list[dict] = []
+    control = None
+    for n, card in _cards(text):
+        s = card.lstrip()
+        word = s.split(maxsplit=1)[0].lower() if s else ""
+        if control is not None:
+            if word.startswith(".endc"):
+                control = None
+            elif s and not s.startswith("*"):
+                control["commands"] = list(dict.fromkeys([*control["commands"], word]))
+            continue
+        if s.startswith("*#"):
+            out.append({"kind": "control_line", "line": n, "text": _short(card), "refused": True,
+                        "why": _WHY["control_line"]})
+            continue
+        if word.startswith(".control"):
+            control = {"kind": "control", "line": n, "text": _short(card), "commands": [], "refused": True,
+                       "why": _WHY["control"]}
+            out.append(control)
+            continue
+        if s.startswith("*"):
+            continue
+        paths, unparsed = _card_paths(n, card)
+        if unparsed:
+            out.append({"kind": "unparsed", "line": n, "text": unparsed.text, "refused": True,
+                        "why": _WHY["unparsed"]})
+        kind = "file" if not word.startswith((".inc", ".lib")) else "lib" if word.startswith(".lib") else "include"
+        for path in paths:
+            refused = (n, "path", path) in refused_at
+            out.append({"kind": kind, "line": n, "text": _short(card), "path": path, "refused": refused,
+                        "why": "reads a file outside the PDK and the package, or one that cannot be told" if refused
+                        else "a path the trust rule allows"})
+    return out
+
+
+def listing(d: Path, *, allowed: list[Path] | None = None, env: dict | None = None) -> dict:
+    """What a check report lists of a library's code (docs/design/packages.md, Publishing): every code block of its
+    cells' schematics, symbols and netlists (each .control block with its commands, shell and osdi among them,
+    *# line, .include / .lib and XSPICE file path, tcleval) and every RTL file at any depth, each with `refused`:
+    whether the trust rule would refuse it in a dependency. `allowed`: the roots an absolute path may read (the PDK's);
+    `env`: the variables the netlister substitutes. Paths in the result are relative to `d`.
+
+        {"blocks": [{cell, file, where, kind, line, text, path?, commands?, refused, why}],
+         "rtl": [{path, refused, findings: [{kind, line, text, path}]}]}"""
+    allowed, env = list(allowed or []), dict(env or {})
+    blocks: list[dict] = []
+    for p in sorted(x for x in Path(d).iterdir() if x.is_file()):
+        if not (p.name.endswith(_NETLIST) or p.suffix in (".sch", ".sym")):
+            continue
+        text = _read(p)
+        try:
+            values = _value_texts(p, text)
+        except Exception as e:                   # what cannot be read cannot be passed
+            values = []
+            blocks.append({"cell": _cell_of(p.name), "file": p.name, "where": p.name, "kind": "unparsed", "line": 0,
+                           "text": _short(f"cannot read {p.name}: {e}"), "refused": True, "why": _WHY["unparsed"]})
+        for where, value in values:
+            blocks += [{"cell": _cell_of(p.name), "file": p.name, "where": where, **b}
+                       for b in _blocks(value, allowed=allowed, env=env)]
+        if p.suffix in (".sch", ".sym"):
+            blocks += [{"cell": _cell_of(p.name), "file": p.name, "where": p.name, "kind": "tcl", "line": f.line,
+                        "text": f.text, "refused": True, "why": _WHY["tcl"]} for f in tcl_findings(text)]
+    rtl = []
+    for p in sorted(x for x in Path(d).rglob("*") if x.suffix in RTL_SUFFIXES and x.is_file()):
+        found = rtl_findings(_read(p))
+        rtl.append({"path": p.relative_to(d).as_posix(), "refused": bool(found),
+                    "findings": [{"kind": f.kind, "line": f.line, "text": f.text, **({"path": f.path} if f.path
+                                                                                       else {})} for f in found]})
+    return {"blocks": blocks, "rtl": rtl}
+
+
 def counts(scan: dict) -> dict:
     """How many findings of each kind of content a scan_dir listing has: {'spice', 'rtl', 'tcl'}."""
     return {"spice": sum(map(len, scan["cells"].values())), "rtl": sum(map(len, scan["rtl"].values())),

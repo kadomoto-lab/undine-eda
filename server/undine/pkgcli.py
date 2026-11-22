@@ -22,6 +22,8 @@ Publishing (phase 5; LIBRARY is a project library's directory, or PROJECT/LIBRAR
                                 it guessed
     pkg pack LIBRARY            the index line of the release: the package's subdirectory clean, HEAD at its tag
                                 (v<version>, or <name>-v<version> in a repository of several packages)
+    pkg check LIBRARY --no-run  the checks that need no PDK, into <project>/.undine/check/<name>-<version>/
+                                undine-check.json (DRC, LVS and specs are not run yet, so it does not pass)
 
 search, info and outdated read the local copy of each index (fetched once on first use); `pkg index update`, `pkg
 update` and a resolution that finds no version it needs fetch it again."""
@@ -92,6 +94,15 @@ def add_parser(sub) -> None:
                     "another index gets its URL")
     pa.add_argument("--check", metavar="FILE", help="the check report (undine-check.json) the line links")
     pa.add_argument("--check-url", metavar="URL", help="the https URL the report is served at")
+    ck = pk.add_parser("check", help="what a publish requires, into undine-check.json")
+    ck.add_argument("library", help=lib_help)
+    ck.add_argument("--no-run", action="store_true", help="only the checks that need no PDK (DRC, LVS, symbols, "
+                    "netlists and specs are not run, so the report does not pass); required for now")
+    ck.add_argument("--index", help="the index the package is for (default: the default index)")
+    ck.add_argument("--offline", action="store_true", help="fetch no index and read no remote repository")
+    ck.add_argument("--out", metavar="FILE", help="write the report here (default: <project>/.undine/check/"
+                    "<name>-<version>/undine-check.json)")
+    ck.add_argument("--json", action="store_true", help="print the report as well")
     ixp = pk.add_parser("index", help="the indexes known here").add_subparsers(dest="index_cmd", required=True)
     for name in ("list", "update", "add"):
         x = ixp.add_parser(name)
@@ -113,9 +124,9 @@ def run(args: argparse.Namespace, store) -> int:
     try:
         if args.pkg_cmd == "index":
             return _index(args, store)
-        if args.pkg_cmd in ("init", "pack"):                    # a library, its project found from it
+        if args.pkg_cmd in ("init", "pack", "check"):           # a library, its project found from it
             src = pkgsource.locate(args.library, store)
-            return {"init": _init, "pack": _pack}[args.pkg_cmd](src, args)
+            return {"init": _init, "pack": _pack, "check": _check}[args.pkg_cmd](src, args)
         if args.pkg_cmd in ("search", "info"):
             meta = store.get(args.project).meta if args.project else {}
             url = ix.url_of(args.index, meta)
@@ -501,3 +512,40 @@ def _pack(src, args) -> int:
     t = pkgsource.tree(str(src.top), commit, src.subdir, tag)
     print(ix.line_text(pkgsource.line_for(src, commit, t, url, check)))
     return 0
+
+
+def _check(src, args) -> int:
+    import json
+    from pathlib import Path
+
+    from undine.store import checkreport, pkgsource
+    from undine.store import index as ix
+    if not args.no_run:
+        raise pkgsource.PackageSourceError("pkg check runs DRC, LVS and the specs in a later version of Undine: for "
+                                           "now give --no-run, for the checks that need no PDK")
+    m = pkgsource.need_manifest(src)
+    tag, commit = pkgsource.at_tag(src)
+    report = checkreport.build(src, tag, commit, index_url=ix.url_of(args.index, src.prj.meta),
+                               offline=args.offline, run=False)
+    path = Path(args.out) if args.out else checkreport.default_path(src)
+    sha = checkreport.write(path, report)
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    pkg = report["package"]
+    print(f"{m.name} {m.version} at {tag} ({commit[:12]}), tree {pkg['tree'] or '-'}")
+    f = report["files"]
+    print(f"  files    {f['count']}, {f['bytes']} bytes" + (f", the largest {f['largest']['path']} "
+                                                            f"({f['largest']['bytes']})" if f["largest"] else ""))
+    print(f"  license  {report['license']['expression'] or '-'}")
+    for d in report["dependencies"]:
+        print(f"  needs    {d['package']} {d['req']}" + (f" -> {d['resolved']}" if d.get("resolved") else ""))
+    code = report["code"]
+    flagged = sum(1 for b in code["blocks"] if b["refused"]) + sum(1 for x in code["rtl"] if x["refused"])
+    print(f"  code     {len(code['blocks'])} block(s), {len(code['rtl'])} RTL file(s), {flagged} the trust rule "
+          "refuses")
+    for w in report["warnings"]:
+        print(f"~ {w['check']}: {w['message']}")
+    for p in report["problems"]:
+        print(f"! {p['check']}: {p['message']}")
+    print(f"wrote {path} (sha256 {sha}): {'passes' if report['passed'] else 'does not pass'}")
+    return 0 if report["passed"] else 1

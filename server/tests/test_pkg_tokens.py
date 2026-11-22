@@ -29,6 +29,7 @@ from undine import tools  # noqa: E402
 from undine.pdks import fetchjobs  # noqa: E402
 from undine.server.api import Server, create_app  # noqa: E402
 from undine.store import cas, deps, gitsrc  # noqa: E402
+from undine.store.changeset import ChangesetError, Changesets  # noqa: E402
 from undine.store import index as ix  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not shutil.which("git"), reason="needs git")
@@ -635,3 +636,177 @@ def test_a_queued_job_is_refused_when_an_earlier_one_changed_the_files(tmp_path,
     assert j2["state"] == "failed" and j2["code"] == "files_changed", j2
     assert "changed since the fetch was confirmed" in j2["error"]
     assert "ip" not in prj.library_specs() and not gitsrc.repo_path(url).exists()
+
+
+# ------------------------------------------------------------------ regressions (verification of the fixes)
+
+
+def test_a_damaged_locked_entry_is_said_the_same_by_the_route_and_the_plan(tmp_path, remotes, monkeypatch):
+    # 1: a locked entry with a damaged object whose commit only the remote has. The first stage takes the bad object
+    # out, after which the entry is one not in the store; the route and plan_fetch both say it that way from the
+    # start (a plain entry left for sync, which then needs the token), so no plan is one the confirmation refuses
+    _, prj = _project(tmp_path)
+    repo = tmp_path / "ip"
+    commit = _commit(repo, {"inv.sym": SYM + "* ip's own\n"}, "v1", "v1")      # an object no other repository has
+    url = remotes.add(f"https://{HOST}/ip.git", repo)
+    deps.add(prj, "ip", url, "v1")                            # the command line
+    _damage(prj, "ip")
+    shutil.rmtree(deps.dep_dir(prj.path, "ip"))
+    shutil.rmtree(gitsrc.repo_path(url))
+    local, _ = _plain(tmp_path / "local" / "loc", ["buf"])
+    srv, c = _server(tmp_path)
+    calls = _no_network(monkeypatch)
+    args = {"name": "loc", "git": str(local), "rev": "v1"}
+    assert deps.plan_fetch(srv.project("p"), "add", args, srv.dep_roots, srv.dep_hosts)["fetches"] == []
+    r = c.post("/api/p/p/deps", json=args)
+    assert r.status_code == 200, r.text                        # loc added; ip is left for sync, as when not stored
+    assert (deps.dep_dir(prj.path, "loc") / "buf.sym").is_file() and not deps.dep_dir(prj.path, "ip").exists()
+    r = c.post("/api/p/p/deps/sync", json={})
+    assert r.status_code == 409 and [(f["url"], f["commit"]) for f in r.json()["plan"]["fetches"]] == [(url, commit)]
+    assert [u for u in calls if u.startswith("https://")] == []      # a local repository needs none
+    job = _fetch(c, r.json()["plan"])                          # the confirmation is accepted, the job runs
+    assert job["state"] == "done", job
+    assert (deps.dep_dir(prj.path, "ip") / "inv.sym").read_text() == SYM + "* ip's own\n"
+    # a package so damaged: not_synced from the first stage, as after it (never a fetch nor a plan to refuse)
+    _, line = _index_world(tmp_path, remotes)
+    deps.add(srv.project("p"), "amp", None, package="amp")
+    _damage(prj, "amp")
+    shutil.rmtree(deps.dep_dir(prj.path, "amp"))
+    shutil.rmtree(gitsrc.repo_path(line["git"]))
+    calls.clear()
+    for _ in range(2):
+        r = c.post("/api/p/p/deps/ip/update", json={"rev": "v1"})
+        assert r.status_code == 409 and r.json()["code"] in ("not_synced", "needs_fetch"), r.text
+    assert [u for u in calls if u.startswith("https://")] == []      # a local repository needs none
+
+
+def test_rows_are_compared_by_what_is_fetched_and_a_tree_both_give(tmp_path, remotes):
+    # 1: a row without a tree (found when a commit went while it was read) matches the plan's row; two trees that
+    # differ do not
+    _index_world(tmp_path, remotes)
+    _project(tmp_path)
+    _, c = _server(tmp_path)
+    plan = c.post("/api/p/p/deps", json={"name": "amp", "package": "amp"}).json()["plan"]
+    f = plan["fetches"][0]
+    assert _confirm(c, plan, fetches=[{**f, "tree": None}]).status_code == 200
+    assert _confirm(c, plan, fetches=[{**f, "tree": "sha256:" + "0" * 64}]).status_code == 400
+    assert _confirm(c, plan, fetches=[f, f]).status_code == 400            # a row twice is not the plan
+
+
+def _index_cs_project(tmp_path, remotes):
+    """The changeset test project (no git repository yet) with a format 2 lock, and a remote index package."""
+    w, line = _index_world(tmp_path, remotes)
+    root, srv, cs = tc.setup()
+    srv.dep_roots, srv.dep_hosts = [tmp_path.resolve()], [HOST]
+    prj = srv.project("p")
+    deps.write_lock(prj.path, {**deps.read_lock(prj.path), "format": 2, "pdk": None, "tools": copy.deepcopy(NOW)})
+    return w, line, root, srv, cs, TestClient(create_app(srv, None))
+
+
+def test_a_confirmed_one_click_plans_again_before_it_opens_a_changeset(tmp_path, remotes):
+    # 2: the index refreshed between the confirmation and the job: the newer version is a fetch the token does not
+    # hold, refused before anything is opened (no git-setup, no discarded changeset)
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    r = c.post("/api/p/p/deps/changeset", json={"action": "add", "name": "amp", "package": "amp", "version": "^1"})
+    assert r.status_code == 409, r.text
+    tok = _confirm(c, r.json()["plan"]).json()["token"]
+    _remote_package(w, remotes, "amp", "1.1.0", line["git"])
+    ix.Index(str(w.index)).update()                           # a person's refresh meanwhile
+    job = _wait(c, "p", c.post("/api/p/p/deps/fetch", json={"token": tok}).json()["job"])
+    assert job["state"] == "failed" and job["code"] == "needs_fetch", job
+    assert [f["version"] for f in job["plan"]["fetches"]] == ["1.1.0"]
+    assert not (srv.project("p").path / ".git").exists() and cs.list("p") == []
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_confirmed_one_click_checks_the_files_and_opens_under_one_hold_of_the_lock(tmp_path, remotes, monkeypatch):
+    # 3b: the changeset is made from the project while its dependency lock is held (checked there, not before)
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    prj = srv.project("p")
+    held = []
+    real_create = Changesets.create
+
+    def create(self, *a, **k):
+        try:
+            with deps._deps_lock(prj.path, wait=False):
+                held.append(False)
+        except deps.DepsBusy:
+            held.append(True)
+        return real_create(self, *a, **k)
+    monkeypatch.setattr(Changesets, "create", create)
+    r = c.post("/api/p/p/deps/changeset", json={"action": "add", "name": "amp", "package": "amp", "version": "^1"})
+    job = _fetch(c, r.json()["plan"])
+    assert job["state"] == "done", job
+    assert held == [True]
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_relock_fast_path_writes_under_the_lock_it_checked_the_files_in(tmp_path, monkeypatch):
+    # 3b: a confirmed lock with nothing to resolve writes the tools under the same hold as the files check
+    _, prj = _project(tmp_path)
+    held = []
+    real = deps._record_env
+
+    def record(p, guard, todo):
+        try:
+            with deps._deps_lock(p.path, wait=False):
+                held.append(False)
+        except deps.DepsBusy:
+            held.append(True)
+        return real(p, guard, todo)
+    monkeypatch.setattr(deps, "_record_env", record)
+    deps.relock(prj, local_roots=[tmp_path], allow=deps.Allow(files=deps.files_sha(prj.path)))
+    assert held == [True]
+    with pytest.raises(deps.FilesChanged):
+        deps.relock(prj, local_roots=[tmp_path], allow=deps.Allow(files="0" * 64))
+
+
+def test_a_remove_in_a_changeset_checks_the_files(tmp_path):
+    # 3a: a confirmed remove in a changeset's working copy, its files changed while the job waited: refused
+    root, srv, cs = tc.setup()
+    srv.dep_roots = [tmp_path.resolve()]
+    c = TestClient(create_app(srv, None))
+    local, _ = _plain(tmp_path / "loc", ["buf"])
+    cid = cs.create("p", "a dependency", actor="user")["id"]
+    assert c.post(f"/api/p/p/changesets/{cid}/deps", json={"action": "add", "name": "loc", "git": str(local),
+                                                            "rev": "v1"}).status_code == 200
+    work = srv.project(f"p~{cid}")
+    r = c.post("/api/confirmations", json={"kind": "dependency", "project": "p", "op": "remove", "name": "loc",
+                                           "changeset": cid, "fetches": []})
+    assert r.status_code == 200, r.text
+    with deps._deps_lock(work.path):
+        job = c.post("/api/p/p/deps/fetch", json={"token": r.json()["token"]}).json()["job"]
+        lock = deps.read_lock(work.path)
+        deps.write_lock(work.path, {**lock, "tools": {**lock["tools"], "magic": {"version": "8.3", "from": "pixi"}}})
+    job = _wait(c, "p", job)
+    assert job["state"] == "failed" and job["code"] == "files_changed", job
+    assert "loc" in srv.project(f"p~{cid}").library_specs()
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_job_failure_with_no_code_of_its_own_keeps_its_changeset_and_kind(tmp_path, remotes, monkeypatch):
+    # 4: an adopt refused with an error that has no code (ChangesetError): the job gets the status's code and the
+    # kept changeset; a refusal's own "kind" survives under params
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+
+    def refuse(self, project, cid, actor="user", *a, **k):
+        raise ChangesetError(f"cannot apply {cid}: refused here")
+    monkeypatch.setattr(Changesets, "apply", refuse)
+    r = c.post("/api/p/p/deps/changeset", json={"action": "add", "name": "amp", "package": "amp", "version": "^1"})
+    job = _fetch(c, r.json()["plan"])
+    assert job["state"] == "failed" and job["code"] == "invalid_request", job
+    cid = job["params"]["changeset"]
+    assert job["changeset"] == cid and "cannot apply" in job["error"]
+    assert next(x for x in cs.list("p") if x["id"] == cid)["status"] == "open"
+    jobs = fetchjobs.Jobs()
+
+    def fail(say):
+        raise fetchjobs.JobFailed("cannot hold it", "unsupported_library", {"kind": "link_out", "library": "x"})
+    j = jobs.start("k", "p", fail, kind="dependency")
+    end = time.monotonic() + 10
+    while j.state != "failed":
+        assert time.monotonic() < end
+        time.sleep(0.01)
+    pub = j.public()
+    assert pub["kind"] == "dependency" and pub["params"] == {"kind": "link_out", "library": "x"}
+    shutil.rmtree(root, ignore_errors=True)

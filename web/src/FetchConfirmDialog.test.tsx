@@ -158,3 +158,13 @@ it("Esc closes only the topmost dialog", async () => {
   expect(inner).toHaveBeenCalledTimes(1);
   expect(outer).not.toHaveBeenCalled();
 });
+
+it("a failed job that names a kept changeset is a refusal even with no code; a refusal's own fields come from params", () => {
+  const kept = jobError(job("failed", { code: null, error: "cannot apply cs-000009: refused here", changeset: "cs-000009" } as Partial<DepFetchJob>))!;
+  expect(kept).toBeInstanceOf(ApiError);
+  expect([kept.code, keptChangesetOf(kept)]).toEqual(["invalid_request", "cs-000009"]);
+  expect(jobError(job("failed", { code: null, error: "something else" }))).toBeNull();     // nothing to act on: the words
+  const unsupported = jobError(job("failed", { code: "unsupported_library", error: "x",
+    params: { kind: "link_out", library: "ip", path: "/elsewhere" } }))!;
+  expect([unsupported.status, unsupported.params?.kind, unsupported.params?.library]).toEqual([400, "link_out", "ip"]);
+});

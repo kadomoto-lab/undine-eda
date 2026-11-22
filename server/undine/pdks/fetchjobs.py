@@ -117,9 +117,11 @@ class Job:
         self.progress = dict(p)
 
     def public(self) -> dict:
+        # a failure's extra fields whole under "params" (as an HTTP error's body has them: a refusal's own "kind"
+        # stays there), and at the top level where they do not clash with the job's own fields
         out = {"id": self.id, "project": self.project, "kind": self.kind, "state": self.state, "log": list(self.log),
                "result": self.result, "error": self.error, "code": self.code, "progress": self.progress,
-               "created": self.created, "ended": self.ended}
+               "created": self.created, "ended": self.ended, "params": dict(self.extra)}
         return out | {k: v for k, v in self.extra.items() if k not in out}
 
 

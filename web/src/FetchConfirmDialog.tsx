@@ -20,15 +20,21 @@ export const sizeText = (n: number): string => {
 };
 
 // the fields every job has; the rest of a failed job's fields are its refusal's (changeset, problems, packages ...)
-const JOB_KEYS = new Set(["id", "project", "kind", "state", "log", "progress", "result", "error", "code", "created", "ended"]);
+const JOB_KEYS = new Set(["id", "project", "kind", "state", "log", "progress", "result", "error", "code", "created", "ended",
+  "params"]);
 const STATUS: Record<string, number> = { untrusted: 403, files_changed: 403, forbidden: 403, not_direct: 400,
-  invalid_request: 400, not_found: 404 };
-/** A job that failed with a route's code, as the ApiError that route would have raised: the same handlers read it
- * (a changeset kept open for review, a refused resolution's problems, a PDK locked packages do not accept ...). */
+  invalid_request: 400, not_set_up: 400, unsupported_library: 400, not_found: 404 };
+/** A failed job as the ApiError the operation's route would have raised, so the same handlers read it (a changeset
+ * kept open for review, a refused resolution's problems, a PDK locked packages do not accept ...): any failure with a
+ * code, or one that names a changeset; not a next round (needs_fetch), not a job that failed with no code at all.
+ * The refusal's own fields are `params` (an older server: the job's other fields). */
 export function jobError(j: DepFetchJob): ApiError | null {
-  if (j.state !== "failed" || !j.code || j.code === "needs_fetch") return null;
-  const params = Object.fromEntries(Object.entries(j).filter(([k]) => !JOB_KEYS.has(k)));
-  return new ApiError(STATUS[j.code] ?? 409, j.error ?? j.code, j.code, params);
+  if (j.state !== "failed" || j.code === "needs_fetch") return null;
+  const params = j.params && typeof j.params === "object" ? j.params
+    : Object.fromEntries(Object.entries(j).filter(([k]) => !JOB_KEYS.has(k)));
+  if (!j.code && typeof params.changeset !== "string") return null;
+  const code = j.code ?? "invalid_request";
+  return new ApiError(STATUS[code] ?? 409, j.error ?? code, code, params);
 }
 
 /** The plan a failed job carries (code needs_fetch), or null. */

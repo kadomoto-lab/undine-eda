@@ -792,7 +792,12 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   or the new kinds. The fetch route does not make the plan again before it starts the job: the job's allowed fetches
   hold it to what was confirmed. A read that is not confirmed never reaches the network, also when the kept repository
   lost a commit after it was looked at (`gitsrc.fetch(network=False)`, `deps.NotKept`), or when a damaged store object
-  is read again from git (sync and staging use the allow-aware `offline_for`): either is a need. Jobs are lost on a restart; what one fetched stays in the store.
+  is read again from git (sync and staging use the allow-aware `offline_for`): either is a need. A locked entry whose
+  object is damaged is, once the bad object is taken out, an entry not in the store, and is said so from the first
+  stage (a plain one left for sync, a package `not_synced`), so the route and `plan_fetch` (which looks at staging
+  too) never disagree. A confirmed one-click operation plans again before it opens its changeset, and checks the files
+  and opens it under one hold of the project's dependency lock (deps.lock comes before the changesets' lock
+  everywhere). Jobs are lost on a restart; what one fetched stays in the store.
 - **Agent tools** (MCP and the built-in agent): `search_packages`, `get_package`, `get_dependency_status`,
   `propose_dependency` (add / update / remove in the agent's changeset). Package and index text (descriptions,
   READMEs, cell names, intent notes, index lines) is data for agents: the tools return it under `agent.py`'s DATA rule,

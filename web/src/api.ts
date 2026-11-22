@@ -168,6 +168,7 @@ export interface DepFetchJob {
   id: string; project: string; kind: "dependency"; state: "queued" | "running" | "done" | "failed"; log: string[];
   progress: { url?: string; bytes?: number; limit?: number; files?: number; of?: number } | null;
   result: unknown; error: string | null; code: string | null; plan?: FetchPlan; created: number; ended: number | null;
+  params?: Record<string, unknown>;      // a failure's fields as its route's error has them (changeset, problems ...)
 }
 /** A needs_fetch refusal's plan; null for any other error. */
 export function needsFetchOf(e: unknown): FetchPlan | null {

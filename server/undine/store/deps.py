@@ -1246,9 +1246,9 @@ class _Graph:
         if self.needs:
             raise NeedsFetch(self.plan())
 
-    def settle(self) -> None:
-        """settle_open, then, with Allow.plan_only, Planned: the plan is known and nothing is staged or written."""
-        self.settle_open()
+    def planned(self) -> None:
+        """With Allow.plan_only, Planned: the plan is known, staging included (what stage() found a need), and
+        nothing is written (the caller removes what was staged)."""
         if self.allow is not None and self.allow.plan_only:
             raise Planned(self.plan())
 
@@ -1552,8 +1552,11 @@ class _Graph:
                         _, files, value = _read_commit(node.id, spec, node.commit, self.source(spec), self.kind,
                                                        self.offline_for(spec, node.commit), node.files_mode)
                     except NotKept:                      # gone since it was read: a need, said by run()
-                        self.need(node.git, node.commit, rev=None, commit=node.commit, subdir=node.subdir,
-                                  package=node.package)
+                        if not any(f["url"] == node.git and f["commit"] == node.commit for f in self.needs.values()):
+                            line = self.chosen.get((node.git, node.commit, node.subdir or None)) if node.index \
+                                else None
+                            self.need(node.git, node.commit, rev=None, commit=node.commit, subdir=node.subdir,
+                                      line=line, package=node.package, known=line is not None)
                         continue
                     if node.manifest is not None and self.kind == "sha":
                         mf.check_files(node.manifest, files, f"{node.git} @ {node.commit[:12]}"
@@ -1730,9 +1733,17 @@ class _Graph:
                 try:
                     staged[n] = _staged(self.prj.path, n, entry, node.files, lambda s=spec: self.source(s),
                                         self.offline_for(spec, entry.get("commit")))
-                except NotKept:      # a damaged object, and the commit only a remote has: confirmed first
+                except NotKept:      # a damaged object, and the commit only a remote has
                     if self.allow is None:
                         raise
+                    if node.fixed:
+                        # cas.install took the bad object out: the entry is now what one not in the store is (the
+                        # next plan sees just that), so it is said the same way here: a plain entry is left for
+                        # sync, a package is not_synced (fixed()). Then the route and plan_fetch agree.
+                        if node.manifest is not None or entry.get("package"):
+                            raise NotSynced(f"{n}: its files are neither in the store nor installed as locked: "
+                                            f"run lib sync for {self.prj.name} first; nothing was changed") from None
+                        continue
                     self.need(entry["git"], entry["commit"], rev=None, commit=entry["commit"],
                               subdir=entry.get("subdir"), package=entry.get("package") or n, known=True)
             self.settle_open()
@@ -1888,9 +1899,10 @@ def add(prj, name: str, git: str | None, rev: str | None = None, subdir: str | N
             if git is None and version is None:          # cargo add: the newest that fits, as ^<it>
                 spec["version"] = f"^{res.nodes[res.direct[name]].version}"
             libs, pkgs, installs = g.tables(res)
-            g.settle()
-            staged = g.stage(installs)
+            g.settle_open()
+            staged = g.stage(installs)                   # a damaged object only a remote has: a need here too
             try:
+                g.planned()
                 env = environment(prj.pdk)               # for a new lock; the tools answer before the guard
                 with _committing(prj, guard):
                     if name in prj.library_specs():
@@ -1998,7 +2010,7 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
             target = g.graph.direct.get(name)
             res = g.run(direct, g.fixed(keys, {target} if target else set()))
             libs, pkgs, installs = g.tables(res)
-            g.settle()
+            g.settle_open()
             got = libs.get(name) or {}
             if expect is not None and (got.get("commit"), got.get("tree")) != (expect["commit"], expect["tree"]):
                 raise DepError(f"{name}: the index now names another commit for it ({str(got.get('commit'))[:12]}, "
@@ -2006,6 +2018,7 @@ def update(prj, name: str, rev: str | None = None, guard=None, local_roots: list
             staged = g.stage(installs)
             walked = [*keys, name]
             try:
+                g.planned()
                 preview = copy.deepcopy(lock or {})
                 _put_tables(preview, libs, pkgs)
                 changed = g.changed(preview, walked)
@@ -2151,30 +2164,33 @@ def _used_by_all(prj, name: str, changes: dict, moved: list[dict]) -> list[str]:
     return out
 
 
-def remove(prj, name: str, guard=None) -> dict:
+def remove(prj, name: str, guard=None, allow: Allow | None = None) -> dict:
     """Removes a dependency from project.json, with the packages only it reached (their entries and every name they
     were installed under), from the lock alone: nothing is fetched or resolved. A package that another one still
     places stays (it moves from `libraries` to `packages`, under the names its requirers give it) and its names are
     reported in `kept` ({name, placed_by}); `removed_packages` lists what went ({package, version, commit, names}).
-    The trust given to what went goes too. A name only a package places is NotDirect."""
+    The trust given to what went goes too. A name only a package places is NotDirect. `allow` (a confirmed job): its
+    files checked under the dependency lock this removal holds, before anything is written (FilesChanged)."""
     _dep_spec(prj, name)
-    with _deps_lock(prj.path), _committing(prj, guard):
-        _dep_spec(prj, name)                              # removed meanwhile?
-        _own_dir(prj.path, name)
-        lock = read_lock(prj.path)                        # refused before project.json changes
-        others = [k for k in _git_specs(prj) if k != name]
-        removed, kept, gone, remark = _removal(prj, lock, name, others)
-        for n in [*gone, *(n for n, _ in remark)]:
-            _own_dir(prj.path, n)                         # every name checked before anything is written or removed
-        del prj.meta["libraries"][name]
-        _untrust(prj.meta, [n for r in removed for n in (r["package"], *r["names"]) if n])
-        prj.save()
-        if lock is not None:
-            write_lock(prj.path, lock)
-        for n, marker in remark:
-            _remark(_own_dir(prj.path, n), marker)
-        for n in gone:
-            shutil.rmtree(_own_dir(prj.path, n), ignore_errors=True)
+    with _deps_lock(prj.path):
+        _check_files(prj, as_allow(allow))
+        with _committing(prj, guard):
+            _dep_spec(prj, name)                              # removed meanwhile?
+            _own_dir(prj.path, name)
+            lock = read_lock(prj.path)                        # refused before project.json changes
+            others = [k for k in _git_specs(prj) if k != name]
+            removed, kept, gone, remark = _removal(prj, lock, name, others)
+            for n in [*gone, *(n for n, _ in remark)]:
+                _own_dir(prj.path, n)                         # every name checked before anything is written or removed
+            del prj.meta["libraries"][name]
+            _untrust(prj.meta, [n for r in removed for n in (r["package"], *r["names"]) if n])
+            prj.save()
+            if lock is not None:
+                write_lock(prj.path, lock)
+            for n, marker in remark:
+                _remark(_own_dir(prj.path, n), marker)
+            for n in gone:
+                shutil.rmtree(_own_dir(prj.path, n), ignore_errors=True)
     return {"name": name, "removed_packages": removed, "kept": kept}
 
 
@@ -2642,7 +2658,7 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
                     continue
                 need(id)
             if g is not None:
-                g.settle()
+                g.settle_open()
 
             def may(i: int) -> bool:                    # a fetch this sync may make (over HTTP: confirmed)
                 if g is None:
@@ -2682,6 +2698,7 @@ def sync(prj, guard=None, local_roots: list[Path] | None = None, offline: bool |
                     out.append(_row(name, "installed", want["commit"], want))
                 if g is not None:
                     g.settle_open()
+                    g.planned()                          # plan_fetch: staging looked at too, nothing written
                 env = environment(prj.pdk)
                 with _committing(prj, guard):
                     lock = _lock_of(prj, env)             # as it is now (a PDK change meanwhile is kept)
@@ -2779,8 +2796,11 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
             if allow is not None and allow.plan_only:
                 raise Planned({"op": "lock", "fetches": [], "complete": True})
             if allow is not None and allow.files is not None:
-                with _deps_lock(prj.path):               # the tools are written: the files as confirmed first
+                # a confirmed job: the files as confirmed and the tools written under one hold of the lock
+                with _deps_lock(prj.path), _in_store(prj):
                     _check_files(prj, allow)
+                    lock, created, _ = _record_env(prj, guard, [])
+                return {"lock": lock, "resolved": [], "created": created}
             with _in_store(prj):                         # nothing to fetch: no wait behind a fetch in progress
                 lock, created, _ = _record_env(prj, guard, [])
             return {"lock": lock, "resolved": [], "created": created}
@@ -2818,10 +2838,11 @@ def relock(prj, guard=None, local_roots: list[Path] | None = None, *,
                 direct[name] = g.requirement(name, specs[name], specs[name].get("package"), at)
             res = g.run(direct, g.fixed(keys, {g.graph.direct[n] for n in todo if n in g.graph.direct}))
             libs, pkgs, installs = g.tables(res)
-            g.settle()
+            g.settle_open()
             staged = g.stage(installs)
             fmt = g.fmt
             try:
+                g.planned()
                 env = environment(prj.pdk, fmt)          # the tools answer outside the lock
                 with _committing(prj, guard):
                     now, created = _lock_now(prj, env if start is None and fmt == 1 else None)

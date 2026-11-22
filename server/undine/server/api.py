@@ -7,6 +7,7 @@ import re
 import sys
 import threading
 import time
+import contextlib
 import dataclasses
 from dataclasses import dataclass
 from functools import wraps
@@ -1364,6 +1365,11 @@ def _trust_row(d: Path, trusted: set[str]) -> dict:
             "trusted": key in trusted, "findings": _trust_findings(d.name, trust.scan_dir(d))}
 
 
+# the code an HTTP error without one of its own gets (the exception handler's), also in a fetch job's failure
+_STATUS_CODES = {400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "conflict",
+                 422: "validation_error", 502: "upstream_error"}
+
+
 def _err(e: Exception) -> HTTPException:
     if isinstance(e, changesetmod.MergeConflict):       # nothing written: each file and its conflicts (the body's "files")
         err = HTTPException(409, str(e))
@@ -1834,9 +1840,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
         # Keep detail and HTTP status compatible with scripts/MCP. UI wording belongs to the client.
-        codes = {400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found",
-                 409: "conflict", 422: "validation_error", 502: "upstream_error"}
-        body = {"detail": exc.detail, "code": getattr(exc, "code", codes.get(exc.status_code, "request_failed")), "params": {}}
+        body = {"detail": exc.detail, "code": getattr(exc, "code", _STATUS_CODES.get(exc.status_code, "request_failed")), "params": {}}
         if getattr(exc, "files", None) is not None:       # 409 merge_conflict of a changeset's apply / revert
             body["files"] = jsonable_encoder(exc.files)
         if getattr(exc, "extra", None):                   # 400 not_set_up ("top", "project", "command"), unsupported_library
@@ -2266,9 +2270,18 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
     _files_sha = deps.files_sha                # what a dependency fetch token binds of the project
 
     def _fetch_key(f: dict) -> tuple:
-        """A fetch row as compared at the confirmation: strings only ("" for none), so that rows of one URL that
-        differ by a missing field still sort."""
-        return tuple(str(f.get(k) or "") for k in ("url", "rev", "commit", "subdir", "tree"))
+        """A fetch row as compared at the confirmation: what is fetched (url, rev, commit, subdir), strings only (""
+        for none), so that rows of one URL that differ by a missing field still sort. The tree is compared apart
+        (_same_fetches): a row found in another way (a commit gone while it was read) may not know it."""
+        return tuple(str(f.get(k) or "") for k in ("url", "rev", "commit", "subdir"))
+
+    def _same_fetches(asked: list, planned: list) -> bool:
+        """The rows the person confirmed are the plan's: the same fetches, and a tree that both give the same."""
+        a = {_fetch_key(f): f.get("tree") for f in asked if isinstance(f, dict)}
+        b = {_fetch_key(f): f.get("tree") for f in planned}
+        if len(a) != len([f for f in asked if isinstance(f, dict)]) or set(a) != set(b):
+            return False
+        return all(not a[k] or not b[k] or a[k] == b[k] for k in a)
 
     def _confirm_dependency(req: Confirm) -> dict:
         if req.op not in ("add", "update", "remove", "lock", "sync"):
@@ -2283,8 +2296,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         request = _dep_request(req.op, args, cid, req.adopt, req.reason, req.title)
         prj = _dep_target(real, request)
         plan = deps.plan_fetch(prj, req.op, args, srv.dep_roots, srv.dep_hosts)
-        asked = sorted(_fetch_key(f) for f in req.fetches or [] if isinstance(f, dict))
-        if asked != sorted(_fetch_key(f) for f in plan["fetches"]):
+        if not _same_fetches(req.fetches or [], plan["fetches"]):
             said = ", ".join(f"{f['url']} @ {(f['commit'] or f['rev'] or '?')[:12]}" for f in plan["fetches"])
             raise ValueError(f"project {real} would fetch {said or 'nothing'}, not what was confirmed: show the fetch "
                              "dialog again")
@@ -2297,14 +2309,21 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         """Runs the operation of `request` with what `allow` lets it fetch: what the route that named it returns."""
         op, args, reason = request["op"], {k: request.get(k) for k in _DEP_KEYS}, request.get("reason", "")
         if request.get("adopt"):
-            # the operation runs in a changeset made from the project: the files as confirmed, under its dependency
-            # lock, before the changeset is opened
+            # the operation runs in a changeset made from the project: the files as confirmed, checked and copied
+            # into the changeset under one hold of the project's dependency lock (_one_click's `opening`). Safe for
+            # the lock order: deps.lock is taken before the changesets' lock everywhere (_DepGuard), and what holds
+            # the changesets' lock takes a project's deps.lock without waiting (the adopt's install, restore);
+            # create() takes neither the changesets' lock nor a deps.lock itself
             prj = srv.project(real)
-            with deps._deps_lock(prj.path):
-                deps._check_files(prj, allow)
+
+            @contextlib.contextmanager
+            def opening():
+                with deps._deps_lock(prj.path):
+                    deps._check_files(prj, allow)
+                    yield
             body = DepChangeset(action=op, **{k: v for k, v in args.items() if v is not None}, reason=reason,
                                 title=request.get("title"))
-            return _one_click(real, body, actor, dataclasses.replace(allow, files=None))
+            return _one_click(real, body, actor, dataclasses.replace(allow, files=None), opening)
         if request.get("changeset"):
             cid = request["changeset"]
             out = changesets.dep_op(real, cid, op, args, actor, reason, local_roots=srv.dep_roots,
@@ -2325,9 +2344,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
             r = {"libraries": deps.sync(prj, guard=srv.lock, local_roots=srv.dep_roots, hosts=srv.dep_hosts,
                                         allow=allow)}
         else:
-            with deps._deps_lock(prj.path):          # remove takes the lock itself: checked, then let go
-                deps._check_files(prj, allow)
-            r = {"ok": True, **deps.remove(prj, args["name"], guard=srv.lock)}
+            r = {"ok": True, **deps.remove(prj, args["name"], guard=srv.lock, allow=allow)}
         srv.deps_changed(real)
         return r
 
@@ -2359,13 +2376,11 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                     gitsrc.PROGRESS.set(job.report)
                 try:
                     return _run_dep(real, request, actor, allow)
-                except HTTPException as h:
-                    raise fetchjobs.JobFailed(str(h.detail), getattr(h, "code", None),
-                                              getattr(h, "extra", None)) from None
                 except Exception as e:
-                    h = _err(_needs(e, real, request) if isinstance(e, deps.NeedsFetch) else e)
-                    raise fetchjobs.JobFailed(str(h.detail), getattr(h, "code", None),
-                                              getattr(h, "extra", None)) from None
+                    h = e if isinstance(e, HTTPException) else \
+                        _err(_needs(e, real, request) if isinstance(e, deps.NeedsFetch) else e)
+                    raise fetchjobs.JobFailed(str(h.detail), getattr(h, "code", None) or _STATUS_CODES.get(
+                        h.status_code, "request_failed"), getattr(h, "extra", None)) from None
             job = srv.dep_jobs.start(("deps", str(srv.project(real).path)), real, run, kind="dependency")
             return {"job": job.public()}
         except Exception as e:
@@ -2455,9 +2470,10 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         except Exception as e:
             raise _err(e)
 
-    def _one_click(project: str, req: DepChangeset, actor: str, allow: deps.Allow) -> dict:
+    def _one_click(project: str, req: DepChangeset, actor: str, allow: deps.Allow, opening=None) -> dict:
         """POST /deps/changeset's work, with what `allow` lets the operation fetch (the route: no remote; a fetch job:
-        what the person confirmed). Raises the HTTP error."""
+        what the person confirmed). `opening`: a context the changeset is opened in (a job: the project's files
+        checked under its dependency lock). Raises the HTTP error."""
         if req.action not in ("add", "update", "remove", "pdk"):
             raise _err(ValueError(f"unknown action {req.action!r} (add, update, remove, pdk)"))
         preview = "~" in project
@@ -2490,7 +2506,7 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 deps._not_taken(prj, req.name)
             else:
                 deps._dep_spec(prj, req.name)        # a dependency of project.json (NotDirect, DepError)
-            if req.action != "remove" and not allow.fetches:
+            if req.action != "remove":
                 try:
                     plan = deps.plan_fetch(prj, req.action, _dep_args(req), srv.dep_roots, srv.dep_hosts)
                 except (deps.NeedsFetch, ix.IndexNotFetched, deps.DepsBusy):
@@ -2499,7 +2515,9 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                     # a refusal of the operation itself (a resolution, a repository that is not one ...): it says
                     # the same in the changeset, which is then discarded (slice 1's contract)
                     return
-                if plan["fetches"]:
+                # a fetch `allow` does not hold (none from the route; from a job, one that came since the
+                # confirmation: the index refreshed, a kept commit gone) is refused before anything is opened
+                if any(not allow.may(f["url"], f["rev"] or f["commit"]) for f in plan["fetches"]):
                     raise deps.NeedsFetch(plan)
         try:
             real = changesets._real_of(project)
@@ -2509,7 +2527,8 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
                 return {"changeset": cid, "status": "open", "result": run(real, cid)}
             title = req.title or (f"Set the PDK to {req.pdk}" if req.action == "pdk" else
                                   f"{req.action.capitalize()} {req.name}")
-            meta = changesets.create(real, title, req.reason, actor)
+            with opening() if opening is not None else contextlib.nullcontext():
+                meta = changesets.create(real, title, req.reason, actor)
         except deps.NeedsFetch as e:
             raise _err(_needs(e, project, request))
         except Exception as e:

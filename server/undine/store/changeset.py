@@ -2148,7 +2148,7 @@ class Changesets:
             result = deps.update(prj, name, args.get("rev"), guard=guard, local_roots=local_roots,
                                  version=args.get("version"), hosts=hosts, allow=allow)
         else:
-            result = {"ok": True, **deps.remove(prj, name, guard=guard)}
+            result = {"ok": True, **deps.remove(prj, name, guard=guard, allow=allow)}
         self.srv.deps_changed(meta["preview"])         # packages it moved under names already open
         return {"changeset": cid, "op": guard.public(), "result": result}
 

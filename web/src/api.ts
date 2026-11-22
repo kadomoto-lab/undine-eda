@@ -496,6 +496,8 @@ export interface Effect {
   file?: string;    // r of a flow configuration: flows/<name>.yaml
   name?: string | null; pdk?: [string | null, string | null];   // d
   state?: "installed" | "needs_fetch";   // d: an agent's operation waiting for a person's fetch (nothing installed)
+  // d needs_fetch: what became of it since (absent: still waiting); installed: the next record installed it
+  outcome?: "installed" | "superseded" | "dropped" | "cancelled";
   kept?: boolean;   // a layout cell taken out with its content recorded (delete_unused_cells, delete_cell), or brought back
                     // with it; a schematic / symbol file deleted with its text (k "v", do "del": delete_cell)
   text?: string; obj?: Record<string, unknown>; changes?: Record<string, [unknown, unknown]>;

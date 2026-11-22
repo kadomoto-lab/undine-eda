@@ -890,6 +890,25 @@ describe("an agent's dependency waiting for a fetch", () => {
     expect(screen.queryByTestId("pending-dep")).toBeNull();
   });
 
+  it("names the action in the reader's language", async () => {
+    await setLocale("ja");
+    try {
+      await open({ ...cs, pending_deps: [pending] });
+      const [item] = screen.getAllByTestId("pending-dep");
+      expect(item.textContent).toContain("amp の追加");
+      expect(item.textContent).not.toContain("add amp");
+    } finally { await setLocale("en"); }
+  });
+
+  it("calls a proposal fetched since installed, and counts it once", async () => {
+    const fetched = { ...depOp, effects: [{ ...depOp.effects[0], outcome: "installed" as const }] };
+    const installed = { ...depOp, seq: 3, effects: [{ k: "d" as const, do: "add" as const, name: "amp", state: "installed" as const }] };
+    await open({ ...cs, changes: [{ lib: "@project", ops: [fetched, installed] }], pending_deps: [] });
+    expect(screen.queryByText(/nothing installed yet/)).toBeNull();
+    expect(screen.getAllByText(/proposed, then fetched by a person: installed/).length).toBeGreaterThan(0);
+    expect(summaryLine([fetched, installed])).toBe(t("review:summary.dependencies", { count: 1 }));
+  });
+
   it("shows nothing for a changeset with none", async () => {
     await open(cs);
     expect(screen.queryByTestId("pending-dep")).toBeNull();

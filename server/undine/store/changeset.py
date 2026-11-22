@@ -243,6 +243,20 @@ def _needs_text(needs: list[dict]) -> str:
     return ", ".join(out) or "nothing (the store had it)"
 
 
+def _never_fetched(changes: list[dict]) -> list[dict]:
+    """A closed changeset's changes with each agent's operation that was still waiting for a fetch when it closed
+    marked "outcome": "cancelled" (no fetch replays it any more)."""
+    out = []
+    for lc in changes:
+        if lc.get("lib") != PROJECT_LOG:
+            out.append(lc)
+            continue
+        out.append({**lc, "ops": [{**op, "effects": [
+            {**e, "outcome": "cancelled"} if e.get("state") == "needs_fetch" and not e.get("outcome") else e
+            for e in op.get("effects") or []]} for op in lc.get("ops") or []]})
+    return out
+
+
 def branch_of(project: str, cid: str) -> str:
     return f"undine/{project}/{cid}"
 
@@ -700,6 +714,7 @@ class _DepGuard:
         # a person's fetch replaying an agent's operation that needs one ({op_id, sha, by}): checked to be still
         # pending under the locks, and its record says so ("replays", "fetched_by"), also when nothing changed
         self.replays = replays
+        self.superseded: list[str] = []        # the agents' pending operations on this dependency it replaced
         self.depth = 0
         self.records: list[dict] = []
 
@@ -741,10 +756,17 @@ class _DepGuard:
                         e["pdk"] = [self.before["project"].get("pdk"), after["project"].get("pdk")]
                     rec = {"op": self.op, "args": self.args, "actor": self.actor, "reason": self.reason,
                            "changeset": self.cid, "cell": None, "view": None, "effects": [e]}
+                    mine = self.replays["op_id"] if self._replaying else None
                     if self._replaying:              # the first record only: the operation is installed now
                         e["op_id"] = self.replays["op_id"]
                         rec |= {"replays": self.replays["op_id"], "fetched_by": self.replays["by"]}
                         self.replays = {**self.replays, "done": True}
+                    if self.name is not None:        # other operations on this dependency still waiting: replaced
+                        gone = [x["op_id"] for x in self.cs.pending_ops(self.cs._record(self.project, self.cid))
+                                if x["name"] == self.name and x["op_id"] != mine]
+                        if gone:
+                            rec["supersedes"] = gone
+                            self.superseded += gone
                     self.records.append(self.log.append(rec))
         finally:
             srv.lock.release()
@@ -1853,9 +1875,12 @@ class Changesets:
         net = {(lib, r["seq"]) for lib in libs for r in self._records(meta["preview"], lib)}
         logs = {lib: {x["seq"]: x for x in self._own(meta["preview"], lib)} for lib in libs}
         ops: list[dict] = []
+        done = self._dep_outcomes(meta)
         for lib, r in self._all_records(meta):
             if r["op"] == "save" and not r.get("effects"):
                 continue
+            if lib == PROJECT_LOG and done:            # an agent's operation fetched, replaced or dropped since
+                r = self._with_outcomes(meta, lib, [r])[0]
             kind = r["op"] if r["op"] in ("undo", "redo", "restore") else "edit"
             o = ops[-1] if ops and ops[-1]["opid"] == r.get("opid") else None
             if o is None:
@@ -2211,7 +2236,8 @@ class Changesets:
             with guard:
                 pass
         self.srv.deps_changed(meta["preview"])         # packages it moved under names already open
-        return {"changeset": cid, "op": guard.public(), "result": result}
+        return {"changeset": cid, "op": guard.public(), "result": result,
+                **({"superseded": guard.superseded} if guard.superseded else {})}
 
     def pdk_set(self, project: str, cid: str, spec: str, actor: str = "user", reason: str = "") -> dict:
         """Pins the changeset's working copy to another PDK (Project.set_pdk under _DepGuard, recorded as `pdk_set` in
@@ -2250,7 +2276,8 @@ class Changesets:
                               allow=deps.Allow(wait=False))
         except deps.NeedsFetch as e:
             return self._record_needs(self._real_of(project), cid, action, args, actor, reason, e.plan)
-        return {"changeset": cid, "state": "installed", "op": out["op"], "result": out["result"]}
+        return {"changeset": cid, "state": "installed", "op": out["op"], "result": out["result"],
+                **({"superseded": out["superseded"]} if out.get("superseded") else {})}
 
     def _record_needs(self, project: str, cid: str, action: str, args: dict, actor: str, reason: str,
                       plan: dict) -> dict:
@@ -2275,28 +2302,72 @@ class Changesets:
             self._check_merging(project, cid)
             log = srv.oplog(meta["preview"], PROJECT_LOG)
             log.guard()
+            # an earlier proposal on the same dependency still waiting: this one replaces it (one rule for every
+            # later operation on that name, _DepGuard's too), so no stale one is left that no fetch could apply
+            gone = [x["op_id"] for x in self.pending_ops(meta) if x["name"] == e["name"]]
             rec = log.append({"op": op, "args": clean, "actor": actor, "reason": reason, "changeset": cid,
                               "cell": None, "view": None,
-                              "plan": {**plan, "project": project, "request": request}, "effects": [e]})
+                              "plan": {**plan, "project": project, "request": request}, "effects": [e],
+                              **({"supersedes": gone} if gone else {})})
         return {"changeset": cid, "state": "needs_fetch", "op": {"gseq": rec.get("gseq"), "opid": rec.get("opid")},
-                "op_id": op_id, "needs": needs}
+                "op_id": op_id, "needs": needs, **({"superseded": gone} if gone else {})}
 
-    def pending_ops(self, meta: dict) -> list[dict]:
-        """The dependency operations of an open changeset still waiting for a person's fetch, oldest first: those its
-        project log records as needing one, still in effect (a restore past one takes it back: cancelled) and not
-        replayed by a fetch since (a restore past that fetch makes it pending again). Each {op_id, sha (what a
-        confirmation binds), action, op, name, args, actor, reason, gseq, t, needs, plan, owner}."""
+    def _dep_net(self, meta: dict) -> list[dict]:
+        """The project log's records of an open changeset on git still in effect ([] otherwise)."""
         if meta.get("status") != "open" or not meta.get("git"):
             return []
         try:
-            net = self._records(meta["preview"], PROJECT_LOG)
+            return self._records(meta["preview"], PROJECT_LOG)
         except (KeyError, ValueError):
             return []
-        found: dict[str, dict] = {}
-        done: set[str] = set()
-        for r in net:
+
+    def _dep_outcomes(self, meta: dict, net: list[dict] | None = None) -> dict[str, str]:
+        """What became of the agents' operations that needed a fetch, by op_id: "installed" (a later record in effect
+        replays it), "superseded" (a later record in effect on the same dependency, which names it in "supersedes")
+        or "dropped" (it could no longer apply: a notice that closes it, drop_pending). An op_id not here and still
+        in effect is pending."""
+        out: dict[str, str] = {}
+        for r in self._dep_net(meta) if net is None else net:
             if r.get("replays"):
-                done.add(r["replays"])
+                out[r["replays"]] = "installed"
+            for x in r.get("supersedes") or []:
+                out.setdefault(x, "superseded")
+        for n in meta.get("notices") or []:
+            if n.get("closes") and n.get("op_id"):
+                out.setdefault(n["op_id"], "dropped")
+        return out
+
+    def _with_outcomes(self, meta: dict, lib: str, recs: list[dict]) -> list[dict]:
+        """The project log's records with each needs_fetch effect marked by its outcome (_dep_outcomes: "outcome":
+        installed, superseded or dropped), so the review, the timeline and the evidence do not call an installed
+        operation waiting. Copies: the parsed records are shared."""
+        if lib != PROJECT_LOG:
+            return recs
+        done = self._dep_outcomes(meta)
+        if not done:
+            return recs
+        out = []
+        for r in recs:
+            effs = r.get("effects") or []
+            if any(e.get("state") == "needs_fetch" and e.get("op_id") in done for e in effs):
+                r = {**r, "effects": [{**e, "outcome": done[e["op_id"]]}
+                                      if e.get("state") == "needs_fetch" and e.get("op_id") in done else e
+                                      for e in effs]}
+            out.append(r)
+        return out
+
+    def pending_ops(self, meta: dict) -> list[dict]:
+        """The dependency operations of an open changeset still waiting for a person's fetch, oldest first: those its
+        project log records as needing one, still in effect (a restore past one takes it back: cancelled), and not
+        replayed by a fetch since (a restore past that fetch makes it pending again), superseded by a later operation
+        on the same dependency, nor dropped as no longer applicable (_dep_outcomes). Each {op_id, sha (what a
+        confirmation binds), action, op, name, args, actor, reason, gseq, t, needs, plan, owner}."""
+        net = self._dep_net(meta)
+        if not net:
+            return []
+        found: dict[str, dict] = {}
+        done = self._dep_outcomes(meta, net)
+        for r in net:
             for e in r.get("effects") or []:
                 if e.get("k") == "d" and e.get("state") == "needs_fetch" and e.get("op_id"):
                     found[e["op_id"]] = {
@@ -2323,8 +2394,11 @@ class Changesets:
     def _still_pending(self, meta: dict, op_id: str, sha: str | None) -> dict:
         p = next((x for x in self.pending_ops(meta) if x["op_id"] == op_id), None)
         if p is None:
+            why = {"installed": "fetched and installed already", "superseded": "a later operation on the same "
+                   "dependency replaced it", "dropped": "it could no longer apply, and was dropped"}.get(
+                self._dep_outcomes(meta).get(op_id), "restored away")
             raise NotPending(f"the dependency operation {op_id} of {meta['id']} is no longer waiting for a fetch "
-                             "(restored away, or fetched and installed already): nothing was fetched")
+                             f"({why}): nothing was fetched")
         if sha is not None and p["sha"] != sha:
             raise NotPending(f"the dependency operation {op_id} of {meta['id']} is not the one shown: open the fetch "
                              "again")
@@ -2368,9 +2442,8 @@ class Changesets:
         except (deps.NeedsFetch, deps.FilesChanged, deps.DepsBusy, NotPending, Busy):
             raise
         except (deps.DepError, ChangesetError) as e:
-            self.add_notice(project, cid, {"kind": "fetch_failed", "op_id": op_id, "name": p["name"],
-                                           "text": f"{actor}'s fetch for the dependency {p['name']} ({p['op']}) "
-                                                   f"ended refused: {e}"})
+            self.drop_pending(project, cid, op_id, p["name"], f"{actor}'s fetch for the dependency {p['name']} "
+                                                              f"({p['op']}) ended refused: {e}")
             raise
         notice = self.add_notice(project, cid, {
             "kind": "fetched", "op_id": op_id, "name": p["name"],
@@ -2378,6 +2451,38 @@ class Changesets:
                     f"installed in the working copy: its cells can be placed now (list_symbols lib={p['name']}); "
                     "run_checks after placing them"})
         return {**out, "state": "installed", "op_id": op_id, "notice": notice}
+
+    def drop_pending(self, project: str, cid: str, op_id: str, name: str | None, text: str) -> dict:
+        """Takes a pending operation that can no longer apply out of the pending ones (a refusal of the operation
+        itself at a person's confirmation or fetch: the dependency is there already, or no longer there): a notice
+        of kind "fetch_failed" that closes it ("closes": true; _dep_outcomes "dropped"), which the agent gets. Its
+        Fetch is not_pending from then on. Returns the notice."""
+        return self.add_notice(project, cid, {"kind": "fetch_failed", "op_id": op_id, "name": name, "text": text,
+                                              "closes": True})
+
+    def take_notices(self, project: str, cid: str, reader: str) -> list[dict]:
+        """The changeset's notices `reader` (an agent's lease owner, or its conversation for the built-in assistant)
+        has not been given yet, marked given: each notice reaches each reader once, whenever it asks (wait_for,
+        get_dependency_status, the assistant's next turn). The record keeps a count per reader, by a hash of its
+        name ("notices_given"). With none new, the changesets' lock is not taken (a wait_for during a long apply)."""
+        meta = self._record(self._real_of(project), cid)
+        key = _owner_hash(reader) or "-"
+        if (meta.get("notices_given") or {}).get(key, 0) >= len(meta.get("notices") or []):
+            return []
+        return self._take_notices(project, cid, reader)
+
+    @_serialized
+    def _take_notices(self, project: str, cid: str, reader: str) -> list[dict]:
+        real = self._real_of(project)
+        meta = self._record(real, cid)
+        notices = meta.get("notices") or []
+        key = _owner_hash(reader) or "-"
+        given = (meta.get("notices_given") or {}).get(key, 0)
+        new = notices[given:]
+        if new:
+            meta["notices_given"] = {**(meta.get("notices_given") or {}), key: len(notices)}
+            self._save(real, meta)
+        return [dict(n) for n in new]
 
     @_serialized
     def add_notice(self, project: str, cid: str, notice: dict) -> dict:
@@ -2475,7 +2580,7 @@ class Changesets:
         work = meta["preview"]
         out = []
         for lib in self._log_names(meta):
-            recs = self._records(work, lib)
+            recs = self._with_outcomes(meta, lib, self._records(work, lib))
             if recs:
                 out.append({"lib": lib, "ops": self.link_causes([{k: r.get(k) for k in
                                                  ("seq", "gseq", "opid", "op", "args", "cell", "view", "actor", "reason", "t", "effects",
@@ -2506,7 +2611,8 @@ class Changesets:
             archive = self._dir(project) / cid / "evidence" / "manifest.json"
             manifest = json.loads(archive.read_text())
             evidence = {**meta["evidence"], "size": _evidence_size(archive.parent)}
-            return {**meta, **git, "evidence": evidence, "changes": manifest["changes"], "verify": manifest["verify"]}
+            return {**meta, **git, "evidence": evidence, "changes": _never_fetched(manifest["changes"]),
+                    "verify": manifest["verify"]}
         meta["changes"] = self.changes(project, meta) if meta["status"] == "open" else self._applied_changes(project, meta)
         meta["verify"] = self.verify_status(project, meta)
         le = self.srv.leases.get(cid) if meta["status"] == "open" else None

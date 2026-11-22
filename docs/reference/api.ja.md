@@ -123,7 +123,7 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 | `needs_fetch` | 409 | `POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update`、`/deps/changeset`、`/changesets/{id}/deps`: 人が確かめていないリモートからの取得([依存関係の取得](#dependency-fetch)) | `plan: {op, fetches, complete, project, request}` |
 | `index_not_fetched` | 409 | `GET /api/packages`、`/api/packages/{name}`、そして手元の写しのないインデックスを読む追加、更新、ロック: 人が先に取得し直す | `index`、`url`、`host` |
 | `busy` | 409 | プロジェクトの別の依存関係の操作が動いている間の、種類 `dependency` の確認や、(何も開く前の)1 クリックの `POST /deps/changeset` | |
-| `not_pending` | 409 | `op_id` 付きの種類 `dependency` の確認や、そのトークンでの `POST /deps/fetch` で、エージェントの操作がもう取得を待っていないとき: 復元が取り消した、取得がすでにインストールした、その changeset が採用か破棄された(トークンは使い切る) | |
+| `not_pending` | 409 | `op_id` 付きの種類 `dependency` の確認や、そのトークンでの `POST /deps/fetch` で、エージェントの操作がもう取得を待っていないとき: 復元が取り消した、取得がすでにインストールした、同じ依存への後の操作が置き換えた、もう適用できない(`fetch_failed` の通知とともに取り下げ: 最初のそのような確認が取り下げる)、その changeset が採用か破棄された(トークンは使い切る) | |
 | `files_changed` | 403 | 確認の後に project.json か undine.lock が変わった依存関係の取得のジョブ。依存関係のロックを取ったところで見つける | |
 
 <a id="trusting-a-dependency"></a>
@@ -187,7 +187,10 @@ MCP のツール、`undine call` のコマンド、Python のクライアント�
 `GET /api/p/{project}/changesets/{id}` は changeset が開いている間それを並べます:
 `pending_deps: [{op_id, action, op, name, args, actor, reason, gseq, t, needs, plan}]`。`plan` は needs_fetch の計画で、その
 `request` に `changeset` と `op_id` があります。記録の `notices: [{at, kind, op_id, name, text}]` は、エージェントの
-`wait_for(event='changeset')` が返すものです。
+`wait_for(event='changeset')` が返すもので、各エージェントに 1 回ずつ渡します(呼ぶ前に来たものも。`notices_given` が読み手
+ごとに数える)。`closes: true` の通知はその操作を取り下げたものです。同じ依存への後の操作は待ちの操作を置き換えます(その記録の
+`supersedes`)。`changes` の中の needs_fetch の効果は、その後が決まると `outcome` を持ちます(`installed`、`superseded`、`dropped`。
+閉じた changeset の証拠では、取得されなかったものは `cancelled`)。
 
 | 呼び出し | |
 |---|---|

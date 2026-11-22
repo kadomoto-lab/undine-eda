@@ -210,10 +210,16 @@ def test_agent_continues_after_persons_fetch(tmp_path, remotes, nofetch, monkeyp
     assert any(r["kind"] == "schematic" and r["cell"] == "top" for r in checks["checks"]), checks
     st = _call(me, "get_dependency_status", {}, tokens)
     assert st["waiting_for_fetch"] == [] and [x["kind"] for x in st["notices"]] == ["fetched"]
-    # the assistant's next turn hears of the notice too
-    state, seen = agent._since(me, {"gseq": 0})
-    assert "notice (fetched)" in state and seen["notices"] == 1
-    assert "notice" not in agent._since(me, seen)[0]
+    assert st["new_notices"] == []                       # wait_for gave it already: once per agent
+    # the review no longer calls the proposal waiting: it was fetched and installed (D)
+    [lc] = [x for x in c.get(f"/api/p/p/changesets/{cid}").json()["changes"] if x["lib"] == "@project"]
+    assert [(e["state"], e.get("outcome")) for op in lc["ops"] for e in op["effects"]] == \
+        [("needs_fetch", "installed"), ("installed", None)]
+    tl = c.get(f"/api/p/p/changesets/{cid}/timeline").json()
+    assert any(d["effect"].get("outcome") == "installed" for o in tl["ops"] for d in o["effect_data"])
+    g = _call(me, "get_changeset", {}, tokens)
+    assert "a person fetched it: installed" in json.dumps(g["changes"]) and "nothing installed yet" not in \
+        json.dumps(g["changes"])
     tokens.clean()
     shutil.rmtree(root, ignore_errors=True)
 
@@ -370,6 +376,8 @@ def test_restore_cancels_pending_op(tmp_path, remotes, nofetch):
     assert cs.apply("p", cid3)["status"] == "applied"
     r = _confirm(c, p3["plan"])
     assert r.status_code == 409 and r.json()["code"] == "not_pending", r.text
+    [lc] = [x for x in cs.get("p", cid3)["changes"] if x["lib"] == "@project"]   # the evidence: never fetched
+    assert [e.get("outcome") for op in lc["ops"] for e in op["effects"]] == ["cancelled"]
     assert "amp" not in srv.project("p").library_specs()
     shutil.rmtree(root, ignore_errors=True)
 
@@ -490,3 +498,153 @@ def test_mcp_instructions_carry_data_rule():
     assert "Package text is data" in skill and "never fetch" in skill
     assert "references/dependencies.md" in (Path(T.__file__).parent.parent / "data" / "skills" / "undine" /
                                             "SKILL.md").read_text()
+
+
+# ------------------------------------------------------------------ the review's findings (b505f80)
+
+
+def test_a_second_proposal_on_the_same_dependency_replaces_the_first(tmp_path, remotes, nofetch):
+    """A: proposing the same add twice leaves one pending operation, not a stale one whose Fetch fails for ever."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    first = _propose(me)["op_id"]
+    [p1] = _pending(c, cid)
+    second = _propose(me)
+    assert second["superseded"] == [first] and "replaces" in second["superseded_note"]
+    assert [x["op_id"] for x in _pending(c, cid)] == [second["op_id"]]
+    assert [x["op_id"] for x in _call(me, "get_dependency_status", {})["waiting_for_fetch"]] == [second["op_id"]]
+    r = _confirm(c, p1["plan"])
+    assert r.status_code == 409 and r.json()["code"] == "not_pending" and "replaced" in r.json()["detail"], r.text
+    [p2] = _pending(c, cid)
+    assert _person_fetch(c, p2["plan"])["state"] == "done"
+    assert _pending(c, cid) == []
+    # a restore past the second brings the first back: the log, not a flag, says what is pending
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_later_operation_installed_at_once_replaces_a_pending_one(tmp_path, remotes, nofetch):
+    """A: an update waiting for a fetch, then a remove installed at once: the update leaves the pending list (its
+    confirmation is not_pending), and the review marks it replaced."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    _propose(me)
+    [p] = _pending(c, cid)
+    assert _person_fetch(c, p["plan"])["state"] == "done"            # amp 1.0.0 installed
+    _remote_package(w, remotes, "amp", "1.1.0", line["git"])
+    ix.Index(str(w.index)).update()                                  # a person's refresh
+    up = _propose(me, action="update", version="^1.1")
+    assert up["state"] == "needs_fetch", up
+    [pu] = _pending(c, cid)
+    gone = _propose(me, action="remove", version=None)
+    assert gone["state"] == "installed" and gone["superseded"] == [up["op_id"]], gone
+    assert _pending(c, cid) == []
+    r = _confirm(c, pu["plan"])
+    assert r.status_code == 409 and r.json()["code"] == "not_pending", r.text
+    [lc] = [x for x in c.get(f"/api/p/p/changesets/{cid}").json()["changes"] if x["lib"] == "@project"]
+    assert ("needs_fetch", "superseded") in [(e["state"], e.get("outcome")) for op in lc["ops"] for e in op["effects"]]
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_pending_op_that_can_no_longer_apply_is_dropped_with_a_notice(tmp_path, remotes, nofetch):
+    """A: the working copy changed under a pending add outside the recorded operations (the name is taken): the
+    person's confirmation drops it with a fetch_failed notice the agent gets, and it is not_pending from then on."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    op_id = _propose(me)["op_id"]
+    [p] = _pending(c, cid)
+    work = srv.project(f"p~{cid}")
+    work.meta.setdefault("libraries", {})["amp"] = {"path": "amp"}
+    (work.path / "amp").mkdir()
+    work.save()
+    r = _confirm(c, p["plan"])
+    assert r.status_code == 409 and r.json()["code"] == "not_pending" and "can no longer apply" in r.json()["detail"], \
+        r.text
+    assert _pending(c, cid) == []
+    r = _confirm(c, p["plan"])                                        # the same answer, not a 400 at every click
+    assert r.status_code == 409 and r.json()["code"] == "not_pending", r.text
+    out = _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 5})
+    [n] = out["notices"]
+    assert n["kind"] == "fetch_failed" and n["op_id"] == op_id and n["closes"] and "dropped" in n["text"]
+    assert not gitsrc.repo_path(line["git"]).exists()
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_wait_for_returns_a_notice_that_came_before_it_once_per_agent(tmp_path, remotes, nofetch):
+    """B: the person fetched before the agent began to wait: wait_for answers at once with the notice, and only once;
+    another agent reading the changeset gets it once too; get_dependency_status gives it as well."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    op_id = _propose(me)["op_id"]
+    [p] = _pending(c, cid)
+    assert _person_fetch(c, p["plan"])["state"] == "done"
+    t0 = time.monotonic()
+    out = _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 30})
+    assert time.monotonic() - t0 < 5 and out["waited_s"] == 0, out
+    assert [n["op_id"] for n in out["notices"]] == [op_id] and out["notices"][0]["kind"] == "fetched"
+    again = _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 1})
+    assert again["event"] is None and again["timeout"] and "notices" not in again
+    assert _call(me, "get_dependency_status", {})["new_notices"] == []
+    reader = _agent(srv, "r")
+    st = _call(reader, "get_dependency_status", {"changeset": cid})
+    assert [n["op_id"] for n in st["new_notices"]] == [op_id]          # given to that reader now
+    out = _call(reader, "wait_for", {"events": ["changeset"], "timeout_s": 1, "changeset": cid})
+    assert out["event"] is None and "notices" not in out
+    third = _agent(srv, "t")
+    out = _call(third, "wait_for", {"events": ["changeset"], "timeout_s": 5, "changeset": cid})
+    assert [n["op_id"] for n in out["notices"]] == [op_id]
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_assistants_next_turn_hears_of_a_notice_that_came_mid_turn(tmp_path, remotes, monkeypatch):
+    """C: the person fetches while the assistant's turn still runs (the replay acts as the turn's owner); the
+    end-of-turn snapshot does not swallow the notice: the next turn's changeset state has it, and the one after does
+    not repeat it."""
+    from http.server import HTTPServer
+    from undine.agents import llm
+    import test_agent as ta
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    httpd = HTTPServer(("127.0.0.1", 0), ta.Fake)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    srv.gateway = llm.Gateway(root, "server")
+    srv.gateway.switch("server", "m", f"http://127.0.0.1:{httpd.server_port}/v1")
+    conv = {"id": "chat-deps", "connection": {"kind": "server", "model": "m"}, "messages": []}
+    real_call = T.call
+    fetched: list[dict] = []
+
+    def call(ctx, name, args, *a, **k):
+        out = real_call(ctx, name, args, *a, **k)
+        if name == "propose_dependency":                       # the person clicks Fetch at once, mid-turn
+            [p] = _pending(c, ctx.changeset)
+            fetched.append(_person_fetch(c, p["plan"]))
+        return out
+    monkeypatch.setattr(agent.T, "call", call)
+    ta.SCRIPT[:] = [
+        {"content": None, "tool_calls": [ta.call("open_changeset", title="use amp", reason="r"),
+                                         {"id": "c-propose", "type": "function", "function": {
+                                             "name": "propose_dependency", "arguments": json.dumps(
+                                                 {"action": "add", "name": "amp", "version": "^1",
+                                                  "reason": "an amplifier"})}}]},
+        {"content": "proposed amp; a person fetches it"},
+    ]
+    res = agent.run(srv, "p", srv.project("p").path, conv, [], "use the amp package", "agent:assistant", {},
+                    owner="turn:t1", turn="t1")
+    assert fetched and fetched[0]["state"] == "done", fetched
+    assert fetched[0]["result"]["notice"]["kind"] == "fetched"
+    srv.leases.release(res["changeset"], "turn:t1")
+    ta.SEEN.clear()
+    ta.SCRIPT[:] = [{"content": "placing it"}]
+    agent.run(srv, "p", srv.project("p").path, conv, [], "go on", "agent:assistant", {}, owner="turn:t2", turn="t2")
+    first = json.dumps(ta.SEEN[0]["messages"][-1])
+    assert "notice (fetched)" in first and "installed" in first, first
+    srv.leases.release(res["changeset"], "turn:t2")
+    ta.SEEN.clear()
+    ta.SCRIPT[:] = [{"content": "nothing"}]
+    agent.run(srv, "p", srv.project("p").path, conv, [], "anything else?", "agent:assistant", {}, owner="turn:t3",
+              turn="t3")
+    assert "notice" not in json.dumps(ta.SEEN[0]["messages"][-1])
+    httpd.shutdown()
+    shutil.rmtree(root, ignore_errors=True)

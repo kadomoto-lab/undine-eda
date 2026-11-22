@@ -130,7 +130,7 @@ and each nothing changed:
 | `needs_fetch` | 409 | `POST /deps`, `/deps/sync`, `/deps/lock`, `/deps/{name}/update`, `/deps/changeset`, `/changesets/{id}/deps`: a fetch from a remote no person confirmed ([Dependency fetch](#dependency-fetch)) | `plan: {op, fetches, complete, project, request}` |
 | `index_not_fetched` | 409 | `GET /api/packages`, `/api/packages/{name}`, and an add, update or lock that reads an index with no local copy: a person refreshes it first | `index`, `url`, `host` |
 | `busy` | 409 | a confirmation of kind `dependency`, or the one-click `POST /deps/changeset` (before anything is opened), while another dependency operation of the project runs | |
-| `not_pending` | 409 | a confirmation of kind `dependency` with `op_id`, or `POST /deps/fetch` with its token, when the agent's operation no longer waits for a fetch: a restore took it back, a fetch installed it already, or its changeset was applied or discarded (the token is used up) | |
+| `not_pending` | 409 | a confirmation of kind `dependency` with `op_id`, or `POST /deps/fetch` with its token, when the agent's operation no longer waits for a fetch: a restore took it back, a fetch installed it already, a later operation on the same dependency replaced it, it could no longer apply (dropped, with a `fetch_failed` notice: the first such confirmation drops it), or its changeset was applied or discarded (the token is used up) | |
 | `files_changed` | 403 | a dependency fetch job whose project.json or undine.lock changed after the confirmation, found once it holds the dependency lock | |
 
 ### Trusting a dependency
@@ -193,7 +193,11 @@ is recorded in the working copy's project log as waiting for one (`{k: "d", stat
 nothing written or installed), and `GET /api/p/{project}/changesets/{id}` lists it while the changeset is open:
 `pending_deps: [{op_id, action, op, name, args, actor, reason, gseq, t, needs, plan}]`, `plan` the needs_fetch plan
 whose `request` carries `changeset` and `op_id`. The record's `notices: [{at, kind, op_id, name, text}]` are what the
-agent's `wait_for(event='changeset')` returns.
+agent's `wait_for(event='changeset')` returns, each once per agent (also those that came before the call;
+`notices_given` counts them per reader); a notice with `closes: true` dropped its operation. A later operation on the
+same dependency supersedes a pending one (its record's `supersedes`). In `changes`, a needs_fetch effect carries
+`outcome` once something became of it (`installed`, `superseded`, `dropped`; in a closed changeset's evidence, one never
+fetched `cancelled`).
 
 | Call | |
 |---|---|

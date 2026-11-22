@@ -704,7 +704,18 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   (`agent._since`). Lock order: deps.lock before the changesets' lock everywhere; the agent's tool takes no changesets'
   lock around the operation (unlike the intent writes), so it never waits for the dependency lock while holding the
   lock a replay waits for. The review's Fetch row is minimal (the URL, size and licence, and the button); the full
-  review of a dependency change is the next slice.
+  review of a dependency change is the next slice. A later operation on the same dependency (a second proposal, or
+  any recorded operation on that name, installed at once or replayed) supersedes a pending one: its record names it
+  in `supersedes`, so a restore past it brings the pending one back. A pending operation that can no longer apply (a
+  refusal of the operation itself at the person's confirmation or fetch, such as a name taken or gone outside the
+  recorded operations) is dropped with a `fetch_failed` notice that closes it (`closes: true`), and is `not_pending`
+  from then on. The review marks each needs_fetch effect with what became of it (`outcome`: installed, superseded,
+  dropped; a closed changeset's never-fetched ones `cancelled`). Each notice reaches each agent once
+  (`Changesets.take_notices`, a count per reader in the record's `notices_given`, by a hash of the lease owner, or of
+  the built-in assistant's conversation): `wait_for(event='changeset')` returns the ones not given yet at once, also
+  those that came before the call; `get_dependency_status` gives them as `new_notices`; the assistant's turn shows
+  them in its changeset state, and its end-of-turn snapshot gives none, so a notice that came mid-turn is reported at
+  the next turn.
 - **Evidence** already hashes `project.json` and `undine.lock`. Job inputs additionally record, outside `key` (for
   information, so evidence names exact contents): each `package@version` and tree used by the job's cells, the PDK
   commit, and the profile package and version. Outdated detection stays on what the job reads: the cells' content
@@ -1353,7 +1364,10 @@ package cell placed and `run_checks`; no tool returns a token; the index reads r
 fetch; the refusals; a dependency the store has is installed at once; another's changeset read; a restore, a discard
 and an adopt cancel a pending operation and its token is refused; the token binds the operation, its fields come from
 the record, a changed plan is shown again; another writer's lease is busy and the next Fetch only installs; propose and
-replay do not deadlock; the DATA rule in the prompt, the instructions and the skill), the guards in
+replay do not deadlock; the DATA rule in the prompt, the instructions and the skill; a second proposal or a later
+operation on the same dependency replaces a pending one; one that can no longer apply is dropped with a notice;
+wait_for returns a notice that came before it, once per agent; the assistant's next turn hears of a notice that came
+mid-turn), the guards in
 `test_api_phase1.py` and `test_agent_phase2.py`, and the web test `ChangesPanel.test.tsx`.
 
 Still to build in phase 4: the review of a dependency change (the lock diff, licences, size, code blocks and RTL), and

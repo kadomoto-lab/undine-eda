@@ -64,7 +64,9 @@ const stateText = (state?: string) => {
 export function summaryLine(ops: ChangeOp[]): string {
   const n = ops.flatMap((o) => o.effects);
   const c = (k: string, d: string) => n.filter((e) => e.k === k && e.do === d).length;
-  const deps = n.filter((e) => e.k === "d").length;     // the project log's dependency operations
+  // the project log's dependency operations; a proposal that was fetched, replaced or dropped since counts once,
+  // as what replaced it
+  const deps = n.filter((e) => e.k === "d" && !(e.state === "needs_fetch" && e.outcome)).length;
   const parts = [
     deps && t("review:summary.dependencies", { count: deps }),
     (c("i", "mod") + c("o", "mod")) && t("review:summary.changed", { count: c("i", "mod") + c("o", "mod") }), (c("i", "add") + c("w", "add") + c("s", "add")) && t("review:summary.added", { count: c("i", "add") + c("w", "add") + c("s", "add") }),
@@ -604,7 +606,7 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
               {cs.pending_deps.map((p) => (
                 <div key={p.op_id} className="row pendingdep" data-testid="pending-dep">
                   <div className="grow">
-                    <b className="mono">{t("review:pending.row", { action: p.action, name: p.name ?? "" })}</b>
+                    <b className="mono">{t("review:pending.row", { action: t(`review:pending.action.${p.action}`), name: p.name ?? "" })}</b>
                     {p.needs.map((f) => (
                       <div key={`${f.url} ${f.rev ?? f.commit ?? ""}`} className="small mono">
                         {f.url}{f.package && f.version ? ` (${f.package} ${f.version})` : ""} · {f.size !== null ? t("review:pending.size", { size: sizeText(f.size) }) : t("review:pending.sizeUnknown")} · {f.license ?? t("review:pending.licenseUnknown")}

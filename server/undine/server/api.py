@@ -2304,7 +2304,19 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         args = {k: p["args"].get(k) for k in _DEP_KEYS}
         request = {**_dep_request(p["action"], args, cid, reason=p["reason"]), "op_id": req.op_id}
         prj = _dep_target(real, request)
-        plan = deps.plan_fetch(prj, p["action"], args, srv.dep_roots, srv.dep_hosts)
+        try:
+            plan = deps.plan_fetch(prj, p["action"], args, srv.dep_roots, srv.dep_hosts)
+        except (deps.DepsBusy, deps.FilesChanged, ix.IndexNotFetched):
+            raise                                # for now: busy, or a person refreshes the index first
+        except (deps.DepError, ValueError, KeyError) as e:
+            # the operation itself can no longer apply (the dependency is there already, or gone): dropped, the
+            # agent told, and 409 not_pending from now on rather than the same refusal at every click
+            changesets.drop_pending(real, cid, req.op_id, p["name"],
+                                    f"the dependency operation {p['op']} {p['name']} can no longer apply, so it was "
+                                    f"dropped without a fetch: {str(e).strip(chr(39))}")
+            raise changesetmod.NotPending(f"the dependency operation {req.op_id} can no longer apply "
+                                          f"({str(e).strip(chr(39))}): it was dropped, nothing was fetched, and the "
+                                          "agent is told") from e
         if plan["fetches"] and not _same_fetches(req.fetches or [], plan["fetches"]):
             raise _needs(deps.NeedsFetch(plan), real, request)
         fetches = [(f["url"], f["rev"] or f["commit"], f["commit"]) for f in plan["fetches"]]

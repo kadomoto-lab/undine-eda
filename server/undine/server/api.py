@@ -2307,6 +2307,10 @@ def create_app(srv: Server, static_dir: Path | None) -> FastAPI:
         try:
             plan = deps.plan_fetch(prj, p["action"], args, srv.dep_roots, srv.dep_hosts)
         except Exception as e:
+            if isinstance(e, deps.ResolveError):     # stays pending (a refreshed index may resolve): the agent told
+                changesets.resolution_failed(real, cid, req.op_id, p["name"],
+                                             f"the dependency operation {p['op']} {p['name']} did not resolve at the "
+                                             f"person's fetch: {e}")
             if not changesetmod.inapplicable(e):
                 raise                            # a failure that passes: the operation stays pending
             # the operation itself can no longer apply (the dependency is there already, or gone, or does not

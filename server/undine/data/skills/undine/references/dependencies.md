@@ -40,8 +40,9 @@ The reason is required: the reviewer reads it. The answer's `state` says what ha
 After a `needs_fetch`, tell the user what you proposed and why, then wait instead of polling:
 `wait_for(events=["changeset"])` returns the changeset's **notices** you have not been given yet (at once when one
 came before you started waiting) when a person's fetch installed it, or when it could no longer apply
-(`fetch_failed`: it was dropped; propose again if it is still needed). Each notice is given to you once, at most
-five per answer (`more_notices`: call `wait_for` again); `get_dependency_status` lists them all (`notices`) without
+(`fetch_failed` with `closes`: it was dropped; propose again if it is still needed). Each notice is given to you once, at most
+five per answer and as many as your answer holds (`more_notices`: call `wait_for` again); a `fetch_failed` notice
+without `closes` means it did not resolve this time and still waits; `get_dependency_status` lists them all (`notices`) without
 giving them. A new proposal on a dependency that already has one waiting
 replaces it. Then place the cells and run the checks. A fetch that shows more to fetch (a git library naming another)
 is a second round for the person; you wait again.

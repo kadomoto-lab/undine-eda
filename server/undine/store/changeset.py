@@ -246,10 +246,20 @@ def _needs_text(needs: list[dict]) -> str:
 
 def inapplicable(e: BaseException) -> bool:
     """Whether a dependency operation's refusal means it cannot apply to the working copy as it is, whatever is
-    fetched (the name taken or not a dependency, a resolution refused, a name packages place): what drops an agent's
-    pending operation. Anything else (a git or network failure, the store, a configuration, a busy lock, a file
-    changed since the confirmation) passes and leaves it pending."""
-    return isinstance(e, (deps.Inapplicable, deps.ResolveError, deps.NotDirect))
+    fetched or refreshed (the name taken or not a dependency, a name packages place): what drops an agent's pending
+    operation. Anything else passes and leaves it pending: a git or network failure, the store, a configuration, a
+    busy lock, a file changed since the confirmation, and a resolution refused (deps.ResolveError: over HTTP the
+    index's local copy is read as it is, and a person's refresh may let it resolve; resolution_failed says it to the
+    agent instead)."""
+    return isinstance(e, (deps.Inapplicable, deps.NotDirect))
+
+
+NOTICE_TEXT = 400             # characters of a notice's text at most (a refusal can be long): what an answer holds
+
+
+def _cut(text: str) -> str:
+    """A notice's text as kept: at most NOTICE_TEXT characters."""
+    return text if len(text) <= NOTICE_TEXT else text[:NOTICE_TEXT - 1] + "…"
 
 
 def _never_fetched(changes: list[dict]) -> list[dict]:
@@ -742,6 +752,8 @@ class _DepGuard:
                     self.path = srv.project(meta["preview"]).path
                     self.before = _dep_files(self.path)
                     if self._replaying:              # restored away, or installed by another fetch meanwhile?
+                        if self.cid in srv.batching:   # an agent's batch step: its put-back would undo the install
+                            raise live.WriteLocked(f"a batch step of {self.cid} is running")
                         self.cs._still_pending(meta, self.replays["op_id"], self.replays["sha"])
             except BaseException:
                 srv.lock.release()
@@ -2460,8 +2472,11 @@ class Changesets:
                     self.drop_pending(project, cid, op_id, p["name"], f"{actor}'s fetch for the dependency "
                                                                       f"{p['name']} ({p['op']}) ended refused: {e}",
                                       actor)
-                except NotPending:
-                    pass
+                except (NotPending, Busy):
+                    pass                             # installed or restored meanwhile; a batch step: it stays
+            elif isinstance(e, deps.ResolveError):
+                self.resolution_failed(project, cid, op_id, p["name"], f"{actor}'s fetch for the dependency "
+                                                                       f"{p['name']} ({p['op']}) did not resolve: {e}")
             raise
         notice = self.add_notice(project, cid, {
             "kind": "fetched", "op_id": op_id, "name": p["name"],
@@ -2484,6 +2499,8 @@ class Changesets:
         with srv.changeset_lock, srv.lock:
             meta = self._record(real, cid)
             self._check_open(meta)
+            if cid in srv.batching:                      # a record between a step's would split it; its put-back drop
+                raise Busy(f"a batch step of {cid} is running: try again when it has finished")
             self._still_pending(meta, op_id, None)
             srv.oplog(meta["preview"], PROJECT_LOG).append({
                 "op": "dep_drop", "args": {"op_id": op_id}, "actor": actor, "reason": text, "changeset": cid,
@@ -2504,34 +2521,60 @@ class Changesets:
         return [dict(n) for n in new], given + len(new)
 
     @_serialized
-    def mark_notices(self, project: str, cid: str, reader: str, upto: int) -> None:
+    def mark_notices(self, project: str, cid: str, reader: str, upto: int, expect: int | None = None) -> bool:
         """The first `upto` notices given to `reader` (a count per reader in the record's "notices_given", by a hash
-        of its name; never lowered). Each notice reaches each reader once."""
+        of its name; never lowered). `expect`: the count the caller peeked; another call that advanced it meanwhile
+        makes this one mark nothing and answer False (it gives nothing: each notice reaches each reader once)."""
         real = self._real_of(project)
         meta = self._record(real, cid)
         key = _owner_hash(reader) or "-"
         given = meta.get("notices_given") or {}
+        if expect is not None and given.get(key, 0) != expect:
+            return False
         if upto > given.get(key, 0):
             meta["notices_given"] = {**given, key: upto}
             self._save(real, meta)
+        return True
 
-    def take_notices(self, project: str, cid: str, reader: str, limit: int = NOTICES_GIVEN) -> list[dict]:
-        """peek_notices and mark_notices at once, for a caller whose answer holds them all (wait_for, at most `limit`;
-        its answer says how many more wait). With none new, the changesets' lock is not taken (a wait_for during a
-        long apply)."""
-        new, upto = self.peek_notices(project, cid, reader, limit)
-        if new:
-            self.mark_notices(project, cid, reader, upto)
-        return new
+    def take_notices(self, project: str, cid: str, reader: str, limit: int = NOTICES_GIVEN,
+                     fits=None) -> list[dict]:
+        """The notices `reader` has not been given yet, at most `limit`, and of those the first that `fits(notices)`
+        accepts (the caller's answer budget; at least one), marked given atomically: under the changesets' lock the
+        count must still be the one peeked, else it peeks again (two calls of one reader never give the same notice).
+        With none new, the changesets' lock is not taken (a wait_for during a long apply)."""
+        for _ in range(5):
+            new, upto = self.peek_notices(project, cid, reader, limit)
+            if not new:
+                return []
+            given = upto - len(new)
+            k = len(new)
+            while k > 1 and fits is not None and not fits(new[:k]):
+                k -= 1
+            if self.mark_notices(project, cid, reader, given + k, expect=given):
+                return new[:k]
+        return []
+
+    @_serialized
+    def resolution_failed(self, project: str, cid: str, op_id: str, name: str | None, text: str) -> dict | None:
+        """A pending operation that did not resolve at a person's confirmation or fetch (a stale index copy, a
+        conflict another fetch may lift): it stays pending, and the agent gets a notice of kind "fetch_failed" that
+        does not close it, once per distinct text (the same refusal at every click is not repeated). Returns the
+        notice added, None when it was there already."""
+        real = self._real_of(project)
+        cut = _cut(text)
+        if any(n.get("op_id") == op_id and n.get("kind") == "fetch_failed" and n.get("text") == cut
+               for n in self._record(real, cid).get("notices") or []):
+            return None
+        return self.add_notice(real, cid, {"kind": "fetch_failed", "op_id": op_id, "name": name, "text": text})
 
     @_serialized
     def add_notice(self, project: str, cid: str, notice: dict) -> dict:
-        """Appends `notice` ({kind: "fetched" | "fetch_failed", op_id, name, text}) to the changeset's record
-        ("notices", each with its time "at"): what an agent's wait_for(event='changeset') returns when their count
-        grows. Returns the notice."""
+        """Appends `notice` ({kind: "fetched" | "fetch_failed", op_id, name, text, closes?}) to the changeset's
+        record ("notices", each with its time "at"; the text cut to NOTICE_TEXT characters): what an agent's
+        wait_for(event='changeset') returns. Returns the notice."""
         real = self._real_of(project)
         meta = self._record(real, cid)
-        n = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **notice}
+        n = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **notice, "text": _cut(str(notice.get("text") or ""))}
         meta["notices"] = [*(meta.get("notices") or []), n]
         self._save(real, meta)
         return n
@@ -2564,9 +2607,17 @@ class Changesets:
         self._check_open(meta)
         before = self._head(meta)
         meta_file = self._dir(project) / f"{cid}.json"
-        wroot, snap, names = self._snapshot(meta, ".batch-")
-        shutil.copy2(meta_file, snap / "changeset.json")
-        self.srv.batching[cid] = before
+        # marked running under the changesets' lock before the snapshot: a person's fetch replaying an agent's
+        # operation, or its drop, commits under that lock and refuses a running step (busy), so it either is in the
+        # snapshot or waits for the step to end; it never commits inside a step that the put-back would take back
+        with self.srv.changeset_lock:
+            self.srv.batching[cid] = before
+        try:
+            wroot, snap, names = self._snapshot(meta, ".batch-")
+            shutil.copy2(meta_file, snap / "changeset.json")
+        except BaseException:
+            self.srv.batching.pop(cid, None)
+            raise
         try:
             try:
                 results = run()
@@ -2587,7 +2638,10 @@ class Changesets:
         used = max(self._head(meta), live.floor(floor_dir))
         self._forget(project, cid)                           # cached editors / layouts hold the state being dropped
         self._put_files_back(wroot, snap, names)
-        with self.srv.changeset_lock:                    # the notices and who was given them are not the step's
+        # the notices and who was given them are not the step's: no notice of an install or a drop can come while a
+        # step runs (a replay and a drop are busy then), so the ones that came meanwhile (a fetched notice after its
+        # install, which is in the snapshot; a resolution that failed) hold, and a reader's marks too
+        with self.srv.changeset_lock:
             now = json.loads(meta_file.read_text())
             shutil.copy2(snap / "changeset.json", meta_file)
             if now.get("notices") or now.get("notices_given"):

@@ -722,27 +722,25 @@ def test_a_failure_that_passes_leaves_the_op_pending(tmp_path, remotes, nofetch,
 
 
 def test_a_drop_is_undone_by_a_restore_and_never_marks_an_installed_op(tmp_path, remotes, nofetch):
-    """3: amp and amp2 (the same package) both wait; amp is fetched, so amp2 can no longer apply (one package, one
-    name) and is dropped, in the log. A restore past amp's fetch brings both back pending. A drop of an installed
-    operation is refused under the lock and writes nothing."""
+    """3: the agent's add of amp waits; the agent then makes a library amp, so the add can no longer apply and the
+    person's confirmation drops it, in the log. A restore past the library brings it back pending (the drop goes with
+    it). A drop of an installed operation is refused under the lock and writes nothing."""
     w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
     me = _agent(srv)
     cid = _open(me)
     a1 = _propose(me)["op_id"]
-    a2 = _propose(me, name="amp2", package="amp")["op_id"]
-    p1, p2 = _pending(c, cid)
-    assert _person_fetch(c, p1["plan"])["state"] == "done"
-    r = _confirm(c, p2["plan"])
+    [p1] = _pending(c, cid)
+    _call(me, "create_library", {"name": "amp", "reason": "a block of its own"})
+    r = _confirm(c, p1["plan"])
     assert r.status_code == 409 and r.json()["code"] == "not_pending" and "can no longer apply" in r.json()["detail"], \
         r.text
     assert _pending(c, cid) == []
     assert ("dropped", None) in _deps_ops(c.get(f"/api/p/p/changesets/{cid}").json())
-    to = max(x["gseq"] for x in (p1, p2))                # right after amp2's proposal: before the fetch and the drop
-    _call(me, "restore_changeset", {"to": to})
-    assert [x["op_id"] for x in _pending(c, cid)] == [a1, a2]
-    assert not deps.dep_dir(srv.project(f"p~{cid}").path, "amp").exists()
+    _call(me, "restore_changeset", {"to": p1["gseq"]})     # before the library (and the drop)
+    assert [x["op_id"] for x in _pending(c, cid)] == [a1]
+    assert ("dropped", None) not in _deps_ops(c.get(f"/api/p/p/changesets/{cid}").json())
     # the race a confirmation could lose: the op installed between its read and its drop
-    [p1] = [x for x in _pending(c, cid) if x["op_id"] == a1]
+    [p1] = _pending(c, cid)
     assert _person_fetch(c, p1["plan"])["state"] == "done"
     before = len(cs._record("p", cid)["notices"])
     with pytest.raises(changesetmod.NotPending):
@@ -752,10 +750,123 @@ def test_a_drop_is_undone_by_a_restore_and_never_marks_an_installed_op(tmp_path,
     shutil.rmtree(root, ignore_errors=True)
 
 
+def test_a_resolution_refused_leaves_the_op_pending_and_tells_the_agent_once(tmp_path, remotes, nofetch):
+    """1 (third review): amp is fetched, so amp2 (the same package) does not resolve: 409 resolution_refused, the op
+    stays pending (a later change may let it resolve), and the agent gets one fetch_failed notice that does not close
+    it, not one per click. A fetch job that does not resolve is the same."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    _propose(me)
+    a2 = _propose(me, name="amp2", package="amp")["op_id"]
+    p1, p2 = _pending(c, cid)
+    assert _person_fetch(c, p1["plan"])["state"] == "done"
+    for _ in range(2):
+        r = _confirm(c, p2["plan"])
+        assert r.status_code == 409 and r.json()["code"] == "resolution_refused", r.text
+    assert [x["op_id"] for x in _pending(c, cid)] == [a2]
+    failed = [n for n in cs._record("p", cid)["notices"] if n["kind"] == "fetch_failed"]
+    assert len(failed) == 1 and failed[0]["op_id"] == a2 and not failed[0].get("closes")
+    assert len(failed[0]["text"]) <= changesetmod.NOTICE_TEXT
+    out = _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 5})
+    assert [n["kind"] for n in out["notices"]] == ["fetched", "fetch_failed"]
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_fetch_during_a_batch_step_is_busy_and_never_undone(tmp_path, remotes, nofetch, monkeypatch):
+    """2 (third review): a person's Fetch (or a drop) while the agent's batch step runs is busy, so a dry run or a
+    failed step that is put back never takes back an install whose notice the agent was given; after the step the
+    Fetch only installs."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    monkeypatch.setattr(changesetmod, "REPLAY_RETRY_S", 0.3)
+    me = _agent(srv)
+    cid = _open(me)
+    op_id = _propose(me)["op_id"]
+    [p] = _pending(c, cid)
+    seen: dict = {}
+
+    def step():
+        seen["job"] = _person_fetch(c, p["plan"])              # the person clicks Fetch during the step
+        with pytest.raises(changesetmod.Busy):
+            cs.drop_pending("p", cid, op_id, "amp", "a drop during the step")
+        return []
+    out = cs.batch("p", cid, step, dry_run=True)
+    assert out["results"] == []
+    job = seen["job"]
+    assert job["state"] == "failed" and job["code"] == "busy" and "batch step" in job["error"], job
+    assert [x["op_id"] for x in _pending(c, cid)] == [op_id]
+    assert not [n for n in cs._record("p", cid).get("notices") or [] if n["kind"] == "fetched"]
+    assert gitsrc.repo_path(line["git"]).exists()              # fetched into the store all the same
+    nofetch.on = True
+    job = _person_fetch(c, p["plan"])
+    assert job["state"] == "done" and job["result"]["state"] == "installed", job
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_two_waits_of_one_agent_never_get_the_same_notice(tmp_path, remotes):
+    """3 (third review): the marking is atomic: two calls that peeked the same notices give each once."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    for i in range(4):
+        cs.add_notice("p", cid, {"kind": "fetched", "op_id": f"dep-{i}", "name": "amp", "text": f"notice {i}"})
+    real = cs.peek_notices.__func__
+    peeked = threading.Barrier(2)
+
+    def peek(self, *a, **k):                                  # both calls peek before either marks
+        out = real(self, *a, **k)
+        try:
+            peeked.wait(5)
+        except threading.BrokenBarrierError:
+            pass
+        return out
+    monkeypatch_target = changesetmod.Changesets
+    old = monkeypatch_target.peek_notices
+    monkeypatch_target.peek_notices = peek
+    got: list = []
+    try:
+        ths = [threading.Thread(target=lambda: got.append(cs.take_notices("p", cid, me.owner))) for _ in range(2)]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join(20)
+    finally:
+        monkeypatch_target.peek_notices = old
+    texts = [n["text"] for g in got for n in g]
+    assert sorted(texts) == [f"notice {i}" for i in range(4)], got            # each once, none twice
+    shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize("budget", [1000, 2000])
+def test_wait_for_gives_only_the_notices_its_answer_holds(tmp_path, remotes, budget):
+    """4a (third review): at a small result budget (MCP undine/max_chars) wait_for gives as many notices as fit
+    uncut, marks only those, and says how many more wait; a long text is kept short."""
+    w, line, root, srv, cs, c = _index_cs_project(tmp_path, remotes)
+    me = _agent(srv)
+    cid = _open(me)
+    for i in range(5):
+        cs.add_notice("p", cid, {"kind": "fetch_failed", "op_id": f"dep-{i}", "name": "amp",
+                                 "text": f"notice {i}: " + "x" * 2000})
+    got: list[str] = []
+    for _ in range(10):
+        text, err = T.call(me, "wait_for", {"events": ["changeset"], "timeout_s": 1}, limit=budget)
+        assert not err and len(text) <= budget, (len(text), text[:200])
+        out = json.loads(text)
+        assert "_truncated" not in out, out
+        if out["event"] is None:
+            break
+        got += [n["text"].split(":")[0] for n in out["notices"]]
+        assert all(len(n["text"]) <= changesetmod.NOTICE_TEXT for n in out["notices"])
+        if len(got) < 5:
+            assert out["more_notices"] == 5 - len(got)
+    assert got == [f"notice {i}" for i in range(5)]
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def test_notices_are_given_once_the_agent_has_them(tmp_path, remotes, monkeypatch):
     """4: wait_for gives at most a few notices and says how many more wait; get_dependency_status gives none; a
-    batch put back keeps the notices and who was given them; the assistant's notices are marked given only once its
-    first model call answered, so a failed turn loses none."""
+    batch put back keeps the notices and who was given them; the assistant's notices are marked given only when its
+    turn ends normally, so a failed turn (also after a model call answered) repeats them."""
     from http.server import HTTPServer
     from undine.agents import llm
     import test_agent as ta
@@ -780,7 +891,8 @@ def test_notices_are_given_once_the_agent_has_them(tmp_path, remotes, monkeypatc
     rec = cs._record("p", cid)
     assert rec["notices"][-1]["text"] == "during the step"
     assert _call(me, "wait_for", {"events": ["changeset"], "timeout_s": 1})["event"] is None   # given once only
-    # the assistant: a turn whose model call fails gives nothing; the next turn shows the notice
+    # the assistant: a turn that fails, even after its first model call answered, gives nothing; the next turn shows
+    # the notice, ahead of the operations' lines however many they are; the one after does not repeat it
     srv.leases.release(cid, me.owner)
     httpd = HTTPServer(("127.0.0.1", 0), ta.Fake)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -788,19 +900,30 @@ def test_notices_are_given_once_the_agent_has_them(tmp_path, remotes, monkeypatc
     srv.gateway.switch("server", "m", f"http://127.0.0.1:{httpd.server_port}/v1")
     conv = {"id": "chat-n", "connection": {"kind": "server", "model": "m"}, "messages": [], "changeset": cid}
     cs.add_notice("p", cid, {"kind": "fetched", "op_id": "dep-y", "name": "amp", "text": "for the assistant"})
-
-    def down(*a, **k):
-        raise RuntimeError("rate limited")
     real = srv.gateway.complete_tools
-    monkeypatch.setattr(srv.gateway, "complete_tools", down)
+    calls = []
+
+    def flaky(*a, **k):                                        # the first call answers, the second fails
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("rate limited")
+        return real(*a, **k)
+    monkeypatch.setattr(srv.gateway, "complete_tools", flaky)
+    ta.SCRIPT[:] = [{"content": None, "tool_calls": [ta.call("get_changeset")]}]
     with pytest.raises(RuntimeError):
         agent.run(srv, "p", srv.project("p").path, conv, [], "go on", "agent:assistant", {}, owner="turn:a", turn="a")
     srv.leases.release(cid, "turn:a")
     monkeypatch.setattr(srv.gateway, "complete_tools", real)
+    wctx = T.ToolCtx(srv, "p", actor="agent:w", changeset=cid)
+    for i in range(70):                                        # more operations' lines than the state lists
+        text, err = T.call(wctx, "set_instance_params", {"lib": "l", "cell": "top", "instance": "R1",
+                                                         "params": {"value": f"{i + 2}k"}, "reason": f"step {i}"})
+        assert not err, text
     ta.SEEN.clear()
     ta.SCRIPT[:] = [{"content": "ok"}]
     agent.run(srv, "p", srv.project("p").path, conv, [], "go on", "agent:assistant", {}, owner="turn:b", turn="b")
-    assert "for the assistant" in json.dumps(ta.SEEN[0]["messages"][-1])
+    first = json.dumps(ta.SEEN[0]["messages"][-1])
+    assert "for the assistant" in first and "notice 0" in first
     srv.leases.release(cid, "turn:b")
     ta.SEEN.clear()
     ta.SCRIPT[:] = [{"content": "ok"}]

@@ -707,22 +707,30 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   review of a dependency change is the next slice. A later operation on the same dependency (a second proposal, or
   any recorded operation on that name, installed at once or replayed) supersedes a pending one: its record names it
   in `supersedes`, so a restore past it brings the pending one back. A pending operation that can no longer apply
-  (`changeset.inapplicable`: the name taken or not a dependency, `deps.Inapplicable`; a resolution refused; a name
-  packages place) is dropped at the person's confirmation or fetch: checked to be still pending under the changesets'
+  (`changeset.inapplicable`: the name taken or not a dependency, `deps.Inapplicable`; a name packages place) is
+  dropped at the person's confirmation or fetch: checked to be still pending under the changesets'
   lock, a `dep_drop` record in the project log (`drops`, an effect of state `dropped` that changes no file, so a
   restore past it, or past what made the operation inapplicable, brings it back) and a `fetch_failed` notice; it is
   `not_pending` from then on. A failure that passes (git or the network, the store, a configuration, a busy lock)
-  fails the job or the confirmation and leaves the operation pending for the next Fetch. The outcomes are read from
+  fails the job or the confirmation and leaves the operation pending for the next Fetch. So does a resolution refused
+  (409 `resolution_refused`: over HTTP an index's local copy is read as it is, and a refresh may let it resolve),
+  with a `fetch_failed` notice that does not close it, once per distinct text. A person's replay or drop is busy while
+  an agent's batch step of the changeset runs (the step is marked running under the changesets' lock before its
+  snapshot, and the replay commits under that lock), so a step that is put back never takes back an install or a drop
+  whose notice the agent was given; the replay retries briefly, then 409 `busy`, what it fetched kept in the store. The outcomes are read from
   the log whatever the changeset's status, so a closure's check of the changes before and after the status moved
   agrees. The review marks each needs_fetch effect with what became of it (`outcome`: installed, superseded,
   dropped; a closed changeset's never-fetched ones `cancelled`). Each notice reaches each agent once
   (`Changesets.peek_notices` / `mark_notices`, a count per reader in the record's `notices_given`, by a hash of the
   lease owner, or of the built-in assistant's conversation), marked given only once the agent has it:
-  `wait_for(event='changeset')` returns at most five not given yet at once, also those that came before the call
-  (`more_notices` says how many more); `get_dependency_status` lists them all and gives none (`notices_not_given`);
-  the assistant's turn shows them in its changeset state, marked given once its first model call answered, and its
-  end-of-turn snapshot gives none, so a notice that came mid-turn, or one of a failed turn, is reported at the next
-  turn. A batch put back keeps the notices and `notices_given` as they are.
+  `wait_for(event='changeset')` returns at once those not given yet, also those that came before the call, at most
+  five and only as many as its answer holds uncut at the caller's result budget (a notice's text is kept to 400
+  characters; `more_notices` says how many more); the marking is atomic (two waits of one agent never give the same
+  notice); `get_dependency_status` lists them all and gives none (`notices_not_given`); the assistant's turn shows
+  them first in its changeset state (the cap is on the operations' lines only), marked given only when the turn ends
+  normally after a model call, and its end-of-turn snapshot gives none, so a notice that came mid-turn, or one of a
+  turn that failed, is reported at the next turn. A batch put back keeps the notices and `notices_given` as they
+  are.
 - **Evidence** already hashes `project.json` and `undine.lock`. Job inputs additionally record, outside `key` (for
   information, so evidence names exact contents): each `package@version` and tree used by the job's cells, the PDK
   commit, and the profile package and version. Outdated detection stays on what the job reads: the cells' content

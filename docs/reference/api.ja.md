@@ -190,7 +190,9 @@ MCP のツール、`undine call` のコマンド、Python のクライアント�
 `wait_for(event='changeset')` が返すもので、各エージェントに 1 回ずつ渡します(呼ぶ前に来たものも。`notices_given` が読み手
 ごとに数える)。`closes: true` の通知はその操作を取り下げたもので、プロジェクトログの `dep_drop` の記録(`drops`)がそれを記録する
 ので、それより前への復元は操作を戻します。取り下げるのは操作そのものの拒否だけで、過ぎ去る失敗(git、ネットワーク、ストア、
-設定)は失敗させ、操作は待ちのまま残ります。同じ依存への後の操作は待ちの操作を置き換えます(その記録の
+設定)は失敗させ、操作は待ちのまま残ります。解決の拒否も同じで(409 の `resolution_refused`)、操作を閉じない `fetch_failed`
+の通知を違う文面ごとに 1 回加えます。エージェントの batch のステップがその changeset で動いている間、取得のジョブと取り下げは
+busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作を置き換えます(その記録の
 `supersedes`)。`changes` の中の needs_fetch の効果は、その後が決まると `outcome` を持ちます(`installed`、`superseded`、`dropped`。
 閉じた changeset の証拠では、取得されなかったものは `cancelled`)。
 

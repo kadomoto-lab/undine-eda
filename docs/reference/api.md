@@ -196,7 +196,10 @@ whose `request` carries `changeset` and `op_id`. The record's `notices: [{at, ki
 agent's `wait_for(event='changeset')` returns, each once per agent (also those that came before the call;
 `notices_given` counts them per reader); a notice with `closes: true` dropped its operation, which a `dep_drop` record
 of the project log (`drops`) records, so a restore past it brings the operation back. Only a refusal of the operation
-itself drops it; a failure that passes (git, the network, the store, a configuration) fails and leaves it pending. A
+itself drops it (the name taken, not a dependency); a failure that passes (git, the network, the store, a
+configuration) fails and leaves it pending, and so does a resolution refused (409 `resolution_refused`, with a
+`fetch_failed` notice that does not close it, once per distinct text). While an agent's batch step of the changeset
+runs, the fetch job and a drop are busy (409 `busy`). A
 later operation on the same dependency supersedes a pending one (its record's `supersedes`). In `changes`, a needs_fetch effect carries
 `outcome` once something became of it (`installed`, `superseded`, `dropped`; in a closed changeset's evidence, one never
 fetched `cancelled`).

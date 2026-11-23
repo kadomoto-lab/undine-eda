@@ -1086,6 +1086,17 @@ describe("the review of a dependency change", () => {
     expect(screen.getByTestId("dep-not-own").textContent).toBe(t("review:deps.notOwnFetch"));
   });
 
+  it("tells a replaced or taken-back version from one refused now, as the server gives them", async () => {
+    await open({ ...rec, deps: [{ ...added, checked: null, replaced_by: 5, untrusted: ["ip@1.0.0", "core@1.0.0"], untrusted_count: 2,
+      untrusted_now: [], untrusted_now_count: 0, trust_taken_back: ["core@1.0.0"], trust_replaced: ["ip@1.0.0"],
+      code: [{ ...code, trusted: false, replaced: true }] }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).queryByTestId("dep-untrusted")).toBeNull();          // nothing is refused now
+    expect(within(row).getByTestId("dep-trust-replaced").textContent).toContain("ip@1.0.0");
+    expect(within(row).getByTestId("dep-taken-back").textContent).toContain("core@1.0.0");
+    expect(within(row).getByTestId("dep-code-replaced").textContent).toBe(t("review:deps.trust.replaced"));
+  });
+
   it("words the row in the reader's language", async () => {
     await setLocale("ja");
     try {

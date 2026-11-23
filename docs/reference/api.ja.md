@@ -222,8 +222,8 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
          findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
- trusted, trust, untrusted?: [キー], untrusted_count?, untrusted_now?: [キー], trust_taken_back?: [キー], trust_unknown?,
- trust_drop: [キー],
+ trusted, trust, untrusted?: [キー], untrusted_count?, untrusted_now: [キー], untrusted_now_count, trust_taken_back: [キー],
+ trust_replaced: [キー], trust_unknown?, trust_drop: [キー],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_state: stored | made | pending | failed, review_error?}
@@ -254,16 +254,18 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
   バージョン、なければ `<名前>@?` で、信頼されず `trust_unknown` を付ける)について、今の本物のプロジェクトの `trusted` から読みます。
   そのため、操作の後に人が信頼したバージョンは信頼済みと出ます。`untrusted` は採用後に信頼されない最初の 10 バージョンを挙げ、
   `untrusted_count` はその全部を数え、`untrusted_now` はそのうち今信頼していないもの(その実行は今拒否される)を挙げます。`trust` は
-  それを言葉で言い、今拒否されるバージョンを先に、次に取り消されるもの(下)を挙げ、それぞれの言い分はそのバージョンについて正しい
-  ものです。後の操作がツリーを置き換えた行はそれだけを言います(そのコードはもう changeset にない)。そのコードのエントリも同じです。
+  それを言葉で言い、今拒否されるバージョンを先に、次に取り消されるもの(下)、次に後の操作が置き換えたもの(`trust_replaced`: もう
+  changeset にない)を挙げ、それぞれの言い分はそのバージョンについて正しいものです。すべてのバージョンが置き換えられた行はそれだけを
+  言い、置き換えられたバージョンのコードのエントリはそう言います(`replaced`)。インストール済みの行には `untrusted_now`、
+  `trust_taken_back`、`trust_replaced` が空でも必ず付きます。
 - changeset が開いている間は、それが project.json の `trusted` から外すキー(信頼したバージョンの別の内容への追加や更新: その行の
   `trust_drop`)は、今プロジェクトが信頼していても、採用後のとおり信頼していないものと数え、`trust_taken_back` に挙げます。すでに
   信頼しているので、改めて信頼しても変わりません。信頼はバージョンごとなので、採用までは changeset の中の実行はそのコードを
   動かします: そのようなキーのコードのエントリはそう言います(`taken_back` と、言葉での `trust`)。`trust_drop` は、操作が作業
   コピーの `trusted` から外したキーです(更新は古いバージョンのものを外す)。
 - `license` と `size` は名前の依存そのもののもの(`own` が true。その報告を先に挙げる)で、それが使うパッケージだけが動いたとき、
-  または取得待ちでそのパッケージ(ローカルの名前が表すもの。提案、作業コピーの lock か project.json から)の取得がないとき(自分の
-  ファイルはダウンロード不要)は null(`own` が false)です。ほかのパッケージの取得を自分のものとはしません。各パッケージのもの、
+  または取得待ちでそのパッケージ(ローカルの名前が表すもの。提案、作業コピーの lock か project.json から)の取得も、git の依存なら
+  そのリポジトリ(URL と subdir)の取得もないとき(自分のファイルはダウンロード不要)は null(`own` が false)です。ほかのパッケージの取得を自分のものとはしません。各パッケージのもの、
   各取得のものは `packages` と `needs` にあります。
 - `checked` は、changeset の実行がパッケージを読むまで `false`(*未確認*)です。作業コピーのシミュレーション、LVS、DRC のうち、
   終わっていて、その証拠の `about.packages` が操作の持ち込んだツリーのどれかを挙げ、(開いている間は)まだ最新のものです。

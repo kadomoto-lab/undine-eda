@@ -486,7 +486,8 @@ def get_changeset(c: ToolCtx, a: dict):
                                     "trust (untrusted: every version not trusted once adopted; untrusted_now: those "
                                     "not trusted now, whose code a run refuses now; trust_taken_back: those trusted now "
                                     "that this change takes back, which runs in this changeset still run until the "
-                                    "adopt; a replaced row's code is no longer in the changeset; code_more: packages "
+                                    "adopt; trust_replaced: those a later operation replaced, no longer in the "
+                                    "changeset; code_more: packages "
                                     "with code not listed); license and size are the named dependency's own (own true), "
                                     "null when it did not move (only packages it needs did) or, waiting for a fetch, "
                                     "when its own files need no download (each package's and each fetch's are in "
@@ -4214,8 +4215,8 @@ def _dep_review_public(r: dict) -> dict:
     few of each list, the texts as the review kept them (control characters out, cut)."""
     out = {k: r[k] for k in ("op", "action", "name", "state", "outcome", "op_id", "fetched_by", "pdk", "license",
                              "size", "size_total", "own", "checked", "checked_by", "replaced_by", "trust", "untrusted",
-                             "untrusted_count", "untrusted_now", "trust_taken_back", "trust_unknown", "trust_drop",
-                             "review_error")
+                             "untrusted_count", "untrusted_now", "untrusted_now_count", "trust_taken_back",
+                             "trust_replaced", "trust_unknown", "trust_drop", "review_error")
            if r.get(k) is not None and r.get(k) != []}
     out["by"], out["reason"] = r.get("actor"), r.get("reason") or ""
     if r.get("packages"):

@@ -1078,7 +1078,7 @@ def test_trust_the_change_takes_back_is_not_trusted(tmp_path):
     assert row["trust_drop"] == ["ip@1.0.0"]
     assert row["trusted"] is False and row["trust_taken_back"] == ["ip@1.0.0"]
     assert row["trust"].startswith("not trusted once adopted: ip@1.0.0 trusted now") and row["code"][0]["trusted"] is False
-    assert "untrusted_now" not in row
+    assert row["untrusted_now"] == [] and row["trust_replaced"] == []
     # while it is open, trust is by version: runs in the changeset do run the code, and the words say so
     assert trust.untrusted_dirs(srv.project(meta["preview"]).path) == {}
     assert row["code"][0].get("taken_back") is True and row["code"][0]["trust"] == depreview.TRUST_CODE_TAKEN_BACK
@@ -1298,6 +1298,63 @@ def test_a_replaced_rows_trust_says_nothing_of_runs(tmp_path):
     cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v2.0.0"}, "user", "2", local_roots=lr)
     first, second = cs.get("p", cid)["deps"]
     assert first["replaced_by"] == second["gseq"]
-    assert not any(c.get("taken_back") for c in first["code"]) and "trust_taken_back" not in first
+    assert not any(c.get("taken_back") for c in first["code"]) and not first.get("trust_taken_back")
     assert "still run" not in first["trust"] and all("still run" not in (c["trust"] or "") for c in first["code"])
     assert first["trust"] == getattr(depreview, "TRUST_REPLACED", None)
+
+
+
+# ------------------------------------------------------------------ git dependencies' fetches, replaced per version
+
+
+def test_a_waiting_git_dependencys_own_fetch_is_its_repositorys(tmp_path):
+    """A direct git dependency's fetch carries no package: its own fetch is the one of its repository, also when the
+    plan fetches a package it needs."""
+    root, srv, cs = _setup(tmp_path)
+    meta = cs.create("p", "a", "", "user")
+    cid = meta["id"]
+    a = {**_fetch("a", "MIT", 100), "package": None, "url": "https://git.example.org/a.git"}
+    b = {**_fetch("b", "GPL-3.0-only", 9000), "url": "https://git.example.org/b.git"}
+    plan = {"op": "add", "complete": True, "fetches": [a, b]}
+    cs._record_needs("p", cid, "add", {"name": "a", "git": "https://git.example.org/a.git", "rev": "v1"}, "agent:a",
+                     "a", plan)
+    [row] = cs.get("p", cid)["deps"]
+    assert (row["license"], row["size"]) == ("MIT", 100) and row.get("own") is True
+
+
+def test_a_partly_replaced_rows_words_are_per_version(tmp_path):
+    """op1 updates ip to other content under its version, bringing other content of core too; op2 moves ip on but
+    keeps that core. op1's ip is replaced (no longer in the changeset), its core is still there and taken back: the
+    words and code entries say each, and nothing says the replaced ip still runs."""
+    root, srv, cs = _setup(tmp_path)
+    core = _release(tmp_path / "core", "1.0.0", {**CORE, "rtl/c.v": RTL, "undine-package.toml":
+                                                 MANIFEST.replace('"ip"', '"core"').format(v="1.0.0")})
+    dep = f'\n[dependencies]\ncore = {{ git = "{core}", rev = "v1.0.0" }}\n'
+    ip = _release(tmp_path / "ip", "1.0.0", {**V1, "undine-package.toml": MANIFEST.format(v="1.0.0") + dep})
+    prj = srv.project("p")
+    deps.add(prj, "ip", str(ip), "v1.0.0", local_roots=[tmp_path.resolve()])
+    trust.set_trusted(prj, "ip@1.0.0", True)
+    trust.set_trusted(prj, "core@1.0.0", True)
+    # other content of both under the same versions
+    (core / "core.sch").write_text(CONTROL)
+    _git(core, "commit", "-qam", "b")
+    _git(core, "tag", "v1.0.0-b")
+    dep_b = dep.replace('rev = "v1.0.0"', 'rev = "v1.0.0-b"')
+    (ip / "undine-package.toml").write_text(MANIFEST.format(v="1.0.0") + dep_b)
+    (ip / "buf.sch").write_text(CONTROL.replace("echo hi", "echo b"))
+    _git(ip, "commit", "-qam", "b")
+    _git(ip, "tag", "v1.0.0-b")
+    _release(ip, "2.0.0", {"undine-package.toml": MANIFEST.format(v="2.0.0") + dep_b})
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    lr = [tmp_path.resolve()]
+    cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v1.0.0-b"}, "user", "b", local_roots=lr)
+    cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v2.0.0"}, "user", "2", local_roots=lr)
+    first = cs.get("p", cid)["deps"][0]
+    assert first.get("replaced_by") is not None
+    assert "ip@1.0.0 trusted now" not in first["trust"] and "core@1.0.0 trusted now" in first["trust"]
+    assert first.get("trust_replaced") == ["ip@1.0.0"] and first["trust_taken_back"] == ["core@1.0.0"]
+    assert "ip@1.0.0 replaced by a later operation" in first["trust"]
+    by = {c["key"]: c for c in first["code"]}
+    assert by["ip@1.0.0"].get("replaced") is True and not by["ip@1.0.0"].get("taken_back")
+    assert "still run" not in by["ip@1.0.0"]["trust"] and by["core@1.0.0"].get("taken_back") is True

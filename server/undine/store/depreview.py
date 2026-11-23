@@ -709,15 +709,32 @@ def _package_of(name, lock: dict | None, project: dict | None) -> str | None:
     return spec.get("package") if isinstance(spec, dict) and isinstance(spec.get("package"), str) else None
 
 
+def _git_of(e: dict, op: dict, lock: dict | None, project: dict | None) -> tuple[str | None, str | None]:
+    """(git URL, subdir) of the dependency a waiting operation names: what the proposal recorded, its request's, the
+    working copy's lock entry's or project.json requirement's for its local name."""
+    name = e.get("name")
+    args = op.get("args") or {}
+    for src in (e, args, ((lock or {}).get("libraries") or {}).get(name),
+                ((project or {}).get("libraries") or {}).get(name)):
+        if isinstance(src, dict) and isinstance(src.get("git"), str):
+            return src["git"], src.get("subdir")
+    return None, None
+
+
+def _same_url(a, b) -> bool:
+    return isinstance(a, str) and isinstance(b, str) and a.rstrip("/") == b.rstrip("/")
+
+
 def _keys_text(keys: list[str]) -> str:
     shown = ", ".join(keys[:LISTED_UNTRUSTED])
     return shown + (f" and {len(keys) - LISTED_UNTRUSTED} more" if len(keys) > LISTED_UNTRUSTED else "")
 
 
-def trust_words(refused: list[str], back: list[str], replaced: bool) -> str:
+def trust_words(refused: list[str], back: list[str], replaced: bool, gone_keys: list[str] = ()) -> str:
     """The row's trust note in words, true for each version it names: those not trusted now (a run of their code is
     refused now) first, then those trusted now that this change takes back (runs in the changeset still run them until
-    the adopt); a replaced row says no more than that (its code is no longer in the changeset)."""
+    the adopt), then those a later operation replaced (no longer in the changeset); a row all of whose versions were
+    replaced says no more than that."""
     if replaced:
         return TRUST_REPLACED
     parts = []
@@ -729,6 +746,8 @@ def trust_words(refused: list[str], back: list[str], replaced: bool) -> str:
                      "change takes that trust back (other content under the same version): runs in this changeset "
                      "still run that code until the adopt, and after it a run of it is refused until a person "
                      "trusts it again")
+    if gone_keys:
+        parts.append(f"{_keys_text(list(gone_keys))} replaced by a later operation of this changeset (no longer in it)")
     return "; ".join(parts) if parts else TRUST_WORDS[True]
 
 
@@ -795,7 +814,12 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
             # one of that package (a fetch of another package is never its own)
             dep_pkg = e.get("package") or _package_of(e.get("name"), work_lock, work_project) or \
                 (op.get("args") or {}).get("package") or e.get("name")
-            mine_f = next((f for f in all_needs if f.get("package") == dep_pkg), None) or (
+            # or, a direct git dependency's fetch carrying no package, the one of its repository (the URL as the
+            # spec names it, which is what a fetch records) and subdir
+            dep_git, dep_sub = _git_of(e, op, work_lock, work_project)
+            mine_f = next((f for f in all_needs if f.get("package") == dep_pkg), None) or next(
+                (f for f in all_needs if dep_git and _same_url(f.get("url"), dep_git)
+                 and (f.get("subdir") or None) == (dep_sub or None)), None) or (
                 all_needs[0] if len(all_needs) == 1 and not all_needs[0].get("package") else None)
             first = {k: data(mine_f.get(k)) for k in ("license", "size")} if mine_f else {}
             sizes = [f.get("size") for f in all_needs]
@@ -850,31 +874,44 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
         hashes = {_hash(eb) for eb, _ in new}
         own_h = {_hash(eb) for eb, names in new if row["name"] in names}
         here = (own_h or hashes) & live_hashes
-        replaced = bool(hashes) and not (hashes & live_hashes) and row["action"] not in ("remove", "pdk_set")
-        # trust, per key: not trusted now (a run of its code is refused now), or trusted now but taken back by this
-        # changeset (a key it takes out of project.json's trusted: runs here still run it, the adopt takes it back);
-        # an open changeset is judged as the adopt leaves it; a replaced row's code is no longer in the changeset
+        # per key, whether the changeset still has its tree (the last operation's lock): a key whose every tree a
+        # later operation replaced is no longer in the changeset, whatever else the row brought
+        live_key: dict[str, bool] = {}
+        for eb, names in brought:
+            for k in (kept_keys.get(_entry_id(eb, names)) or entry_keys(names, eb)):
+                k = data(k)
+                live_key[k] = live_key.get(k, False) or (_hash(eb) in live_hashes or not _hash(eb))
+        # trust, per key: not trusted now (a run of its code is refused now), trusted now but taken back by this
+        # changeset (a key it takes out of project.json's trusted: runs here still run it, the adopt takes it back), or
+        # replaced (no longer in the changeset); an open changeset is judged as the adopt leaves it
         gone = dropped if is_open else set()
         trusted_after = {k for k in trusted_now if k not in gone}
         for c in row["code"]:
             ks = c.get("keys") or [c.get("key")]
             c["trusted"] = all(k in trusted_after for k in ks)
-            c["trust"] = TRUST_REPLACED if replaced and not c["trusted"] else TRUST_WORDS[c["trusted"]]
-            if not c["trusted"] and not replaced and all(k in trusted_now for k in ks):
+            c["trust"] = TRUST_WORDS[c["trusted"]]
+            if not c["trusted"] and not all(live_key.get(k, True) for k in ks):
+                c["replaced"] = True
+                c["trust"] = TRUST_REPLACED
+            elif not c["trusted"] and all(k in trusted_now for k in ks):
                 c["taken_back"] = True
                 c["trust"] = TRUST_CODE_TAKEN_BACK
         untrusted = [k for k in keys if k not in trusted_after]
-        refused = [k for k in untrusted if k not in trusted_now]
-        back = [k for k in untrusted if k in trusted_now]
+        gone_keys = [k for k in untrusted if not live_key.get(k, True)]
+        refused = [k for k in untrusted if k not in trusted_now and live_key.get(k, True)]
+        back = [k for k in untrusted if k in trusted_now and live_key.get(k, True)]
         row["trusted"] = bool(keys) and not untrusted
-        row["trust"] = (trust_words(refused, back, replaced) if untrusted else TRUST_WORDS[True]) if keys else None
+        all_gone = bool(untrusted) and not refused and not back      # every version it names was replaced
+        row["trust"] = (trust_words(refused, back, all_gone, gone_keys) if untrusted else TRUST_WORDS[True]) \
+            if keys else None
+        if keys:              # always there for an installed row: what the web tells apart, empty or not
+            row["untrusted_now"] = refused[:LISTED_UNTRUSTED]
+            row["untrusted_now_count"] = len(refused)
+            row["trust_taken_back"] = back[:LISTED_UNTRUSTED]
+            row["trust_replaced"] = gone_keys[:LISTED_UNTRUSTED]
         if untrusted:
             row["untrusted"] = untrusted[:LISTED_UNTRUSTED]
             row["untrusted_count"] = len(untrusted)
-            if refused:
-                row["untrusted_now"] = refused[:LISTED_UNTRUSTED]
-            if back and not replaced:
-                row["trust_taken_back"] = back[:LISTED_UNTRUSTED]
             if any(k.endswith(f"@{UNKNOWN_KEY}") for k in untrusted):
                 row["trust_unknown"] = True
         before_t = _trusted_list((e.get("before") or {}).get("project"))

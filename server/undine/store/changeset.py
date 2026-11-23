@@ -2338,7 +2338,8 @@ class Changesets:
                       plan: dict) -> dict:
         """Appends the pending operation to the working copy's project log, under the changesets' lock and the
         server's with the changeset checked again (as _DepGuard): {op, args, actor, reason, changeset, cell: null,
-        view: null, plan, effects: [{k: "d", do, name, package, state: "needs_fetch", op_id, action, needs, owner}]}; `plan`
+        view: null, plan, effects: [{k: "d", do, name, package, git?, subdir?, state: "needs_fetch", op_id, action, needs,
+        owner}]}; `plan`
         the NeedsFetch plan with the project and the request a person's confirmation takes ({op, ...args,
         changeset, op_id, reason}); `owner` a hash of the write lease's owner (live.writer), so a person's fetch can
         install while the proposing agent still holds the lease (replay_pending). Nothing else is written."""
@@ -2354,8 +2355,11 @@ class Changesets:
         except Exception:
             spec = None
         package = clean.get("package") or (spec.get("package") if isinstance(spec, dict) else None) or clean.get("name")
-        e = {"k": "d", "do": do, "name": clean.get("name"), "package": package, "state": "needs_fetch", "op_id": op_id,
-             "action": action,
+        git = clean.get("git") or (spec.get("git") if isinstance(spec, dict) else None)
+        subdir = clean.get("subdir") or (spec.get("subdir") if isinstance(spec, dict) else None)
+        e = {"k": "d", "do": do, "name": clean.get("name"), "package": package,
+             **({"git": git} if isinstance(git, str) else {}), **({"subdir": subdir} if isinstance(subdir, str) else {}),
+             "state": "needs_fetch", "op_id": op_id, "action": action,
              "needs": needs, "owner": _owner_hash(live.writer())}
         srv = self.srv
         with srv.changeset_lock, srv.lock:

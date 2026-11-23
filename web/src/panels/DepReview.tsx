@@ -78,6 +78,7 @@ function CodeList({ c }: { c: DepReviewCode }) {
         <span className="mono">{c.key ?? c.name}</span>{" · "}
         <span className={c.trusted ? "okc" : (c.blocks_refused || c.rtl_refused) ? "warn" : "dim"}>
           {c.trusted ? <><ShieldCheck size={12} /> {t("review:deps.trust.trusted")}</>
+            : c.replaced ? <span data-testid="dep-code-replaced">{t("review:deps.trust.replaced")}</span>
             : c.taken_back ? <span data-testid="dep-code-taken-back">{t("review:deps.trust.takenBack")}</span> : t("review:deps.trust.untrusted")}
         </span>
       </div>
@@ -126,9 +127,11 @@ function DepRow({ r, pending, onFetch, busy, status }: {
   const several = count > 1 || notOwn;
   // not trusted in the project now (a run of their code is refused now); those trusted now that the change takes back
   // are said on their own line (an older server gives only `untrusted`)
+  // the server says which apart (`untrusted_now` always there on an installed row); only an older server, without
+  // it, leaves them to be told from `untrusted`
   const back = r.trust_taken_back ?? [];
   const nowKeys = r.untrusted_now ?? (r.untrusted ?? []).filter((k) => !back.includes(k));
-  const nowCount = r.untrusted_now ? Math.max(nowKeys.length, (r.untrusted_count ?? 0) - back.length) : nowKeys.length;
+  const nowCount = r.untrusted_now ? (r.untrusted_now_count ?? r.untrusted_now.length) : nowKeys.length;
   return (
     <div className={`deprow${inactive ? " dim" : ""}`} data-testid="dep-row">
       <div className="row">
@@ -193,6 +196,8 @@ function DepRow({ r, pending, onFetch, busy, status }: {
       {!!r.trust_taken_back?.length && <div className="small warn" data-testid="dep-taken-back">
         {t("review:deps.trustTakenBack", { keys: r.trust_taken_back.join(", ") })}</div>}
       {r.trust_unknown && <div className="small warn">{t("review:deps.trustUnknown")}</div>}
+      {!!r.trust_replaced?.length && <div className="small dim" data-testid="dep-trust-replaced">
+        {t("review:deps.trustReplaced", { keys: r.trust_replaced.join(", ") })}</div>}
       {!!nowKeys.length && <div className="small warn" data-testid="dep-untrusted">
         {t("review:deps.untrustedKeys", { count: nowCount, keys: nowKeys.join(", ") })}</div>}
       {/* the keys it takes out of project.json's trusted: while open the adopt will take them back (said above for a

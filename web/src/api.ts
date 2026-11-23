@@ -605,6 +605,7 @@ export interface DepRtlFile {
 export interface DepReviewCode {
   name: string; package: string | null; key?: string; keys?: string[]; trusted?: boolean; error?: string;
   taken_back?: boolean;             // trusted by its version now (runs here still run it); the adopt takes that back
+  replaced?: boolean;               // a later operation replaced this version: its code is no longer in the changeset
   blocks?: DepCodeBlock[]; blocks_total?: number; blocks_refused?: number;
   rtl?: DepRtlFile[]; rtl_total?: number; rtl_refused?: number;
 }
@@ -623,6 +624,8 @@ export interface DepReviewRow {
   code: DepReviewCode[] | null; code_more?: number; trusted: boolean; trust_drop: string[];
   untrusted?: string[]; untrusted_count?: number;     // the versions it brings not trusted once adopted
   untrusted_now?: string[];         // of those, the ones not trusted now: a run of their code is refused now
+  untrusted_now_count?: number;
+  trust_replaced?: string[];        // those a later operation replaced: no longer in the changeset
   trust_taken_back?: string[];      // trusted today, but this changeset takes that trust back: untrusted once adopted
   trust_unknown?: boolean;          // a version's key cannot be told now (the store lacks its files)
   own?: boolean;                    // license and size are the named dependency's own (false: only packages it needs moved)

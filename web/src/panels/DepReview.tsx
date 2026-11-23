@@ -110,7 +110,9 @@ function CodeList({ c }: { c: DepReviewCode }) {
 }
 
 /** One dependency operation of the review. `pending`: its operation waiting for a person's fetch (the Fetch button). */
-function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: PendingDep; onFetch: (p: PendingDep) => void; busy: boolean }) {
+function DepRow({ r, pending, onFetch, busy, status }: {
+  r: DepReviewRow; pending?: PendingDep; onFetch: (p: PendingDep) => void; busy: boolean; status: string;
+}) {
   useI18n();
   const size = r.size !== null && r.size !== undefined ? t(r.size_from === "index" ? "review:deps.sizeDownload" : "review:deps.sizeFiles",
     { size: sizeText(r.size) }) : t("review:pending.sizeUnknown");
@@ -122,6 +124,11 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
   // the named dependency did not move itself (only packages it needs did): no licence or size is its own
   const notOwn = r.own === false && count > 0;
   const several = count > 1 || notOwn;
+  // not trusted in the project now (a run of their code is refused now); those trusted now that the change takes back
+  // are said on their own line (an older server gives only `untrusted`)
+  const back = r.trust_taken_back ?? [];
+  const nowKeys = r.untrusted_now ?? (r.untrusted ?? []).filter((k) => !back.includes(k));
+  const nowCount = r.untrusted_now ? Math.max(nowKeys.length, (r.untrusted_count ?? 0) - back.length) : nowKeys.length;
   return (
     <div className={`deprow${inactive ? " dim" : ""}`} data-testid="dep-row">
       <div className="row">
@@ -136,7 +143,7 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
           {t("review:deps.checked")}</span>}
       </div>
       {r.action !== "pdk_set" && r.action !== "remove" && (
-        <div className="small">{notOwn ? <span data-testid="dep-not-own">{t("review:deps.notOwn")}</span>
+        <div className="small">{notOwn ? <span data-testid="dep-not-own">{t(r.state === "installed" ? "review:deps.notOwn" : "review:deps.notOwnFetch")}</span>
           : <>{r.license ?? t("review:pending.licenseUnknown")} · {size}</>}
           {several && <span data-testid="dep-total"> · {r.size_total !== null && r.size_total !== undefined
             ? t("review:deps.sizeTotal", { size: sizeText(r.size_total), count: count })
@@ -186,16 +193,20 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
       {!!r.trust_taken_back?.length && <div className="small warn" data-testid="dep-taken-back">
         {t("review:deps.trustTakenBack", { keys: r.trust_taken_back.join(", ") })}</div>}
       {r.trust_unknown && <div className="small warn">{t("review:deps.trustUnknown")}</div>}
-      {!!r.untrusted?.length && <div className="small warn" data-testid="dep-untrusted">
-        {t("review:deps.untrustedKeys", { count: r.untrusted_count ?? r.untrusted.length, keys: r.untrusted.join(", ") })}</div>}
-      {!!r.trust_drop.length && <div className="small warn">{t("review:deps.trustDrop", { keys: r.trust_drop.join(", ") })}</div>}
+      {!!nowKeys.length && <div className="small warn" data-testid="dep-untrusted">
+        {t("review:deps.untrustedKeys", { count: nowCount, keys: nowKeys.join(", ") })}</div>}
+      {/* the keys it takes out of project.json's trusted: while open the adopt will take them back (said above for a
+          version trusted today); once adopted, taken back */}
+      {!!r.trust_drop.length && (status === "open" || status === "applied") && <div className="small warn" data-testid="dep-trust-drop">
+        {t(status === "open" ? "review:deps.trustDropOpen" : "review:deps.trustDrop", { keys: r.trust_drop.join(", ") })}</div>}
     </div>
   );
 }
 
 /** The Dependencies section of a changeset's review: one row per dependency operation in effect, oldest first. */
-export function DepReview({ rows, pending, open, busy, onFetch }: {
+export function DepReview({ rows, pending, open, busy, onFetch, status }: {
   rows: DepReviewRow[]; pending: PendingDep[]; open: boolean; busy: boolean; onFetch: (p: PendingDep) => void;
+  status?: string;
 }) {
   useI18n();
   if (!rows.length) return null;
@@ -204,7 +215,7 @@ export function DepReview({ rows, pending, open, busy, onFetch }: {
     <div className="depreview" data-testid="dep-review">
       <div className="section">{t("review:deps.title")}</div>
       <div className="small dim">{t("review:deps.note")}</div>
-      {rows.map((r) => <DepRow key={`${r.gseq}|${r.op_id ?? ""}|${r.name ?? ""}`} r={r}
+      {rows.map((r) => <DepRow key={`${r.gseq}|${r.op_id ?? ""}|${r.name ?? ""}`} r={r} status={status ?? (open ? "open" : "closed")}
         pending={open && r.op_id ? byOp.get(r.op_id) : undefined} onFetch={onFetch} busy={busy} />)}
     </div>
   );

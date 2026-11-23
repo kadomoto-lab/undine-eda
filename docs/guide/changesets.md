@@ -230,8 +230,8 @@ operation of the proposal, open or adopted, discarded or reverted. A row shows:
   RTL finding with its file and line. What is listed as refused is what a simulation or an RTL run of an untrusted
   package refuses, by the same rule (a model include under your PDK passes), until you trust that version
   ([Trust](../design/packages.md#security)); the row says whether the project trusts every version it brings (and
-  names those it does not), and when an update took the trust of the old version back; when the change takes the
-  trust of the version it brings back (an update to other content under the same version), that version is shown as
+  names those it does not, refused now), and the keys the change takes out of the project's trusted versions (not
+  trusted once adopted); when the change takes the trust of the version it brings back (an update to other content under the same version), that version is shown as
   not trusted, as it will be once adopted, though runs in the proposal still run its code until then (trust is by
   version);
 - an **unchecked** badge until a run in the proposal read the package: a simulation, an LVS or a DRC of the working copy

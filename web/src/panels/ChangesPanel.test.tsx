@@ -967,7 +967,7 @@ describe("the review of a dependency change", () => {
     expect(row.textContent).toContain(t("review:deps.pkg.moved", { from: "1.0.0", to: "1.1.0" }));
     expect(row.textContent).toContain(t("review:deps.cell.renamed", { from: "inv" }));
     expect(row.textContent).toContain("l/top (schematic) places buf");
-    expect(row.textContent).toContain(t("review:deps.trustDrop", { keys: "ip@1.0.0" }));
+    expect(row.textContent).toContain(t("review:deps.trustDropOpen", { keys: "ip@1.0.0" }));
   });
 
   it("gives an agent's operation waiting for a fetch its Fetch button in its row", async () => {
@@ -1065,6 +1065,25 @@ describe("the review of a dependency change", () => {
     const c = screen.getByTestId("dep-code");
     expect(within(c).getByTestId("dep-code-taken-back").textContent).toBe(t("review:deps.trust.takenBack"));
     expect(c.textContent).not.toContain(t("review:deps.trust.untrusted"));
+  });
+
+  it("names the versions refused now apart from those the change takes back, and words the trust dropped truly", async () => {
+    await open({ ...rec, deps: [{ ...added, untrusted: ["ip@1.0.0", "core@1.0.0"], untrusted_count: 2, untrusted_now: ["ip@1.0.0"],
+      trust_taken_back: ["core@1.0.0"], trust_drop: ["core@1.0.0"] }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByTestId("dep-untrusted").textContent).toBe(t("review:deps.untrustedKeys", { count: 1, keys: "ip@1.0.0" }));
+    expect(within(row).getByTestId("dep-taken-back").textContent).toContain("core@1.0.0");
+    expect(within(row).getByTestId("dep-trust-drop").textContent).toBe(t("review:deps.trustDropOpen", { keys: "core@1.0.0" }));
+    cleanup();
+    await open({ ...rec, status: "applied", deps: [{ ...added, trust_drop: ["core@1.0.0"] }] });
+    expect(screen.getByTestId("dep-trust-drop").textContent).toBe(t("review:deps.trustDrop", { keys: "core@1.0.0" }));
+  });
+
+  it("says a waiting row's own files need no download when no fetch is its own", async () => {
+    const need = { url: "https://x.example/core.git", rev: null, commit: null, subdir: null, size: 9000, license: "GPL-3.0-only", package: "core", version: "1" };
+    await open({ ...rec, deps: [{ ...added, state: "needs_fetch", code: null, packages: [], needs: [need], own: false, license: null, size: null,
+      size_total: 9000, lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] } }] });
+    expect(screen.getByTestId("dep-not-own").textContent).toBe(t("review:deps.notOwnFetch"));
   });
 
   it("words the row in the reader's language", async () => {

@@ -672,7 +672,7 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
             <ChangesetFiles cs={cs} files={files} onRefresh={() => setFilesAgain((x) => x + 1)} onOpenView={openFileView} />
           ) : <>
           {!cs.changes?.length && <div className="empty" style={{ padding: 0 }}>{cs.status === "open" ? t("review:noChanges") : "—"}</div>}
-          {!!cs.deps?.length && <DepReview rows={cs.deps} pending={cs.pending_deps ?? []} open={cs.status === "open"}
+          {!!cs.deps?.length && <DepReview rows={cs.deps} pending={cs.pending_deps ?? []} open={cs.status === "open"} status={cs.status}
             busy={busy || !!closing} onFetch={setFetching} />}
           {items.filter((it) => !it.causedBy.length).map((it) => renderItem(it, cs.preview))}
           {!!cs.changes?.length && (

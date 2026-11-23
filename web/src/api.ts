@@ -621,7 +621,8 @@ export interface DepReviewRow {
   license: string | null; size: number | null; size_from: "index" | "files" | null;
   size_total?: number | null;       // every package's (or fetch's) size added up; null: one is not known
   code: DepReviewCode[] | null; code_more?: number; trusted: boolean; trust_drop: string[];
-  untrusted?: string[]; untrusted_count?: number;     // the versions it brings that the project does not trust
+  untrusted?: string[]; untrusted_count?: number;     // the versions it brings not trusted once adopted
+  untrusted_now?: string[];         // of those, the ones not trusted now: a run of their code is refused now
   trust_taken_back?: string[];      // trusted today, but this changeset takes that trust back: untrusted once adopted
   trust_unknown?: boolean;          // a version's key cannot be told now (the store lacks its files)
   own?: boolean;                    // license and size are the named dependency's own (false: only packages it needs moved)

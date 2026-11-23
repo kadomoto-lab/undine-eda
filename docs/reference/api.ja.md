@@ -217,12 +217,13 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
              size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
              cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
  used_by: [文], used_by_more?,                             変わった、または消えたセルを使うプロジェクトのセル
- license, size, size_from, own, size_total,                依存そのもののもの(needs_fetch の行は自分の取得の
+ license, size, size_from, own, size_total,                依存そのもののもの(needs_fetch の行はそのパッケージの取得の
                                                            もの)。size_total はすべてのパッケージ(取得)の合計
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
          findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
- trusted, trust, untrusted?: [キー], untrusted_count?, trust_taken_back?: [キー], trust_unknown?, trust_drop: [キー],
+ trusted, trust, untrusted?: [キー], untrusted_count?, untrusted_now?: [キー], trust_taken_back?: [キー], trust_unknown?,
+ trust_drop: [キー],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_state: stored | made | pending | failed, review_error?}
@@ -251,15 +252,19 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
   バージョン、なければローカルの名前ごとに `<ローカルの名前>@<commit12>`。複数の名前のコードのエントリは `keys` に持つ。レビューを
   作ったときに読んだキーはレビューとともに残し、その後ストアが片付けても同じキーを示す。今は決められないものは lock のパッケージと
   バージョン、なければ `<名前>@?` で、信頼されず `trust_unknown` を付ける)について、今の本物のプロジェクトの `trusted` から読みます。
-  そのため、操作の後に人が信頼したバージョンは信頼済みと出ます。`trust` はそれを言葉で言い、`untrusted` は信頼していない最初の
-  10 バージョンを挙げ、`untrusted_count` はその全部を数えます。
+  そのため、操作の後に人が信頼したバージョンは信頼済みと出ます。`untrusted` は採用後に信頼されない最初の 10 バージョンを挙げ、
+  `untrusted_count` はその全部を数え、`untrusted_now` はそのうち今信頼していないもの(その実行は今拒否される)を挙げます。`trust` は
+  それを言葉で言い、今拒否されるバージョンを先に、次に取り消されるもの(下)を挙げ、それぞれの言い分はそのバージョンについて正しい
+  ものです。後の操作がツリーを置き換えた行はそれだけを言います(そのコードはもう changeset にない)。そのコードのエントリも同じです。
 - changeset が開いている間は、それが project.json の `trusted` から外すキー(信頼したバージョンの別の内容への追加や更新: その行の
   `trust_drop`)は、今プロジェクトが信頼していても、採用後のとおり信頼していないものと数え、`trust_taken_back` に挙げます。すでに
   信頼しているので、改めて信頼しても変わりません。信頼はバージョンごとなので、採用までは changeset の中の実行はそのコードを
   動かします: そのようなキーのコードのエントリはそう言います(`taken_back` と、言葉での `trust`)。`trust_drop` は、操作が作業
   コピーの `trusted` から外したキーです(更新は古いバージョンのものを外す)。
 - `license` と `size` は名前の依存そのもののもの(`own` が true。その報告を先に挙げる)で、それが使うパッケージだけが動いたとき、
-  または取得待ちで自分の取得がないときは null(`own` が false。各パッケージのもの、各取得のものは `packages` と `needs` に)です。
+  または取得待ちでそのパッケージ(ローカルの名前が表すもの。提案、作業コピーの lock か project.json から)の取得がないとき(自分の
+  ファイルはダウンロード不要)は null(`own` が false)です。ほかのパッケージの取得を自分のものとはしません。各パッケージのもの、
+  各取得のものは `packages` と `needs` にあります。
 - `checked` は、changeset の実行がパッケージを読むまで `false`(*未確認*)です。作業コピーのシミュレーション、LVS、DRC のうち、
   終わっていて、その証拠の `about.packages` が操作の持ち込んだツリーのどれかを挙げ、(開いている間は)まだ最新のものです。
   `checked_by` がそれを示します。数えるのは操作が本当に持ち込んだツリー(ツリーの変わらないエントリ、ローカルの名前が増えただけの

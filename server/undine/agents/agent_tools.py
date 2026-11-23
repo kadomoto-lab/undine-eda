@@ -483,12 +483,14 @@ def get_changeset(c: ToolCtx, a: dict):
                                     "checked null has nothing to check (a removal, a PDK change, or replaced_by: a "
                                     "later operation replaced its trees, and that operation's row is the one to "
                                     "check); code lists what the trust rule refuses in it, which only a person can "
-                                    "trust (untrusted: the versions not trusted, trust_taken_back: trusted today but "
-                                    "this change takes it back, though runs in this changeset still run it as trust is "
-                                    "by version; code_more: packages with code not listed); license and size are the "
-                                    "named dependency's own (own true), null when only packages it needs moved or, "
-                                    "waiting for a fetch, when no fetch is its own (each package's and each fetch's are "
-                                    "in packages and needs)")
+                                    "trust (untrusted: every version not trusted once adopted; untrusted_now: those "
+                                    "not trusted now, whose code a run refuses now; trust_taken_back: those trusted now "
+                                    "that this change takes back, which runs in this changeset still run until the "
+                                    "adopt; a replaced row's code is no longer in the changeset; code_more: packages "
+                                    "with code not listed); license and size are the named dependency's own (own true), "
+                                    "null when it did not move (only packages it needs did) or, waiting for a fetch, "
+                                    "when its own files need no download (each package's and each fetch's are in "
+                                    "packages and needs)")
         out["data_rule"] = DATA_RULE
     if g["status"] == "open":
         n = a.get("restore_points")
@@ -4212,7 +4214,8 @@ def _dep_review_public(r: dict) -> dict:
     few of each list, the texts as the review kept them (control characters out, cut)."""
     out = {k: r[k] for k in ("op", "action", "name", "state", "outcome", "op_id", "fetched_by", "pdk", "license",
                              "size", "size_total", "own", "checked", "checked_by", "replaced_by", "trust", "untrusted",
-                             "untrusted_count", "trust_taken_back", "trust_unknown", "trust_drop", "review_error")
+                             "untrusted_count", "untrusted_now", "trust_taken_back", "trust_unknown", "trust_drop",
+                             "review_error")
            if r.get(k) is not None and r.get(k) != []}
     out["by"], out["reason"] = r.get("actor"), r.get("reason") or ""
     if r.get("packages"):

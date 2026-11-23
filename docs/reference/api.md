@@ -224,12 +224,13 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
              size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
              cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
  used_by: [text], used_by_more?,                           the project's cells that use a changed or removed cell
- license, size, size_from, own, size_total,                the dependency's own (a needs_fetch row: its own fetch's);
+ license, size, size_from, own, size_total,                the dependency's own (a needs_fetch row: its package's fetch's);
                                                            size_total every package's (fetch's) added up
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
          findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
- trusted, trust, untrusted?: [key], untrusted_count?, trust_taken_back?: [key], trust_unknown?, trust_drop: [key],
+ trusted, trust, untrusted?: [key], untrusted_count?, untrusted_now?: [key], trust_taken_back?: [key], trust_unknown?,
+ trust_drop: [key],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_state: stored | made | pending | failed, review_error?}
@@ -264,8 +265,11 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
   `<local name>@<commit12>` for each local name; a code entry under several names has them in `keys`; the keys read
   when the review was made are kept with it, so a store gc'd since names the same ones; one that cannot be told now is
   the lock's package and version, else `<name>@?`, never trusted, with `trust_unknown`). So a version a person trusts
-  after the operation shows as trusted. `trust` says it in words, `untrusted` names the first 10 versions not trusted
-  and `untrusted_count` counts them all.
+  after the operation shows as trusted. `untrusted` names the first 10 versions not trusted once adopted and
+  `untrusted_count` counts them all; `untrusted_now` names those not trusted now, whose code a run refuses now. `trust`
+  says it in words, naming the versions refused now first and then those taken back (below), each claim true of the
+  versions it names; a row whose trees a later operation replaced says only that (its code is no longer in the
+  changeset), and its code entries likewise.
 - While the changeset is open, a key it takes out of project.json's `trusted` (an add or update to other content
   under a trusted version: `trust_drop` of its rows) counts as not trusted, as the adopt will leave it, whatever the
   project trusts today, and is listed in `trust_taken_back`; trusting it again changes nothing, as it is trusted
@@ -273,8 +277,10 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
   a key says so (`taken_back`, and its `trust` in words). `trust_drop` lists the keys the operation took out of the
   working copy's `trusted` (an update drops the old version's).
 - `license` and `size` are the named dependency's own (`own` true; its report is listed first): null, `own` false,
-  when only packages it needs moved, or, waiting for a fetch, when none of the fetches is its own (each package's and
-  each fetch's are in `packages` and `needs`).
+  when only packages it needs moved, or, waiting for a fetch, when none of the fetches is of its package (the package
+  its local name stands for, from the proposal, the working copy's lock or project.json): its own files need no
+  download. A fetch of another package is never its own. Each package's and each fetch's are in `packages` and
+  `needs`.
 - `checked` is `false` (*unchecked*) until a run of the changeset read the package: a simulation, an LVS or a DRC of
   the working copy, done, whose evidence names one of the trees the operation brought in its `about.packages`, and
   (open) still fresh; `checked_by` names it. Only trees the operation really brought count (an entry whose tree did

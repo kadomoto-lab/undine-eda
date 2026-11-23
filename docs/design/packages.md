@@ -678,7 +678,8 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   installing record's row, with `op_id` and `fetched_by`), `project` and `lock` (`depmerge.diff` of the effect's
   before and after), the review (`review_state`: stored, made, pending or failed), the licence and size of the named dependency itself
   (its report listed first, so no cut takes it; none when only packages it needs moved, or, waiting for a fetch, when
-  no fetch is its own: `own` false, each package's and fetch's listed with it), the total size (`size_total`),
+  no fetch is of its package (from the proposal, the working copy's lock or project.json; its own files need no
+  download): `own` false, each package's and fetch's listed with it), the total size (`size_total`),
   `trusted` over every version the operation brought, named by the key the jobs, the trust dialog and `lib trust` use
   (trust.key_of's rule: the tree's manifest name and version, read from the store whatever the lock format records,
   else the local name and commit for each local name; the keys read when the review was made are kept with it, so a
@@ -687,7 +688,8 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   who they are, so two local names for one tree are each their own) whatever the review holds; while the changeset is open, a key it takes out of project.json's `trusted` (an add
   or update to other content under a trusted version) counts as not trusted, as the adopt will leave it
   (`trust_taken_back`; trust is by version, so until then runs in the changeset still run that code, and its code
-  entries say so, `taken_back`) (`untrusted` names
+  entries say so, `taken_back`); `untrusted_now` names the versions not trusted now, and the words name each kind for
+  its own versions; a replaced row says only that its code is no longer in the changeset (`untrusted` names
   the first ten the real project does not trust now, `untrusted_count` counts them all), `trust_drop` (the keys the
   operation took out of the working copy's `trusted`), and `checked`: false (*unchecked*) until a run of the changeset
   read the package (the trees taken from the effect's lock, so a row whose review is missing or failed is never

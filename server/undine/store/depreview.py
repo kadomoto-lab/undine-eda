@@ -54,9 +54,8 @@ CHECK_JOBS = 20           # runs of the working copy looked at for `checked`, ne
 # `trust` of a row and of a package's code: the trust note in words (agents read these, and only a person trusts)
 TRUST_WORDS = {True: "trusted in the project", False: "not trusted: a job that runs its code is refused until a person "
                                                       "trusts this version"}
-TRUST_TAKEN_BACK = ("not trusted once adopted: this change takes the project's trust of it back (other content under "
-                    "the same version); trust is by version, so runs in this changeset still run its code, and after "
-                    "the adopt a run of its code is refused until a person trusts it again")
+TRUST_REPLACED = ("replaced: a later operation of this changeset replaced this version, so its code is no longer in "
+                  "the changeset; the later operation's row says the trust of what it brings")
 TRUST_CODE_TAKEN_BACK = ("trusted by its version now, so runs in this changeset still run this code; the adopt takes "
                          "that trust back (other content under the same version), after which a run of it is refused "
                          "until a person trusts it again")
@@ -699,8 +698,42 @@ def _lock_hashes(lock: dict | None) -> set[str]:
     return {h for e in resolve.lock_graph(lock or {}).entries.values() if (h := _hash(e))}
 
 
+def _package_of(name, lock: dict | None, project: dict | None) -> str | None:
+    """The package a dependency's local name stands for: its lock entry's, else its project.json requirement's."""
+    if not isinstance(name, str):
+        return None
+    e = ((lock or {}).get("libraries") or {}).get(name)
+    if isinstance(e, dict) and isinstance(e.get("package"), str):
+        return e["package"]
+    spec = ((project or {}).get("libraries") or {}).get(name)
+    return spec.get("package") if isinstance(spec, dict) and isinstance(spec.get("package"), str) else None
+
+
+def _keys_text(keys: list[str]) -> str:
+    shown = ", ".join(keys[:LISTED_UNTRUSTED])
+    return shown + (f" and {len(keys) - LISTED_UNTRUSTED} more" if len(keys) > LISTED_UNTRUSTED else "")
+
+
+def trust_words(refused: list[str], back: list[str], replaced: bool) -> str:
+    """The row's trust note in words, true for each version it names: those not trusted now (a run of their code is
+    refused now) first, then those trusted now that this change takes back (runs in the changeset still run them until
+    the adopt); a replaced row says no more than that (its code is no longer in the changeset)."""
+    if replaced:
+        return TRUST_REPLACED
+    parts = []
+    if refused:
+        parts.append(f"not trusted: {_keys_text(refused)} not trusted in the project now, so a run of that code is "
+                     "refused until a person trusts it")
+    if back:
+        parts.append(f"{'' if refused else 'not trusted once adopted: '}{_keys_text(back)} trusted now, but this "
+                     "change takes that trust back (other content under the same version): runs in this changeset "
+                     "still run that code until the adopt, and after it a run of it is refused until a person "
+                     "trusts it again")
+    return "; ".join(parts) if parts else TRUST_WORDS[True]
+
+
 def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, review_of=None,
-         is_open: bool = True) -> list[dict]:
+         is_open: bool = True, work_lock: dict | None = None, work_project: dict | None = None) -> list[dict]:
     """The review's `deps` rows: one per dependency operation of the changeset still in effect (the project log's
     records, `changes` of Changesets.get), oldest first. A proposal a person's fetch installed is the row of the
     record that installed it (with its op_id and fetched_by); a dropped one's record (dep_drop) is no row, the
@@ -757,9 +790,13 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
                 row["needs_more"] = len(all_needs) - LISTED_PACKAGES
             # the licence and size on the row are the named dependency's fetch's (by its package), the only fetch's
             # when there is one; else none, each fetch's being listed with it
-            wanted = {x for x in (e.get("name"), (op.get("args") or {}).get("package")) if isinstance(x, str)}
-            mine_f = next((f for f in all_needs if f.get("package") in wanted), None) or (
-                all_needs[0] if len(all_needs) == 1 else None)
+            # the dependency's package: what the proposal recorded, else the lock's or project.json's entry for its
+            # local name (an update names only that), else the request's, else the local name; its own fetch is the
+            # one of that package (a fetch of another package is never its own)
+            dep_pkg = e.get("package") or _package_of(e.get("name"), work_lock, work_project) or \
+                (op.get("args") or {}).get("package") or e.get("name")
+            mine_f = next((f for f in all_needs if f.get("package") == dep_pkg), None) or (
+                all_needs[0] if len(all_needs) == 1 and not all_needs[0].get("package") else None)
             first = {k: data(mine_f.get(k)) for k in ("license", "size")} if mine_f else {}
             sizes = [f.get("size") for f in all_needs]
             row |= {"license": first.get("license"), "size": first.get("size"), "own": mine_f is not None,
@@ -806,38 +843,43 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
         kept_keys = review.get("keys") or {}
         keys = list(dict.fromkeys(data(k) for eb, names in brought
                                   for k in (kept_keys.get(_entry_id(eb, names)) or entry_keys(names, eb))))
-        # a key this changeset takes out of project.json's trusted (an add or update to other content) is not
-        # trusted once it is adopted: an open row judges it so, whatever the project trusts today
+        # what the operation really brought (an entry that only gained a local name brought none) and the changeset
+        # still has: for checked, the named dependency's own tree when it brought it, else any of them
+        new = [(eb, names) for ea, eb, names in changes
+               if eb is not None and (ea is None or _hash(ea) != _hash(eb)) and _hash(eb)]
+        hashes = {_hash(eb) for eb, _ in new}
+        own_h = {_hash(eb) for eb, names in new if row["name"] in names}
+        here = (own_h or hashes) & live_hashes
+        replaced = bool(hashes) and not (hashes & live_hashes) and row["action"] not in ("remove", "pdk_set")
+        # trust, per key: not trusted now (a run of its code is refused now), or trusted now but taken back by this
+        # changeset (a key it takes out of project.json's trusted: runs here still run it, the adopt takes it back);
+        # an open changeset is judged as the adopt leaves it; a replaced row's code is no longer in the changeset
         gone = dropped if is_open else set()
         trusted_after = {k for k in trusted_now if k not in gone}
         for c in row["code"]:
             ks = c.get("keys") or [c.get("key")]
             c["trusted"] = all(k in trusted_after for k in ks)
-            c["trust"] = TRUST_WORDS[c["trusted"]]
-            if not c["trusted"] and all(k in trusted_now for k in ks):
-                c["taken_back"] = True                   # trusted by its key now: runs here still run it
+            c["trust"] = TRUST_REPLACED if replaced and not c["trusted"] else TRUST_WORDS[c["trusted"]]
+            if not c["trusted"] and not replaced and all(k in trusted_now for k in ks):
+                c["taken_back"] = True
                 c["trust"] = TRUST_CODE_TAKEN_BACK
         untrusted = [k for k in keys if k not in trusted_after]
+        refused = [k for k in untrusted if k not in trusted_now]
+        back = [k for k in untrusted if k in trusted_now]
         row["trusted"] = bool(keys) and not untrusted
-        row["trust"] = TRUST_WORDS[row["trusted"]] if keys else None
+        row["trust"] = (trust_words(refused, back, replaced) if untrusted else TRUST_WORDS[True]) if keys else None
         if untrusted:
             row["untrusted"] = untrusted[:LISTED_UNTRUSTED]
             row["untrusted_count"] = len(untrusted)
-            if (back := [k for k in untrusted if k in gone and k in trusted_now]):
+            if refused:
+                row["untrusted_now"] = refused[:LISTED_UNTRUSTED]
+            if back and not replaced:
                 row["trust_taken_back"] = back[:LISTED_UNTRUSTED]
-                row["trust"] = TRUST_TAKEN_BACK
             if any(k.endswith(f"@{UNKNOWN_KEY}") for k in untrusted):
                 row["trust_unknown"] = True
         before_t = _trusted_list((e.get("before") or {}).get("project"))
         after_t = set(_trusted_list((e.get("after") or {}).get("project")))
         row["trust_drop"] = [data(k) for k in before_t if k not in after_t]
-        # checked: only trees the operation really brought (an entry that only gained a local name brought none) and
-        # that the changeset still has; the named dependency's own tree when it brought it, else any of them
-        new = [(eb, names) for ea, eb, names in changes
-               if eb is not None and (ea is None or _hash(ea) != _hash(eb)) and _hash(eb)]
-        hashes = {_hash(eb) for eb, _ in new}
-        own = {_hash(eb) for eb, names in new if row["name"] in names}
-        here = (own or hashes) & live_hashes
         if row["action"] in ("remove", "pdk_set") or not hashes:
             row["checked"] = None                       # nothing came in that a check could read
         elif not here:

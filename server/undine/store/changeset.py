@@ -2338,7 +2338,7 @@ class Changesets:
                       plan: dict) -> dict:
         """Appends the pending operation to the working copy's project log, under the changesets' lock and the
         server's with the changeset checked again (as _DepGuard): {op, args, actor, reason, changeset, cell: null,
-        view: null, plan, effects: [{k: "d", do, name, state: "needs_fetch", op_id, action, needs, owner}]}; `plan`
+        view: null, plan, effects: [{k: "d", do, name, package, state: "needs_fetch", op_id, action, needs, owner}]}; `plan`
         the NeedsFetch plan with the project and the request a person's confirmation takes ({op, ...args,
         changeset, op_id, reason}); `owner` a hash of the write lease's owner (live.writer), so a person's fetch can
         install while the proposing agent still holds the lease (replay_pending). Nothing else is written."""
@@ -2348,7 +2348,14 @@ class Changesets:
         request = {"op": action, **{k: clean[k] for k in _DEP_KEYS if k in clean}, "changeset": cid, "op_id": op_id,
                    **({"reason": reason} if reason else {})}
         needs = [dict(f) for f in plan.get("fetches") or []]
-        e = {"k": "d", "do": do, "name": clean.get("name"), "state": "needs_fetch", "op_id": op_id, "action": action,
+        # the package the dependency stands for (an update or a removal names only its local name)
+        try:
+            spec = self.srv.project(self._load(project, cid)["preview"]).library_specs().get(clean.get("name"))
+        except Exception:
+            spec = None
+        package = clean.get("package") or (spec.get("package") if isinstance(spec, dict) else None) or clean.get("name")
+        e = {"k": "d", "do": do, "name": clean.get("name"), "package": package, "state": "needs_fetch", "op_id": op_id,
+             "action": action,
              "needs": needs, "owner": _owner_hash(live.writer())}
         srv = self.srv
         with srv.changeset_lock, srv.lock:
@@ -2968,7 +2975,16 @@ class Changesets:
             if is_open:
                 return self._review_now(project, cid, op, i, e)
             return None, "failed"
-        return depreview.rows(ops, trusted, checks, review_of, is_open=is_open)
+        work_lock = work_project = None
+        if is_open:                          # the working copy's lock and project.json: a dependency's package
+            try:
+                d = self.srv.project(meta["preview"]).path
+                work_lock = deps.read_lock(d)
+                work_project = json.loads((d / "project.json").read_text())
+            except Exception:
+                pass
+        return depreview.rows(ops, trusted, checks, review_of, is_open=is_open, work_lock=work_lock,
+                              work_project=work_project)
 
     def _applied_changes(self, project: str, meta: dict) -> list[dict]:
         """The operations of a changeset closed without evidence (older ones), from the project's log: on git, the net

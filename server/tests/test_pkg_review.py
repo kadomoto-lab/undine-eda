@@ -24,6 +24,8 @@ from undine.server.api import create_app  # noqa: E402
 from undine.store import depreview, deps, trust  # noqa: E402
 from undine.store.changeset import PROJECT_LOG  # noqa: E402
 
+T_WORDS_FALSE = depreview.TRUST_WORDS[False]
+
 pytestmark = pytest.mark.skipif(not shutil.which("git"), reason="needs git")
 
 NOW = {"undine": "0.1.0 (abc1234)", "pixi_lock": None, "klayout": {"version": "0.30.12", "from": "pixi"},
@@ -427,7 +429,8 @@ def test_get_changeset_gives_agents_the_review_bounded_as_data(tmp_path):
         {"package": "ip", "names": ["ip"], "do": "add", "to": "1.0.0", "license": "MIT"} and pk["size"] > 0
     [code] = add["code"]
     assert code["rtl_total"] == 31 and len(code["refused"]) <= 2 * T.DEP_ROWS
-    assert add["trust"].startswith("not trusted") and code["trust"] == add["trust"]
+    assert add["trust"].startswith("not trusted: ip@1.0.0 not trusted in the project now")
+    assert code["trust"] == T_WORDS_FALSE and add["untrusted_now"] == ["ip@1.0.0"]
     assert pending["state"] == "needs_fetch" and pending["needs"][0]["license"] == "Apache-2.0"
     assert out["data_rule"] == T.DATA_RULE and "unchecked" in out["dependencies_note"]
     assert "\x1b" not in text and "\\u001b" not in text
@@ -1074,7 +1077,8 @@ def test_trust_the_change_takes_back_is_not_trusted(tmp_path):
     [row] = cs.get("p", cid)["deps"]
     assert row["trust_drop"] == ["ip@1.0.0"]
     assert row["trusted"] is False and row["trust_taken_back"] == ["ip@1.0.0"]
-    assert row["trust"] == depreview.TRUST_TAKEN_BACK and row["code"][0]["trusted"] is False
+    assert row["trust"].startswith("not trusted once adopted: ip@1.0.0 trusted now") and row["code"][0]["trusted"] is False
+    assert "untrusted_now" not in row
     # while it is open, trust is by version: runs in the changeset do run the code, and the words say so
     assert trust.untrusted_dirs(srv.project(meta["preview"]).path) == {}
     assert row["code"][0].get("taken_back") is True and row["code"][0]["trust"] == depreview.TRUST_CODE_TAKEN_BACK
@@ -1213,3 +1217,87 @@ def test_a_waiting_rows_licence_is_its_own_fetchs(tmp_path):
     cs._record_needs("p", cid, "add", {"name": "other", "package": "other"}, "agent:a", "other", plan2)
     other = cs.get("p", cid)["deps"][-1]
     assert (other["license"], other["size"]) == (None, None) and other.get("own") is False
+
+
+# ------------------------------------------------------------------ a waiting row's own fetch, trust words per version
+
+
+def _fetch(pkg, lic, size):
+    return {"url": f"https://example.org/{pkg}.git", "rev": None, "commit": "a" * 40, "subdir": None, "tree": None,
+            "size": size, "license": lic, "package": pkg, "version": "1.0.0", "host": "example.org", "allowed": False}
+
+
+def test_a_waiting_rows_only_fetch_of_another_package_is_not_its_own(tmp_path):
+    """update zip whose own tree is kept, only core to fetch: core's licence is not shown as zip's."""
+    root, srv, cs = _setup(tmp_path)
+    meta = cs.create("p", "zip", "", "user")
+    cid = meta["id"]
+    plan = {"op": "update", "complete": True, "fetches": [_fetch("core", "GPL-3.0-only", 9000)]}
+    cs._record_needs("p", cid, "update", {"name": "zip"}, "agent:a", "zip", plan)
+    [row] = cs.get("p", cid)["deps"]
+    assert (row["license"], row["size"]) == (None, None) and row.get("own") is False and row["size_total"] == 9000
+
+
+def test_a_waiting_update_under_another_local_name_finds_its_own_fetch(tmp_path):
+    """aip stands for package analog_ip: its waiting update's own fetch is analog_ip's (from project.json and the
+    lock, as an update names only aip)."""
+    from test_pkg_index import World
+    w = World(tmp_path)
+    w.default()
+    w.publish("sar_common", "1.1.0", license="GPL-3.0-only")
+    w.publish("analog_ip", "1.2.0", [{"name": "sar_common", "req": "^1.0"}], license="MIT")
+    root, srv, cs = _setup(tmp_path)
+    meta = cs.create("p", "aip", "", "user")
+    cid = meta["id"]
+    cs.dep_op("p", cid, "add", {"name": "aip", "package": "analog_ip"}, "user", "add",
+              local_roots=[tmp_path.resolve()])
+    plan = {"op": "update", "complete": True,
+            "fetches": [_fetch("analog_ip", "MIT", 122), _fetch("sar_common", "GPL-3.0-only", 73)]}
+    cs._record_needs("p", cid, "update", {"name": "aip", "version": "^1.3"}, "agent:a", "newer", plan)
+    row = cs.get("p", cid)["deps"][-1]
+    assert (row["license"], row["size"]) == ("MIT", 122) and row.get("own") is True
+
+
+def test_trust_words_name_each_version_truly(tmp_path):
+    """ip, not trusted, brings core, which the project trusts and the add takes back: the row says ip is not trusted
+    now (refused now) and core is taken back (still run here until the adopt); neither claim covers the other."""
+    root, srv, cs = _setup(tmp_path)
+    core = _release(tmp_path / "core", "1.0.0", {**CORE, "rtl/c.v": RTL,
+                                                 "undine-package.toml": MANIFEST.replace('"ip"', '"core"').format(v="1.0.0")})
+    ip = _release(tmp_path / "ip", "1.0.0", {**V1, "undine-package.toml": MANIFEST.format(v="1.0.0") +
+                                            f'\n[dependencies]\ncore = {{ git = "{core}", rev = "v1.0.0" }}\n'})
+    trust.set_trusted(srv.project("p"), "core@1.0.0", True)              # before it opens: the add takes it back
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    _add(cs, cid, ip, tmp_path)
+    [row] = cs.get("p", cid)["deps"]
+    assert row["trust"].startswith("not trusted: ip@1.0.0 not trusted in the project now")      # refused now first
+    assert row.get("untrusted_now") == ["ip@1.0.0"] and row["trust_taken_back"] == ["core@1.0.0"]
+    assert "core@1.0.0 trusted now" in row["trust"] and "ip@1.0.0 trusted now" not in row["trust"]
+    by = {c["key"]: c for c in row["code"]}
+    assert by["ip@1.0.0"]["trust"] == depreview.TRUST_WORDS[False] and not by["ip@1.0.0"].get("taken_back")
+    assert by["core@1.0.0"].get("taken_back") is True
+
+
+def test_a_replaced_rows_trust_says_nothing_of_runs(tmp_path):
+    """An update to other content under a trusted version, then another update: the first's code is no longer in the
+    changeset, so its row and code say replaced, not that runs here still run it."""
+    root, srv, cs = _setup(tmp_path)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    prj = srv.project("p")
+    deps.add(prj, "ip", str(ip), "v1.0.0", local_roots=[tmp_path.resolve()])
+    trust.set_trusted(prj, "ip@1.0.0", True)
+    (ip / "buf.sch").write_text(CONTROL.replace("shell echo hi", "shell rm -rf ~"))
+    _git(ip, "commit", "-qam", "change")
+    _git(ip, "tag", "v1.0.0-b")
+    _release(ip, "2.0.0", {})
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    lr = [tmp_path.resolve()]
+    cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v1.0.0-b"}, "user", "b", local_roots=lr)
+    cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v2.0.0"}, "user", "2", local_roots=lr)
+    first, second = cs.get("p", cid)["deps"]
+    assert first["replaced_by"] == second["gseq"]
+    assert not any(c.get("taken_back") for c in first["code"]) and "trust_taken_back" not in first
+    assert "still run" not in first["trust"] and all("still run" not in (c["trust"] or "") for c in first["code"])
+    assert first["trust"] == getattr(depreview, "TRUST_REPLACED", None)

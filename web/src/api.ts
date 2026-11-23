@@ -603,7 +603,7 @@ export interface DepRtlFile {
 }
 /** A package's code as the review lists it: the first blocks and RTL files (refused first), and how many in all. */
 export interface DepReviewCode {
-  name: string; package: string | null; key?: string; trusted?: boolean; error?: string;
+  name: string; package: string | null; key?: string; keys?: string[]; trusted?: boolean; error?: string;
   blocks?: DepCodeBlock[]; blocks_total?: number; blocks_refused?: number;
   rtl?: DepRtlFile[]; rtl_total?: number; rtl_refused?: number;
 }

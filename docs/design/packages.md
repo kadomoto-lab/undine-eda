@@ -648,15 +648,17 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   web/src/panels/DepReview.tsx):* each dependency operation's review is made once it is recorded, after its guard let
   the changesets' and the server's locks go (`Changesets._review_records`; no review is ever made while a thread holds
   them, so a read under them, restore's or verify's answer, shows it `pending`; and it never waits for an index
-  refresh: it reads an index copy only under a non-blocking shared lock held across the read, else the store's size
-  and the manifest's licence stand), and is kept beside the changeset's worktrees, one file per operation
+  refresh: it reads an index copy only under a non-blocking shared lock held across the read, and never fetches or updates
+  one, else the store's size and the manifest's licence stand), and is kept beside the changeset's worktrees, one file per operation
   (`reviews/<gseq>-<effect>.json` with a hash of the effect's before and after and the PDK its code listing was made
   for), out of the project's repository. Two operations with the same files before and after keep a review each, of
   its own time. A review made for another PDK than the working copy's now has its code listing made again (what the
   trust rule refuses depends on the PDK); one that could not be made is not kept, and is tried again at a later read
-  (at most every ten seconds); one not kept yet (a server stopped right after the operation) is made at the next read
-  of the open changeset. Before a closure takes its locks every review is made for the PDK then, and the evidence
-  copies them (the manifest's `reviews`); one still missing is archived as failed. It is made from the effect and the store, so it describes the operation whatever ran since: the trees of
+  (at most every ten seconds, whichever reader: the wait is the server's, not a reader's); one not kept yet (a server stopped right after the operation) is made at the next read
+  of the open changeset. Before a closure takes its locks every review is made for the PDK then (one that just failed tried
+  once more, whatever the wait), and the evidence copies them (the manifest's `reviews`); a closure that still finds
+  one missing under its locks (an operation committed meanwhile) changes nothing, lets them go, makes it and tries
+  again, and only its third try archives what could not be made as failed, with why. It is made from the effect and the store, so it describes the operation whatever ran since: the trees of
   the lock entries whose content changed are linked from the store's objects into a temporary directory and read
   there. Per such entry (`packages`): its package, local names, version and commit before and after, its tree hash
   after, the licence (the manifest's, else the local copy of its index) with its licence files, the size (the index
@@ -675,7 +677,10 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   (`installed`, `needs_fetch`, `cancelled`; `outcome` superseded or dropped; a proposal a fetch installed is the
   installing record's row, with `op_id` and `fetched_by`), `project` and `lock` (`depmerge.diff` of the effect's
   before and after), the review (`review_state`: stored, made, pending or failed), the total size (`size_total`),
-  `trusted` over every version the operation brought, read from its lock whatever the review holds (`untrusted` names
+  `trusted` over every version the operation brought, named by the key the jobs, the trust dialog and `lib trust` use
+  (trust.key_of's rule: the tree's manifest name and version, read from the store whatever the lock format records,
+  else the local name and commit for each local name), the versions read from the effect's lock (entries paired by
+  who they are, so two local names for one tree are each their own) whatever the review holds (`untrusted` names
   the first ten the real project does not trust now, `untrusted_count` counts them all), `trust_drop` (the keys the
   operation took out of the working copy's `trusted`), and `checked`: false (*unchecked*) until a run of the changeset
   read the package (the trees taken from the effect's lock, so a row whose review is missing or failed is never

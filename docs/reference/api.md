@@ -242,7 +242,8 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
   closed changeset's review reads the same. `review_state`: `stored` (kept), `made` (this read made it: it was not
   kept yet, or was made for another PDK than the working copy's now, whose code listing is made again), `pending`
   (this read was made under a lock no review is made under: a restore's or a verify's answer) or `failed` (it could
-  not be made: `review_error`; not kept, tried again at a later read, and archived as failed at closure);
+  not be made: `review_error`; not kept, tried again at a later read at most every ten seconds, by the closure once
+  more whatever the wait, and archived as failed, with why, only if the closure still cannot make it);
   `recorded` is `review_state == "stored"`. `packages` compares the store's records of both trees, so its `changed` is `null` when the
   store has no record of a side; `cells` applies the new version's `[renames]`; `license` is the manifest's
   (`license_from: "manifest"`), else the local copy of the index's (`"index"`); `size` is the index line's
@@ -258,7 +259,9 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
   from a package (paths, cell names, code, findings, licences, versions, a needs_fetch URL) has its control characters
   made spaces and is cut (200 characters): it is data written by others.
 - `trusted` (each package's in `code`, and the row's: every version the operation brought, from its lock, whatever the
-  review holds) is read from the real project's `trusted` now, so a version a person trusts after the operation shows
+  review holds) is read from the real project's `trusted` now, for the key the jobs and the trust dialog use
+  (`trust.key_of`: the tree's manifest name and version, read from the store whatever the lock format records, else
+  `<local name>@<commit12>` for each local name; a code entry under several names has them in `keys`), so a version a person trusts after the operation shows
   as trusted; `trust` says it in words, `untrusted` names the first 10 versions not trusted and `untrusted_count` counts
   them all. `trust_drop` lists the keys
   the operation took out of the working copy's `trusted` (an update drops the old version's).

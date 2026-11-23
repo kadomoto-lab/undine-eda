@@ -31,6 +31,7 @@ the changeset (an LVS, a DRC or a simulation whose evidence names the package's 
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import re
@@ -246,18 +247,30 @@ def _entry_size(e: dict, files: dict[str, str] | None) -> tuple[int | None, str 
 def _entry_license(e: dict, man) -> tuple[str | None, str | None]:
     """(licence, where from): the manifest's, else the local copy of the entry's index (vendor's rule), unless that
     copy is being refreshed."""
-    from undine.store import vendor
     if man is not None and getattr(man, "license", None):
         return man.license, "manifest"
     if e.get("index"):
         with _index_held(e.get("index")) as held:
-            try:
-                got = vendor._index_license(e) if held else None
-            except Exception:
-                got = None
+            got = _index_license(e) if held else None
         if got:
             return got, "index"
     return None, None
+
+
+def _index_license(e: dict) -> str | None:
+    """vendor._index_license's answer, read with fetch=False: inside the review an index copy is only read, never
+    fetched or updated (an update would wait for the shared lock the review holds: for good)."""
+    from undine.store import index as ix
+    url, package, version = e.get("index"), e.get("package"), e.get("version")
+    if not (isinstance(url, str) and isinstance(package, str) and isinstance(version, str)):
+        return None
+    try:
+        idx = ix.Index(url, fetch=False)
+        if not idx.fetched():
+            return None
+        return next((v.license for v in idx.versions(package) if str(v.vers) == version), None)
+    except Exception:
+        return None
 
 
 @contextlib.contextmanager
@@ -323,51 +336,92 @@ def _used_by(prj, name: str, changes: dict[str, list[str]]) -> list[str]:
     return out
 
 
-def entry_key(names: list[str], e: dict) -> str:
-    """What a person trusts for a lock entry (trust.key_of's rule, from the lock): '<package>@<version>' for a package
-    (its manifest's name and version, as the lock records them), else '<local name>@<commit12>'."""
-    if isinstance(e.get("package"), str) and isinstance(e.get("version"), str):
-        return f"{e['package']}@{e['version']}"
+_UNREAD = object()
+
+
+@functools.lru_cache(maxsize=4096)
+def _manifest_id(kind: str, value: str):
+    """(name, version) of the manifest of the tree a lock entry names, read from the store (content addressed, so kept
+    once read); None when the tree has no manifest or one that cannot be read (trust._identity reads it the same way:
+    such a tree is known by its commit); _UNREAD when the store has no record of the tree."""
+    from undine.store import manifest as mf
+    try:
+        files = cas.read_tree(value) if kind == "tree" else cas.read_archive_tree(value)
+    except (cas.StoreError, TypeError, ValueError):
+        files = None
+    if files is None:
+        return _UNREAD
+    got = files.get(mf.MANIFEST)
+    if got is None:
+        return None
+    try:
+        m = mf.parse(cas.object_path(got[1]).read_bytes(), "review")
+    except (OSError, ValueError):
+        return None
+    return (m.name, str(m.version))
+
+
+def entry_keys(names: list[str], e: dict, man=_UNREAD) -> list[str]:
+    """What a person trusts for a lock entry, exactly as trust.key_of gives it for its installs (the jobs, the trust
+    dialog, `lib trust` and POST /trust use that): '<name>@<version>' from the tree's manifest, whatever the lock
+    format records, else '<local name>@<commit12>' for each local name it is installed under (the install marker's
+    commit, the lock entry's). `man`: the manifest when the caller has read it; else it is read from the store, and,
+    when the store has no record of the tree, the lock's package and version stand in."""
+    if man is _UNREAD:
+        try:
+            from undine.store import deps
+            kind, value = deps.entry_hash(e)
+            got = _manifest_id(kind, value) if isinstance(value, str) else _UNREAD
+        except Exception:
+            got = _UNREAD
+        if got is _UNREAD and isinstance(e.get("package"), str) and isinstance(e.get("version"), str):
+            got = (e["package"], e["version"])
+    else:
+        got = (man.name, str(man.version)) if man is not None else None
+    if isinstance(got, tuple):
+        return [f"{got[0]}@{got[1]}"]
     commit = e.get("commit")
     ver = commit[:12] if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{12,64}", commit) else "unknown"
-    return f"{names[0]}@{ver}"
+    return [f"{n}@{ver}" for n in names]
 
 
 def changed(before: dict, after: dict) -> list[tuple[dict | None, dict | None, list[str]]]:
     """(entry before, entry after, local names) of every lock entry whose content an effect changed (`before` and
-    `after`: project.json and undine.lock as the effect keeps them): added, moved or removed."""
+    `after`: project.json and undine.lock as the effect keeps them): added, moved or removed. Entries are paired by
+    who they are (their lock identity, else a local name they share), never by their content: two local names may
+    lock the same tree, and each is its own install, trust key and removal."""
     ga, gb = resolve.lock_graph((before or {}).get("lock") or {}), resolve.lock_graph((after or {}).get("lock") or {})
-    ha = {_hash(e): id for id, e in ga.entries.items()}
-    hb = {_hash(e): id for id, e in gb.entries.items()}
     out: list[tuple[dict | None, dict | None, list[str]]] = []
     paired: set[str] = set()
     for id, e in gb.entries.items():
-        if _hash(e) not in ha:
-            prev = id if id in ga.entries else next((i for i in ga.entries if gb.names_of(id)[0] in ga.names_of(i)),
-                                                    None)
-            prev = prev if prev is not None and _hash(ga.entries[prev]) not in hb else None
-            if prev is not None:
-                paired.add(prev)
-            out.append((ga.entries.get(prev) if prev else None, e, gb.names_of(id)))
+        names = gb.names_of(id)
+        prev = id if id in ga.entries else next((i for i in ga.entries if i not in paired and names[0] in
+                                                 ga.names_of(i)), None)
+        if prev is not None:
+            paired.add(prev)
+            if _hash(ga.entries[prev]) == _hash(e) and ga.names_of(prev) == names:
+                continue                                 # the same entry, the same content: not changed
+        out.append((ga.entries.get(prev) if prev is not None else None, e, names))
     for id, e in ga.entries.items():
-        if _hash(e) not in hb and id not in paired:
+        if id not in paired:
             out.append((e, None, ga.names_of(id)))
     return out
 
 
-def _listing(prj, names: list[str], eb: dict, d, package, allowed, env) -> dict:
+def _listing(prj, names: list[str], eb: dict, d, package, allowed, env, man=_UNREAD) -> dict:
     """One package's code entry: every code block and RTL file (trust.listing with the jobs' PDK root and variables),
     or why it could not be listed."""
     from undine.store import trust
-    key = data(entry_key(names, eb))
+    keys = [data(k) for k in entry_keys(names, eb, man)]
+    key = keys[0]
     if d is None:
-        return {"name": data(names[0]), "package": package, "key": key,
+        return {"name": data(names[0]), "package": package, "key": key, **({"keys": keys} if len(keys) > 1 else {}),
                 "error": "not in the store: its code could not be listed"}
     try:
-        return {"name": data(names[0]), "package": package, "key": key,
+        return {"name": data(names[0]), "package": package, "key": key, **({"keys": keys} if len(keys) > 1 else {}),
                 "all": trust.listing(d, allowed=allowed, env=env)}
     except Exception as err:                  # what cannot be read is said, the other packages still listed
-        return {"name": data(names[0]), "package": package, "key": key,
+        return {"name": data(names[0]), "package": package, "key": key, **({"keys": keys} if len(keys) > 1 else {}),
                 "error": data(f"cannot list its code: {err}", 400)}
 
 
@@ -432,7 +486,8 @@ def record(prj, before: dict, after: dict, allowed: list | None = None, env: dic
                     row["cells"] = cells
                     if more:
                         row["cells_more"] = more
-                code.append(_listing(prj, names, eb, d, row["package"], allowed, env))
+                code.append(_listing(prj, names, eb, d, row["package"], allowed, env,
+                                     man if d is not None else _UNREAD))
             packages.append(row)
         out = {"packages": None, "used_by": None, "code": None}
         out["packages"], more = _listed(packages, LISTED_PACKAGES)
@@ -684,13 +739,13 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
             if review.get(k):
                 row[k] = review[k]
         for c in row["code"]:
-            c["trusted"] = c.get("key") in trusted_now
+            c["trusted"] = all(k in trusted_now for k in c.get("keys") or [c.get("key")])
             c["trust"] = TRUST_WORDS[c["trusted"]]
         # the trust note over every version the operation brought, from its lock (the review's code list may be cut,
         # or missing): exact whatever the review holds
         brought = [(eb, names) for ea, eb, names in changed(e.get("before") or {}, e.get("after") or {})
                    if eb is not None]
-        keys = list(dict.fromkeys(data(entry_key(names, eb)) for eb, names in brought))
+        keys = list(dict.fromkeys(data(k) for eb, names in brought for k in entry_keys(names, eb)))
         untrusted = [k for k in keys if k not in trusted_now]
         row["trusted"] = bool(keys) and not untrusted
         row["trust"] = TRUST_WORDS[row["trusted"]] if keys else None

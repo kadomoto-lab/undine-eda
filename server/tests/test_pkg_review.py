@@ -75,12 +75,13 @@ def _release(d: Path, version: str, files: dict[str, str]) -> Path:
     return d
 
 
-def _setup(tmp_path: Path):
-    """The changeset test project with a format 2 lock, its server taking local repositories from under tmp_path."""
+def _setup(tmp_path: Path, fmt: int = 2):
+    """The changeset test project with a lock of format `fmt`, its server taking local repositories from under
+    tmp_path."""
     root, srv, cs = tc.setup()
     srv.dep_roots = [tmp_path.resolve()]
     prj = srv.project("p")
-    deps.write_lock(prj.path, {"format": 2, "pdk": None, "tools": copy.deepcopy(NOW)})
+    deps.write_lock(prj.path, {"format": fmt, "pdk": None, "tools": copy.deepcopy(NOW)} if fmt == 2 else {"format": 1})
     return root, srv, cs
 
 
@@ -851,3 +852,178 @@ def test_no_review_is_made_under_the_locks(tmp_path, monkeypatch):
     assert made == []
     [row] = cs.get("p", cid)["deps"]
     assert row["review_state"] == "made" and made == [(False, False)]
+
+
+# ------------------------------------------------------------------ the jobs' trust key, entries by identity, closures
+
+
+def _plain(d: Path, files: dict[str, str], tag: str = "v1") -> Path:
+    """A repository with no manifest (a plain git dependency), committed and tagged."""
+    d.mkdir(parents=True)
+    _git(d, "init", "-q")
+    for rel, text in files.items():
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        (d / rel).write_text(text)
+    _git(d, "add", "-A")
+    _git(d, "commit", "-qm", tag)
+    _git(d, "tag", tag)
+    return d
+
+
+@pytest.mark.parametrize("fmt", [1, 2])
+@pytest.mark.parametrize("manifest", [True, False])
+def test_trust_key_is_the_jobs_key(tmp_path, fmt, manifest):
+    """The review names and judges a version by the key the jobs, the trust dialog and `lib trust` use
+    (trust.key_of: the manifest's name and version, else the local name and commit), whatever the lock format holds;
+    trusting that key clears the note."""
+    root, srv, cs = _setup(tmp_path, fmt)
+    if manifest:
+        ip, rev = _release(tmp_path / "ip", "1.0.0", V1), "v1.0.0"
+    else:
+        ip, rev = _plain(tmp_path / "ip", V1), "v1"
+    meta = cs.create("p", "ip", "", "user")
+    cid, P = meta["id"], meta["preview"]
+    _add(cs, cid, ip, tmp_path, rev=rev)
+    W = srv.project(P).path
+    assert deps.read_lock(W)["format"] == fmt
+    key = trust.key_of(deps.dep_dir(W, "ip"))
+    assert key == ("ip@1.0.0" if manifest else f"ip@{deps.read_lock(W)['libraries']['ip']['commit'][:12]}")
+    [row] = cs.get("p", cid)["deps"]
+    assert row["untrusted"] == [key] and row["code"][0]["key"] == key and row["trusted"] is False
+    trust.set_trusted(srv.project("p"), key, True)
+    assert not trust.untrusted_dirs(W)                      # the jobs refuse nothing now
+    [row] = cs.get("p", cid)["deps"]
+    assert row["trusted"] is True and "untrusted" not in row and row["code"][0]["trusted"] is True
+
+
+def test_two_names_for_one_tree_are_each_reviewed(tmp_path):
+    """Two local names may lock the same tree: the second add is an add of its own (its key, unchecked), and removing
+    the first still names the cells that place it."""
+    root, srv, cs = _setup(tmp_path)
+    src = _plain(tmp_path / "raw", V1)
+    meta = cs.create("p", "ip", "", "user")
+    cid, P = meta["id"], meta["preview"]
+    lr = [tmp_path.resolve()]
+    cs.dep_op("p", cid, "add", {"name": "ip", "git": str(src), "rev": "v1"}, "user", "ip", local_roots=lr)
+    cs.dep_op("p", cid, "add", {"name": "ip2", "git": str(src), "rev": "v1"}, "user", "ip2", local_roots=lr)
+    W = srv.project(P).path
+    trust.set_trusted(srv.project("p"), trust.key_of(deps.dep_dir(W, "ip")), True)
+    ip, ip2 = cs.get("p", cid)["deps"]
+    assert [(p["do"], p["names"]) for p in ip2["packages"]] == [("add", ["ip2"])]
+    assert ip2["untrusted"] == [trust.key_of(deps.dep_dir(W, "ip2"))] and ip2["checked"] is False
+    assert ip["trusted"] is True
+    _place(srv, cs, P, cid, "buf")
+    cs.dep_op("p", cid, "remove", {"name": "ip"}, "user", "gone", local_roots=lr)
+    rm = cs.get("p", cid)["deps"][-1]
+    assert rm["action"] == "remove" and [(p["do"], p["names"]) for p in rm["packages"]] == [("del", ["ip"])]
+    assert rm["used_by"] == ["l/top (schematic) places buf"]
+
+
+def _index_with_line(monkeypatch):
+    """A fetched local copy of INDEX_URL listing ip 1.0.0 (licence MIT, size 123)."""
+    import os
+    import subprocess
+    from undine.store import index as ix
+    repo = ix._dir(INDEX_URL)
+    repo.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
+
+    def git(*a, i=None, env=None):
+        return subprocess.run(["git", "-C", str(repo), *a], input=i, capture_output=True, check=True,
+                              env=env).stdout.decode().strip()
+    line = ('{"name":"ip","vers":"1.0.0","git":"https://example.invalid/ip.git","commit":"%s","tree":"sha256:%s",'
+            '"license":"MIT","size":123}\n' % ("a" * 40, "b" * 64))
+    env = dict(os.environ, GIT_INDEX_FILE=str(repo / "tmpidx"))
+    for blob, rel in ((git("hash-object", "-w", "--stdin", i=b'{"format":1}'), "config.json"),
+                      (git("hash-object", "-w", "--stdin", i=line.encode()), ix.rel_path("ip"))):
+        git("update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}", env=env)
+    top = git("write-tree", env=env)
+    os.unlink(repo / "tmpidx")
+    git("update-ref", ix.REF, git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", top, "-m", "x"))
+    return {"package": "ip", "version": "1.0.0", "index": INDEX_URL, "commit": "a" * 40, "tree": "sha256:" + "b" * 64}
+
+
+def test_review_never_fetches_an_index(tmp_path, monkeypatch):
+    """A copy that seems gone at the second look (a git hiccup) is not fetched again by the review: an update would
+    wait for the shared lock the review itself holds."""
+    import threading
+    from undine.store import index as ix
+    entry = _index_with_line(monkeypatch)
+    assert depreview._entry_license(entry, None) == ("MIT", "index")
+    real = ix.Index._commit
+    calls = {"n": 0}
+
+    def flaky(self):
+        calls["n"] += 1
+        return real(self) if calls["n"] % 2 else None
+    monkeypatch.setattr(ix.Index, "_commit", flaky)
+    updates = []
+    monkeypatch.setattr(ix.Index, "update", lambda self: updates.append(1) or "x")
+    done: dict = {}
+    t = threading.Thread(target=lambda: done.setdefault("r", depreview._entry_license(entry, None)), daemon=True)
+    t.start()
+    t.join(3)
+    assert not t.is_alive() and updates == []
+
+
+def test_closure_retries_a_review_that_just_failed(tmp_path, monkeypatch):
+    """The one-click route applies right after the operation: a review that failed there is tried again by the
+    closure, not archived as failed because the retry wait has not passed."""
+    root, srv, cs = _setup(tmp_path)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    real = depreview._tree_dir
+    fails = {"n": 1}
+
+    def flaky(*a, **k):
+        if fails["n"] > 0:
+            fails["n"] -= 1
+            raise FileNotFoundError("object vanished (transient)")
+        return real(*a, **k)
+    monkeypatch.setattr(depreview, "_tree_dir", flaky)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    _add(cs, cid, ip, tmp_path)                              # fails here
+    cs.apply("p", cid, "user")                               # at once
+    [row] = cs.get("p", cid)["deps"]
+    assert row["review_state"] == "stored" and row["code"][0]["key"] == "ip@1.0.0"
+
+
+def test_closure_makes_reviews_of_an_operation_committed_meanwhile(tmp_path, monkeypatch):
+    """A closure that finds, under its locks, an operation whose review is not made yet (committed after its
+    prepare) changes nothing, makes it outside the locks and closes then: it is never archived as failed for that."""
+    from undine.store import changeset as changesetmod
+    root, srv, cs = _setup(tmp_path)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    monkeypatch.setattr(changesetmod.Changesets, "_review_records", lambda self, *a, **k: None)   # not made yet
+    real = changesetmod.Changesets._prepare_reviews
+    seen = []
+
+    def first_prepare_too_early(self, project, cid_):
+        seen.append(1)
+        if len(seen) > 1:
+            real(self, project, cid_)
+    monkeypatch.setattr(changesetmod.Changesets, "_prepare_reviews", first_prepare_too_early)
+    _add(cs, cid, ip, tmp_path)
+    cs.discard("p", cid, "user")
+    assert len(seen) == 2                                    # the closure went round once more
+    [row] = cs.get("p", cid)["deps"]
+    assert row["review_state"] == "stored" and row["code"][0]["key"] == "ip@1.0.0"
+
+
+def test_retry_wait_holds_for_every_reader(tmp_path, monkeypatch):
+    """The agent tools make a Changesets per call: a review that cannot be made is not tried again on each of them
+    within the retry wait."""
+    from undine.store.changeset import Changesets
+    root, srv, cs = _setup(tmp_path)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    builds = []
+    monkeypatch.setattr(depreview, "record", lambda *a, **k: builds.append(1) or {"error": "broken"})
+    _add(cs, cid, ip, tmp_path)
+    for _ in range(4):
+        [row] = Changesets(srv).get("p", cid)["deps"]
+        assert row["review_state"] == "failed"
+    assert len(builds) == 1

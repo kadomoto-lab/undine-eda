@@ -219,6 +219,16 @@ _DEP_KEYS = ("name", "git", "rev", "subdir", "package", "version", "index")
 REPLAY_RETRY_S = 3.0          # how long a person's fetch retries while another writer holds the changeset's lease
 NOTICES_GIVEN = 5             # notices one answer gives an agent at most (the rest: the next wait_for)
 REVIEW_RETRY_S = 10.0         # a dependency review that could not be made is tried again after this, at a read
+# the dependency reviews that could not be made: (when last tried, the answer) by (shadow root, gseq-index). Here, not
+# on a Changesets (the agent tools, MCP and some routes make one per access), so the retry wait holds for every reader
+_REVIEW_FAILED: dict[tuple, tuple[float, dict]] = {}
+_REVIEW_FAILED_LOCK = threading.Lock()
+REVIEW_CLOSURE_TRIES = 3      # a closure that finds reviews not made yet lets its locks go, makes them, and tries again
+
+
+class _ReviewsMissing(Exception):
+    """A closure found, under its locks, dependency reviews not made yet (an operation committed after its prepare):
+    nothing was changed; the caller makes them outside the locks and runs the closure again."""
 OLD_FORM = ("changeset {cid} is a copy made before changesets were git branches: it can be reviewed and discarded; "
             "to apply it, open the proposal again as a new changeset")
 
@@ -875,9 +885,6 @@ class Baseline(Project):
 class Changesets:
     def __init__(self, srv):
         self.srv = srv
-        # reviews that could not be made: when last tried, and the answer, by (project, cid, gseq-index)
-        self._review_failed: dict[tuple, float] = {}
-        self._review_errors: dict[tuple, dict] = {}
 
     # ------------------------------------------------------------------ paths and records
 
@@ -1237,16 +1244,17 @@ class Changesets:
     def discard(self, project: str, cid: str, actor: str = "user") -> dict:
         """Closes the changeset without merging it: its evidence archived, its branch kept (_close_git); the record's
         "discarded" = {"t", "by"}. Seen as it waits and runs (_closing)."""
-        self._prepare_reviews(project, cid)            # the reviews the evidence keeps, made outside the locks
-        with self._closing(project, cid, "discard", actor):
-            return self._discard(project, cid, actor)
+        with self._closing(project, cid, "discard", actor):     # the reviews the evidence keeps made outside the locks
+            return self._closing_with_reviews(project, cid, lambda last: self._discard(project, cid, actor, last))
 
     @_serialized
-    def _discard(self, project: str, cid: str, actor: str) -> dict:
+    def _discard(self, project: str, cid: str, actor: str, last: bool = True) -> dict:
         meta = self._load(project, cid)
         self._check_open(meta)
         self._check_writer(cid)
         self._check_merging(project, cid)
+        if not last and meta.get("git") and self._missing_reviews(project, meta):
+            raise _ReviewsMissing(cid)
         progress = self._progress(cid)
         with _busy(self._shadow_root(project, cid)):
             progress.phase("committing")
@@ -2808,16 +2816,20 @@ class Changesets:
         pdk = prj.pdk
         return ([pdk.root] if pdk else []), (self.srv.model_env(prj) if hasattr(self.srv, "model_env") else {})
 
-    def _build_review(self, project: str, cid: str, op: dict, i: int, e: dict, kept: dict | None = None) -> dict | None:
+    def _build_review(self, project: str, cid: str, op: dict, i: int, e: dict, kept: dict | None = None,
+                      force: bool = False) -> dict | None:
         """The review of effect `i` of record `op` of the open changeset `cid`, made now and kept: in full
         (depreview.record), or, `kept` being one made for another PDK, its code listing again for the working copy's
         PDK (depreview.code_listing; the rest stays as made at its time). None while this thread holds a lock no
-        review is made under. A review that could not be made ({"error"}) is returned, not kept."""
+        review is made under. A review that could not be made ({"error"}) is returned, not kept, and not tried again
+        for REVIEW_RETRY_S, unless `force` (a closure's: its evidence keeps what it gets)."""
         if self._locked():
             return None
-        key = (project, cid, self._review_key(op, i))
-        if time.time() - self._review_failed.get(key, 0) < REVIEW_RETRY_S:
-            return self._review_errors.get(key)
+        key = (str(self._shadow_root(project, cid)), self._review_key(op, i))
+        with _REVIEW_FAILED_LOCK:
+            failed = _REVIEW_FAILED.get(key)
+        if failed is not None and not force and time.time() - failed[0] < REVIEW_RETRY_S:
+            return failed[1]
         try:
             prj = self.srv.project(f"{project}~{cid}")
         except (KeyError, ValueError):
@@ -2833,12 +2845,13 @@ class Changesets:
                 review = {"error": depreview.data(f"the review's code listing could not be made: {err}", 400)}
         else:
             review = depreview.record(prj, e.get("before") or {}, e.get("after") or {}, allowed=allowed, env=env)
+        with _REVIEW_FAILED_LOCK:
+            if review.get("error"):
+                _REVIEW_FAILED[key] = (time.time(), review)
+            else:
+                _REVIEW_FAILED.pop(key, None)
         if review.get("error"):
-            self._review_failed[key] = time.time()
-            self._review_errors[key] = review
             return review
-        self._review_failed.pop(key, None)
-        self._review_errors.pop(key, None)
         d = self._review_dir(project, cid)
         try:
             d.mkdir(parents=True, exist_ok=True)
@@ -2849,13 +2862,14 @@ class Changesets:
             pass
         return review
 
-    def _review_now(self, project: str, cid: str, op: dict, i: int, e: dict) -> tuple[dict | None, str]:
+    def _review_now(self, project: str, cid: str, op: dict, i: int, e: dict,
+                    force: bool = False) -> tuple[dict | None, str]:
         """(review, state) of an installed dependency effect of an open changeset, for the PDK it has now: "stored",
         "made" (by this call), "pending" (not made: a lock is held) or "failed"."""
         kept = self._stored_review(project, cid, op, i, e)
         if kept is not None and kept.get("pdk") == self._pdk_of(project, cid):
             return kept["review"], "stored"
-        r = self._build_review(project, cid, op, i, e, kept)
+        r = self._build_review(project, cid, op, i, e, kept, force=force)
         if r is None:                        # not made under a lock: a review for another PDK is not shown as this one
             return None, "pending"
         return r, "failed" if r.get("error") else "made"
@@ -2886,9 +2900,32 @@ class Changesets:
             if meta["status"] != "open" or not meta.get("git"):
                 return
             for op, i, e in self._installed_effects(self.changes(project, meta)):
-                self._review_now(project, cid, op, i, e)
+                self._review_now(project, cid, op, i, e, force=True)    # a failure tried once more, now
         except Exception:
             pass
+
+    def _missing_reviews(self, project: str, meta: dict) -> bool:
+        """Whether an installed dependency effect of the open changeset has no review kept for its PDK now (read only:
+        under a closure's locks)."""
+        pdk = self._pdk_of(project, meta["id"])
+        for op, i, e in self._installed_effects(self.changes(project, meta)):
+            kept = self._stored_review(project, meta["id"], op, i, e)
+            if kept is None or kept.get("pdk") != pdk:
+                return True
+        return False
+
+    def _closing_with_reviews(self, project: str, cid: str, run):
+        """run() (an apply's or a discard's serialized part, `tries` its attempt), the reviews its evidence keeps made
+        before it takes its locks: when it still finds some missing under them (an operation committed meanwhile, its
+        review not made yet) it changes nothing and raises _ReviewsMissing, and they are made again outside the
+        locks; on the last try what is still missing is archived as failed, with why."""
+        for attempt in range(REVIEW_CLOSURE_TRIES):
+            self._prepare_reviews(project, cid)
+            try:
+                return run(attempt == REVIEW_CLOSURE_TRIES - 1)
+            except _ReviewsMissing:
+                continue
+        raise AssertionError("unreachable")
 
     def _reviews(self, project: str, meta: dict, changes: list[dict]) -> dict[str, dict]:
         """{gseq-index: review} of the installed dependency effects in `changes`, as kept (the archive's copy, under
@@ -2897,8 +2934,14 @@ class Changesets:
         pdk = self._pdk_of(project, meta["id"])
         for op, i, e in self._installed_effects(changes):
             kept = self._stored_review(project, meta["id"], op, i, e)
-            out[self._review_key(op, i)] = kept["review"] if kept is not None and kept.get("pdk") == pdk else {
-                "error": "the review was not made before the changeset closed", "failed": True}
+            if kept is not None and kept.get("pdk") == pdk:
+                out[self._review_key(op, i)] = kept["review"]
+                continue
+            with _REVIEW_FAILED_LOCK:
+                failed = _REVIEW_FAILED.get((str(self._shadow_root(project, meta["id"])), self._review_key(op, i)))
+            why = failed[1].get("error") if failed is not None else None
+            out[self._review_key(op, i)] = {"error": why or "the review was not made before the changeset closed",
+                                            "failed": True}
         return out
 
     def _dep_review(self, project: str, meta: dict, changes: list[dict], checks: "depreview.Checks | None",
@@ -3244,18 +3287,19 @@ class Changesets:
         working copy committed (the tip), the evidence archived, then the merge of the archived tip (what was
         reviewed). A conflict: MergeConflict, nothing written, the changeset still open. An older copy is refused
         (OLD_FORM). Seen as it waits and runs (_closing): committing, evidence, merging, cleanup."""
-        self._prepare_reviews(project, cid)            # the reviews the evidence keeps, made outside the locks
-        with self._closing(project, cid, "apply", actor):
-            return self._apply(project, cid, actor)
+        with self._closing(project, cid, "apply", actor):       # the reviews the evidence keeps made outside the locks
+            return self._closing_with_reviews(project, cid, lambda last: self._apply(project, cid, actor, last))
 
     @_serialized
-    def _apply(self, project: str, cid: str, actor: str) -> dict:
+    def _apply(self, project: str, cid: str, actor: str, last: bool = True) -> dict:
         meta = self._load(project, cid)
         self._check_open(meta)
         if not meta.get("git"):
             raise ChangesetError(OLD_FORM.format(cid=cid))
         self._check_writer(cid)
         self._check_merging(project, cid)
+        if not last and self._missing_reviews(project, meta):
+            raise _ReviewsMissing(cid)               # nothing changed: made outside the locks, then again
         progress = self._progress(cid)
         with _busy(self._shadow_root(project, cid)):
             progress.phase("committing")

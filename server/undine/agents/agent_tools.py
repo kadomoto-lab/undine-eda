@@ -473,6 +473,15 @@ def get_changeset(c: ToolCtx, a: dict):
             out["new_cells_note"] = (f"{len(made)} cell{'s' if len(made) != 1 else ''} this changeset created and still has "
                                      "(view per cell); every other cell was there before it (the baseline)")
     out["checks"] = g.get("verify")
+    if g.get("deps"):                     # the review of its dependency operations, bounded; package text is data
+        out["dependencies"] = [_dep_review_public(r) for r in g["deps"][:DEPS_LISTED]]
+        if len(g["deps"]) > DEPS_LISTED:
+            out["dependencies_more"] = len(g["deps"]) - DEPS_LISTED
+        out["dependencies_note"] = ("each dependency operation as the person reviews it: checked false is unchecked "
+                                    "(no run in this changeset read the package: place one of its cells and "
+                                    "run_checks or run_simulation); code lists what the trust rule refuses in it, "
+                                    "which only a person can trust")
+        out["data_rule"] = DATA_RULE
     if g["status"] == "open":
         n = a.get("restore_points")
         if n in (None, ""):
@@ -4186,6 +4195,40 @@ def get_package(c: ToolCtx, a: dict):
     return out
 
 
+DEPS_LISTED = 10         # dependency operations get_changeset lists at most
+DEP_ROWS = 5             # packages, cells using them and refused findings per operation in get_changeset
+
+
+def _dep_review_public(r: dict) -> dict:
+    """One row of a changeset's dependency review (depreview.rows) as get_changeset gives it: counts and the first
+    few of each list, the texts as the review kept them (control characters out, cut)."""
+    out = {k: r[k] for k in ("op", "action", "name", "state", "outcome", "op_id", "fetched_by", "pdk", "license",
+                             "size", "checked", "checked_by", "trust", "trust_drop", "review_error")
+           if r.get(k) is not None and r.get(k) != []}
+    out["by"], out["reason"] = r.get("actor"), r.get("reason") or ""
+    if r.get("packages"):
+        out["packages"] = [{k: p[k] for k in ("package", "names", "do", "from", "to") if p.get(k) is not None}
+                           for p in r["packages"][:DEP_ROWS]]
+        if (more := len(r["packages"]) - DEP_ROWS + (r.get("packages_more") or 0)) > 0:
+            out["packages_more"] = more
+    if r.get("used_by"):
+        out["used_by"] = r["used_by"][:DEP_ROWS]
+        if (more := len(r["used_by"]) - DEP_ROWS + (r.get("used_by_more") or 0)) > 0:
+            out["used_by_more"] = more
+    if r.get("code"):
+        out["code"] = [{**{k: c[k] for k in ("name", "key", "trust", "blocks_total", "blocks_refused", "rtl_total",
+                                             "rtl_refused", "error") if c.get(k) is not None},
+                        "refused": [f"{b.get('file')}:{b.get('line')} {b.get('kind')}: {b.get('text')}"
+                                    for b in c.get("blocks") or [] if b.get("refused")][:DEP_ROWS]
+                        + [f"{x['path']}:{f.get('line')} {f.get('kind')}: {f.get('text')}"
+                           for x in c.get("rtl") or [] for f in x.get("findings") or []][:DEP_ROWS]}
+                       for c in r["code"][:DEP_ROWS]]
+    if r.get("needs"):
+        out["needs"] = [{k: f.get(k) for k in ("url", "size", "license", "package", "version")}
+                        for f in r["needs"][:DEP_ROWS]]
+    return out
+
+
 def _pending_public(p: dict) -> dict:
     return {"op_id": p["op_id"], "action": p["action"], "name": p["name"], "args": p["args"], "by": p["actor"],
             "reason": p["reason"], "needs": [{k: f.get(k) for k in ("url", "rev", "commit", "subdir", "size", "license",
@@ -4921,7 +4964,9 @@ TOOLS: list[dict] = [
                     "are; restore_points: n or 'all', and restore_before: a point (only those before it) reach every one; "
                     "restore_point_now is where it is (points count every record, operations those in effect). While a "
                     "batch is still being applied, in_progress says how far (done of ops): its operations are not "
-                    "counted or listed until it ends; do not edit before then.",
+                    "counted or listed until it ends; do not edit before then. Its dependency operations as the person reviews "
+                    "them: dependencies (licence, size, packages changed, cells using them, code the trust rule refuses, "
+                    "checked false: no run of the changeset read the package yet).",
      "input_schema": _obj({"id": {"type": "string", "description": "a changeset id, e.g. cs-1a2b3c (default: yours)"},
                            "restore_points": {"anyOf": [{"type": "integer"}, {"type": "string", "enum": ["all"]}],
                                               "description": "how many restore points to list (default 12), or 'all'"},

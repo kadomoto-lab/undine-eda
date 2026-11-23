@@ -16,6 +16,7 @@ import { FetchConfirmDialog, sizeText } from "../FetchConfirmDialog";
 import { Splitter } from "../layout";
 import { ChangeItem, checkResultLabel, describeEffect, followText, formatChangeValue, groupChanges, viewLabel } from "./changeItems";
 import { closingPhase, closingText, formatBytes } from "./closing";
+import { DepReview } from "./DepReview";
 import { ConflictRow, DiffCells, type ConflictSide, type OpenView } from "./gitViews";
 import { TimelineView } from "./TimelineView";
 import { ask, confirmDialog } from "../dialog";
@@ -310,7 +311,11 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
     return () => clearInterval(t);
   }, [isOpen, running, !!writer, !!closing, busy, sel, loadOne]); // eslint-disable-line
 
-  const items = useMemo(() => (cs ? groupChanges(cs) : []), [cs]);
+  // the dependency operations have a section of their own (cs.deps, the review of each) when the server gives it: the
+  // project log's items are left out of the objects then
+  const items = useMemo(() => (cs ? groupChanges(cs).filter((it) => !cs.deps || it.lib !== PROJECT_LOG) : []), [cs]);
+  // agents' operations waiting for a fetch that no review row shows (an older server: all of them) keep their own rows
+  const loosePending = cs?.pending_deps?.filter((p) => !cs.deps?.some((r) => r.op_id === p.op_id)) ?? [];
   // an agent's dependency operation waiting for a fetch: the Fetch dialog for it (its plan, replayed by the server)
   const [fetching, setFetching] = useState<PendingDep | null>(null);
   // a tab this changeset has not: by file needs its branch, the timeline its open working copy
@@ -599,11 +604,11 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
           {cs.status === "applied" && !cs.git && <div className="small dim">{t("review:legacy.revert")}</div>}
           {cs.status === "reverted" && <div className="note">{t("review:revertedAt", { time: cs.reverted?.t?.slice(0, 16).replace("T", " ") ?? "", actor: cs.reverted?.by ?? "" })}
             <MergeNote m={cs.reverted} revert onHistory={onHistory} /></div>}
-          {cs.status === "open" && !!cs.pending_deps?.length && (
+          {cs.status === "open" && !!loosePending.length && (
             <div className="note pendingdeps">
               <div className="section">{t("review:pending.title")}</div>
               <div className="small dim">{t("review:pending.note")}</div>
-              {cs.pending_deps.map((p) => (
+              {loosePending.map((p) => (
                 <div key={p.op_id} className="row pendingdep" data-testid="pending-dep">
                   <div className="grow">
                     <b className="mono">{t("review:pending.row", { action: t(`review:pending.action.${p.action}`), name: p.name ?? "" })}</b>
@@ -666,6 +671,8 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
             <ChangesetFiles cs={cs} files={files} onRefresh={() => setFilesAgain((x) => x + 1)} onOpenView={openFileView} />
           ) : <>
           {!cs.changes?.length && <div className="empty" style={{ padding: 0 }}>{cs.status === "open" ? t("review:noChanges") : "—"}</div>}
+          {!!cs.deps?.length && <DepReview rows={cs.deps} pending={cs.pending_deps ?? []} open={cs.status === "open"}
+            busy={busy || !!closing} onFetch={setFetching} />}
           {items.filter((it) => !it.causedBy.length).map((it) => renderItem(it, cs.preview))}
           {!!cs.changes?.length && (
             <details className="oplog">

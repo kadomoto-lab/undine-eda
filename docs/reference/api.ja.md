@@ -201,6 +201,53 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
 | `POST /api/confirmations` `{kind: "dependency", project, changeset, op_id, fetches}` | レビューでの人の Fetch。操作そのものの引数を使う(本文のものではなく記録のもの)。計画は作り直し、`fetches` と違えば(その後インデックスを取得し直したなど)、ダイアログが見せる新しい計画を付けて 409 の `needs_fetch`。取得するものが残っていない計画(ストアにもうある)はそのまま受け付ける。トークンは上と同じく結び付き、さらに操作の id とその記録のハッシュに結び付く。操作がもう待っていなければ(復元で取り消した、インストールした、changeset が閉じた)409 の `not_pending` |
 | `POST /api/p/{project}/deps/fetch` `{token}` | 上と同じ。確認の後に操作が取り消されていれば 409 の `not_pending`(トークンは使い切る)。ジョブは changeset の作業コピーで操作をやり直し、インストール済みと記録し(`replays: op_id`、`fetched_by`。エージェントの actor と理由はそのまま)、changeset に種類 `fetched` の通知を加え、`{changeset, op, result, state: "installed", op_id, notice, status}` を返す。エージェント自身の書き込みのリースでは止まらない。ほかの書き手のリースならおよそ 3 秒やり直し、それでも駄目ならジョブは `code: "busy"` で失敗する(取得したものはストアに残り、次の Fetch はインストールだけをする)。もう適用できない操作は、それを閉じる `fetch_failed` の通知とともに取り下げる。解決の拒否ではジョブは `resolution_refused` で失敗し、操作は待ちのまま、閉じない `fetch_failed` の通知が残る。さらに取得の要るものが見つかれば、上と同じく `needs_fetch` と次の計画で失敗する |
 
+<a id="the-review-of-a-dependency-change"></a>
+### 依存関係の変更のレビュー
+
+`GET /api/p/{project}/changesets/{id}` には `deps` が付きます。changeset の依存関係の操作のうち効いているもの(プロジェクトの
+ログの記録。古い順)1 つにつき 1 行で、開いている changeset にも閉じたものにも付きます。人が依存関係の変更を採用する前に読むものです。
+人の取得がインストールした提案は、インストールした記録の行になります(その `op_id`、`fetched_by`)。`dep_drop` の記録は行に
+なりません(提案の行に `outcome: "dropped"` が付く)。
+
+```text
+{gseq, opid, op: dep_add | dep_update | dep_remove | pdk_set, action: add | update | remove | pdk_set, name, actor,
+ reason, t, state: installed | needs_fetch | cancelled, outcome?: superseded | dropped, op_id?, fetched_by?, pdk?,
+ project: {kind, changes}, lock: {kind, changes},          効果の before と after の depmerge.diff
+ packages: [{package, names, do: add | mod | del, from, to, commit_from, commit_to, hash, license, license_files,
+             size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
+             cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
+ used_by: [文], used_by_more?,                             変わった、または消えたセルを使うプロジェクトのセル
+ license, size, size_from,                                 依存そのもののもの(needs_fetch の行は計画のもの)
+ code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
+         text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
+         findings: [{kind, line, text, path?}], findings_more?}]}] | null,
+ trusted, trust, trust_drop: [キー],
+ checked: true | false | null, checked_by?: {job, kind, lib?, cell?},
+ needs?: [{url, rev, commit, subdir, size, license, package, version}],
+ recorded, review_error?}
+```
+
+- `packages`、`used_by`、`code` は、操作が動いたときに**記録した**もの(効果の `review`。ファイルを書いて作業コピーにインストール
+  した後で `store/depreview.py` が書く)で、読むたびに計算し直しはしません。作業コピーのインストールは最後の操作に従い、閉じた
+  changeset の作業コピーはなくなりますが、証拠は記録を残すからです(マニフェストの `changes`)。`packages` は両方のツリーのストアの
+  記録を比べるので、ストアにどちらかの記録がなければ `changed` は `null` です。`cells` は新しいバージョンの `[renames]` を当てはめます。
+  `size` はインデックスの行のもの(`size_from: "index"`)、なければストアのファイルのバイト数(`"files"`)です。`code` は、追加または
+  移動したパッケージごとに、そのセルのすべてのコードブロックとすべての RTL ファイルを並べます([信頼](../design/packages.ja.md#security))。
+  拒否されるものが先です。`recorded: false` はレビューを記録する前の記録で、changeset が開いている間は今の作業コピーから作ります。
+- 上限があります: パッケージは 10 個まで、リストごとにファイル 20 個、パッケージごとにセル 30 個、`used_by` のセル 20 個、操作
+  ごとに(そのパッケージ全体で)コードブロック 20 個と RTL ファイル 20 個、それぞれの指摘は 3 個まで。合計と `*_more` が残りを数えます。
+  パッケージから来た文(パス、セル名、コード、指摘、ライセンス、バージョン、needs_fetch の URL)は、制御文字を空白にし、200 文字で
+  切ります。ほかの人が書いたデータです。
+- `trusted`(`code` の各パッケージのもの、と行のもの: その全部)は今の本物のプロジェクトの `trusted` から読むので、操作の後に人が
+  信頼したバージョンは信頼済みと出ます。`trust` はそれを言葉で言います。`trust_drop` は、操作が作業コピーの `trusted` から外した
+  キーです(更新は古いバージョンのものを外す)。
+- `checked` は、changeset の実行がパッケージを読むまで `false`(*未確認*)です。作業コピーのシミュレーション、LVS、DRC のうち、
+  終わっていて、その証拠の `about.packages` が操作の持ち込んだツリーのどれかを挙げ、(開いている間は)まだ最新のものです。
+  `checked_by` がそれを示します。閉じた changeset では証拠が保存した実行を見ます。`null` は確かめるものがないこと(削除、PDK の
+  変更、ツリーを持ち込まなかった操作)です。
+- `needs_fetch` の行は `needs`(URL、サイズ、ライセンス)を持ち、`code` はありません(まだ何も取得していない)。その Fetch は
+  `pending_deps` のものです([取得を待つエージェントの操作](#an-agents-operation-waiting-for-a-fetch))。
+
 <a id="pdk-fetch"></a>
 ## PDK の取得
 
@@ -235,7 +282,7 @@ changeset は、プロジェクトの git ブランチ `undine/<project>/<id>` �
 |---|---|
 | `POST /api/p/{project}/changesets` | 開きます(`{"title", "reason"}`、`X-Undine-Actor`)。記録を返し、プロジェクトがどの git リポジトリにも入っておらず `git-setup` でリポジトリにしたときは `"git_setup": true` が付き、`"first_commit"` はそのときに作ったプロジェクトの最初のコミットです(そのときのファイル。保存していないレイアウトの編集は起点と同じくログのジャーナルのまま含み、Undine 自身の出力と changeset の記録は含みません。作らなかったとき、つまり人のコミットが先にできたときは null)。これで採用したものがコミットされます。`"first_commit_note"` はその後にすること(git のインデックスがそのコミットに合っていない: `git reset` を実行する)、または作らなかった理由で、なければ null です。Undine 用に設定されていないリポジトリにあるプロジェクトでは 400 の `not_set_up`(下記)です。プロジェクト自身のライブラリが worktree の持てないものであるときは 400 の `unsupported_library`(下記)です: ライブラリのフォルダ、その上、その中、または途中のリンクの先にある、プロジェクトの外か存在しない場所を指すシンボリックリンク、文字列が絶対パスかプロジェクトの外へ上がるシンボリックリンク、リポジトリが保存しないシンボリックリンク(またはそのリンク先)、それ自身が git リポジトリであるもの(クローン、サブモジュール)。これは何かを設定する前に確かめるので、拒否された場合はリポジトリを作りません([設計](../design/changeset-branches.md#the-repository)) |
 | `GET /api/p/{project}/changesets` | changeset の一覧: `id`、`title`、`reason`、`actor`、`created`、`status`、`preview`、`git`。採用・破棄・取り消しの処理中のものには `closing`(下記)が付きます。新しい順(`created`、同じなら id の順)です |
-| `GET /api/p/{project}/changesets/{id}` | 記録(下記)。ライブラリごとの変更(`changes`: 操作。Undo と Redo は差し引き済み)、鮮度付きのチェック(`verify`)、開いている間は書き込み中の主体(`writer`)、ビューごとの最後の変更(`activity`)、取得を待つエージェントの依存関係の操作(`pending_deps`、[取得を待つエージェントの操作](#an-agents-operation-waiting-for-a-fetch))も付きます。記録の `notices` は changeset の通知です。閉じた後は、保存した変更とチェック、`retained`、今のサイズ付きの証拠(`evidence.size`)を返します。閉じる処理の間は `closing` が付きます |
+| `GET /api/p/{project}/changesets/{id}` | 記録(下記)。ライブラリごとの変更(`changes`: 操作。Undo と Redo は差し引き済み)、鮮度付きのチェック(`verify`)、開いている間は書き込み中の主体(`writer`)、ビューごとの最後の変更(`activity`)、取得を待つエージェントの依存関係の操作(`pending_deps`、[取得を待つエージェントの操作](#an-agents-operation-waiting-for-a-fetch))も付きます。開いていても閉じていても、依存関係の操作のレビュー(`deps`、[依存関係の変更のレビュー](#the-review-of-a-dependency-change))が付きます。記録の `notices` は changeset の通知です。閉じた後は、保存した変更とチェック、`retained`、今のサイズ付きの証拠(`evidence.size`)を返します。閉じる処理の間は `closing` が付きます |
 | `GET /api/p/{project}/changesets/evidence` | 閉じた changeset の証拠の今のサイズ: `{"bytes", "raw"(そのうち波形の削除で消える分), "changesets": {id: {"bytes", "raw", "files", "shared", "raw_shared", "pruned"}}}`(下の `size`) |
 | `GET /api/p/{project}/changesets/{id}/evidence[?check=true]` | 閉じた changeset の証拠: `{"path", "captured", "commits"?, "size", "bytes"(保存時), "linked", "pruned"(マニフェストの記録), "jobs"(それぞれに `"pruned"`: 削除したファイル、記録していればジョブの `"about"`: 使ったパッケージ、PDK、プロファイル), "packages" と "pdk"(`{"base", "work"}`: それぞれの側の undine.lock が固定しているもの。[ジョブの来歴](data.md#job-provenance))}`。`check=true` は保存した全ファイルをハッシュと照合します: `"check": {"ok": 数, "pruned", "missing", "changed": [証拠の中のパス]}`(削除したファイルは `missing` ではなく `pruned`)。開いている changeset には 400 |
 | `POST /api/p/{project}/changesets/{id}/evidence/prune` | 閉じた changeset の保存した実行から波形(`*.raw`、`*.vcd`、`*.fst`)を削除します。ステータス、ログ、結果、マニフェストのハッシュは残し、削除したことをマニフェストと記録に書きます(`X-Undine-Actor`): `{"pruned": {"t", "by", "files", "bytes", "freed"}, "size"}`(`"freed"`: そのバイト数のうち、他の名前が持っていなかった分。閉じる処理が残した作業コピーがある場合、残りはその作業コピーを削除したときに解放されます)。人が行う操作です: エージェントのアクター(`agent:...`)には 403、開いている changeset には 400、閉じる処理や取り消しの間は 409 の `busy` |
@@ -366,7 +413,10 @@ CellChange   {"lib", "cell", "views": [{"view": schematic | symbol | layout | ne
 setup        状態 + {"hook_note": 文 | null, "gitignore_added": [行]}
 log          {"commits": [Commit + {"cells": [CellChange], "other": その他のファイルの数}], "more"}
 diff         {"base": sha | null, "rev": sha | null (作業ツリー),
-              "cells": [CellChange。各ビューに "diff" も], "other": [{"path", "status"}]}
+              "cells": [CellChange。各ビューに "diff" も], "other": [{"path", "status", "deps"?}]}
+              (deps: project.json と undine.lock の意味的な差分。エントリごと(vcs/depmerge.diff):
+              {"kind": "project" | "lock", "changes": [{"do", "id", "what", "before", "after"}], "more"?: 最初の 200 件
+              より後の省いたエントリの数, "error"?: JSON のオブジェクトでない側})
 verify       {"ours": sha, "theirs": sha | null (theirs に当たるコミットが分からない: git merge --squash、cherry-pick -n),
               "commit": sha | null (進行中), "parents": [sha] | null (3 つ以上: octopus マージ),
               "operation": null (コミット) | "merge" | "cherry-pick" | "rebase",

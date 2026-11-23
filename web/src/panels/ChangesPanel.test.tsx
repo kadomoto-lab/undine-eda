@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, type ChangeOp, type ChangesetInfo, type GitDiff } from "../api";
+import { api, ApiError, type ChangeOp, type ChangesetInfo, type DepReviewRow, type GitDiff } from "../api";
 import { DialogHost } from "../dialog";
 import { msg, setLocale, t } from "../i18n";
 import { ChangesPanel, summaryLine } from "./ChangesPanel";
@@ -913,5 +913,102 @@ describe("an agent's dependency waiting for a fetch", () => {
     await open(cs);
     expect(screen.queryByTestId("pending-dep")).toBeNull();
     expect(screen.queryByText(t("review:pending.title"))).toBeNull();
+  });
+});
+
+describe("the review of a dependency change", () => {
+  const lock = { kind: "lock" as const, changes: [{ do: "add" as const, id: "lock:library:ip", what: "locked library ip", before: null,
+    after: { git: "/r/ip", rev: "v1.0.0", commit: "1234567890abcdef", version: "1.0.0", package: "ip" } }] };
+  const project = { kind: "project" as const, changes: [{ do: "add" as const, id: "library:ip", what: "library ip", before: null,
+    after: { git: "/r/ip", rev: "v1.0.0" } }] };
+  const code = { name: "ip", package: "ip", key: "ip@1.0.0", trusted: false, blocks_total: 3, blocks_refused: 1, rtl_total: 1, rtl_refused: 1,
+    blocks: [{ cell: "buf", file: "buf.sch", where: "buf.sch s1 value", kind: "control", line: 1, text: ".control", commands: ["shell"],
+      refused: true, why: "a .control block" }],
+    rtl: [{ path: "rtl/core.v", refused: true, findings: [{ kind: "rtl_c", line: 3, text: "initial $c(\"x\");" }] }] };
+  const added: DepReviewRow = { gseq: 2, opid: "o1", op: "dep_add", action: "add", name: "ip", actor: "agent:claude", reason: "a buffer",
+    state: "installed", project, lock, used_by: [], license: "MIT", size: 4096, size_from: "files", code: [code], trusted: false,
+    trust_drop: [], checked: false,
+    packages: [{ package: "ip", names: ["ip"], do: "add", from: null, to: "1.0.0", commit_from: null, commit_to: "1234567890abcdef",
+      hash: "sha256:00", license: "MIT", size: 4096, size_from: "files", changed: { added: ["buf.sch", "rtl/core.v"], removed: [], modified: [] } }] };
+  const depOp = { seq: 2, gseq: 2, op: "dep_add", cell: null, view: "", actor: "agent:claude", reason: "a buffer", t: "",
+    effects: [{ k: "d" as const, do: "add" as const, name: "ip", state: "installed" as const }] };
+  const rec: ChangesetInfo = { ...cs, changes: [...cs.changes!, { lib: "@project", ops: [depOp] }], deps: [added] };
+
+  it("lists the lock diff, the licence, the size, the code blocks and RTL with findings, the trust note, unchecked", async () => {
+    await open(rec);
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByText(t("review:deps.row", { action: t("review:deps.action.add"), name: "ip" }))).toBeTruthy();
+    expect(row.textContent).toContain("MIT");
+    expect(row.textContent).toContain(t("review:deps.sizeFiles", { size: "4.1 kB" }));
+    expect(row.textContent).toContain(t("history:what.dep.lockLibrary", { name: "ip" }));
+    expect(row.textContent).toContain("1.0.0 (1234567)");
+    expect(within(row).getByTestId("dep-unchecked")).toBeTruthy();
+    const c = within(row).getByTestId("dep-code");
+    expect(c.textContent).toContain("ip@1.0.0");
+    expect(c.textContent).toContain(t("review:deps.trust.untrusted"));
+    expect(c.textContent).toContain(t("review:deps.code.counts", { blocks: 3, blocksRefused: 1, rtl: 1, rtlRefused: 1 }));
+    expect(c.textContent).toContain("rtl/core.v");
+    expect(c.textContent).toContain("initial $c(\"x\");");
+    expect(c.textContent).toContain(t("review:deps.code.kind.control"));
+    // the project log's own item is not listed again among the objects
+    expect(screen.queryByText(t("review:item.dependency", { name: "ip" }))).toBeNull();
+    expect(screen.getAllByText(/M1/).length).toBeGreaterThan(0);
+  });
+
+  it("says checked once a run of the changeset read it, and what an update changed and who uses it", async () => {
+    const update: DepReviewRow = { ...added, gseq: 3, op: "dep_update", action: "update", checked: true,
+      checked_by: { job: "sim-0001", kind: "sim", lib: "l", cell: "tb" }, trust_drop: ["ip@1.0.0"], used_by: ["l/top (schematic) places buf"],
+      packages: [{ ...added.packages[0], do: "mod", from: "1.0.0", to: "1.1.0", changed: { added: [], removed: ["inv.sym"], modified: ["buf.sym"] },
+        cells: [{ cell: "buf", do: "mod", views: ["symbol"] }, { cell: "inverter", do: "renamed", from: "inv", views: ["symbol"] }] }] };
+    await open({ ...rec, deps: [update] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).queryByTestId("dep-unchecked")).toBeNull();
+    expect(within(row).getByText(t("review:deps.checked")).getAttribute("title")).toContain("sim-0001");
+    expect(row.textContent).toContain(t("review:deps.pkg.moved", { from: "1.0.0", to: "1.1.0" }));
+    expect(row.textContent).toContain(t("review:deps.cell.renamed", { from: "inv" }));
+    expect(row.textContent).toContain("l/top (schematic) places buf");
+    expect(row.textContent).toContain(t("review:deps.trustDrop", { keys: "ip@1.0.0" }));
+  });
+
+  it("gives an agent's operation waiting for a fetch its Fetch button in its row", async () => {
+    const fetchRow = { url: "https://git.example.org/amp.git", rev: null, commit: "c".repeat(40), subdir: null, tree: null,
+      size: 4096, license: "MIT", package: "amp", version: "1.0.0", host: "git.example.org", allowed: true };
+    const plan = { op: "add", fetches: [fetchRow], complete: true, project: "p",
+      request: { op: "add" as const, name: "amp", package: "amp", changeset: "cs1", op_id: "dep-0123456789" } };
+    const pending = { op_id: "dep-0123456789", action: "add" as const, op: "dep_add", name: "amp", args: { name: "amp" },
+      actor: "agent:claude", reason: "an amplifier", gseq: 4, needs: [fetchRow], plan };
+    const waiting: DepReviewRow = { ...added, gseq: 4, name: "amp", state: "needs_fetch", op_id: "dep-0123456789", code: null, packages: [],
+      lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] }, needs: [fetchRow], size_from: "index" };
+    vi.mocked(api.confirmDependencyFetch).mockResolvedValue({ token: "tok", expires: 0, plan });
+    await open({ ...rec, deps: [waiting], pending_deps: [pending] });
+    expect(screen.queryByTestId("pending-dep")).toBeNull();               // in the review row, not a second list
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(row.textContent).toContain("https://git.example.org/amp.git");
+    expect(row.textContent).toContain(t("review:deps.state.needs_fetch"));
+    expect(row.textContent).toContain(t("review:deps.sizeDownload", { size: "4.1 kB" }));
+    fireEvent.click(within(row).getByRole("button", { name: t("review:pending.fetch") }));
+    await act(async () => {});
+    expect(screen.getByRole("dialog", { name: t("app:depFetch.title") })).toBeTruthy();
+  });
+
+  it("words the row in the reader's language", async () => {
+    await setLocale("ja");
+    try {
+      await open(rec);
+      const [row] = screen.getAllByTestId("dep-row");
+      expect(row.textContent).toContain("ip の追加");
+      expect(row.textContent).toContain("未確認");
+      expect(row.textContent).not.toContain("unchecked");
+    } finally { await setLocale("en"); }
+  });
+
+  it("shows project.json's and undine.lock's semantic diff in the Files tab", async () => {
+    vi.mocked(api.changesetDiff).mockResolvedValue({ ...diff, other: [
+      { path: "project.json", status: "modified", deps: project }, { path: "undine.lock", status: "modified", deps: lock }] });
+    await open(rec);
+    fireEvent.click(screen.getByRole("button", { name: t("review:listing.files") }));
+    await act(async () => {});
+    expect(screen.getByText(t("history:what.dep.library", { name: "ip" }))).toBeTruthy();
+    expect(screen.getByText(t("history:what.dep.lockLibrary", { name: "ip" }))).toBeTruthy();
   });
 });

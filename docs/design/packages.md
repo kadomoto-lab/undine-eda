@@ -644,6 +644,34 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   the restore holds). `dep_update`'s refresh of layout copies is not built yet.
 - The review shows the lock diff, the update report above, licences, the download size, and the package's code blocks
   and RTL files (see [Security](#security)).
+  *Implemented (phase 4, store/depreview.py; Changesets.get's `deps`; the review's Dependencies section,
+  web/src/panels/DepReview.tsx):* when a dependency operation is recorded (`_DepGuard`, the files written and installed
+  in the working copy) its effect gets `review`, from the working copy, the store and the lock graphs before and after:
+  per lock entry whose content changed (`packages`), its package, local names, version and commit before and after,
+  its tree hash after, the licence (`vendor.licenses`), the size (the index line's, else the files' bytes in the store),
+  the files added, removed and modified (the store's records of both trees compared) and, for an update, per cell
+  added, removed, renamed (the new version's `[renames]` for the versions crossed) or changed with the views that
+  changed (by file suffix) and whether it is exported; the project's cells that place a changed or removed cell
+  (`used_by`, deps._used_by); and per package added or moved its key and every code block and RTL file
+  (`trust.listing`), the refused ones first. Recorded, not recomputed: the working copy's installs follow the latest
+  operation, and a closed changeset keeps its records in the evidence (the manifest's `changes`), so its review reads
+  the same after the working copy is gone. Bounded (10 packages, 20 files per list, 30 cells, 20 `used_by`, 20 code
+  blocks and 20 RTL files per operation with 3 findings each; counts for the rest), and every text from a package has
+  its control characters made spaces and is cut at 200 characters (`depreview.data`, as a notice's `_cut`): it is
+  shown to people and read by agents. A review that cannot be made is said (`error`), never failing the operation.
+  `GET .../changesets/{id}` gives `deps`, a row per dependency operation in effect, open or closed (the evidence's
+  records then): its state (`installed`, `needs_fetch`, `cancelled`; `outcome` superseded or dropped; a proposal a
+  fetch installed is the installing record's row, with `op_id` and `fetched_by`), `project` and `lock`
+  (`depmerge.diff` of the effect's before and after), the recorded review, `trusted` (each package's key in the real
+  project's `trusted` now) and `trust_drop` (the keys the operation took out of the working copy's `trusted`), and
+  `checked`: false (*unchecked*) until a run of the changeset read the package, that is a done simulation, LVS or DRC
+  of the working copy whose `about.packages` names a tree the operation brought and (open) still fresh; a closed
+  changeset looks at the runs its evidence archived. A needs_fetch row has its plan's URL, size and licence and no
+  code; its Fetch is `pending_deps`'. `get_changeset` gives agents the same rows in short (`dependencies`: counts, the
+  first refused findings, a trust note in words) with the DATA rule. The Files tab's `other` entries for
+  `project.json` and `undine.lock` carry `deps`, their `depmerge.diff` (history.diff, so History's diff of a commit
+  has it too). Not built: the update report's spec results and outdated results (the checks' freshness says those),
+  and `dep_update`'s refresh of layout copies (the phase 5 row).
 - **Adopting** merges `project.json` (`libraries`, `indexes`, `pdk`) and `undine.lock` entry by entry, then resolves
   again; when the merged requirements do not resolve, or the merged lock does not satisfy them, the adopt is refused
   with the reason. Then it installs in the project from the store; nothing is fetched at adopt. This is new: today
@@ -1047,7 +1075,7 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
 | 1. Store and lock 2 | the store, per-file dedup, frozen and offline `sync`; lock format 2 for git dependencies, written only by explicit commands; tree hash from git's blobs; PDK full commit + tree hash with the exclusion list, `pdk verify`, `pdk fetch` through ciel with confirmation (root chosen as above), PDK rescan; the PCell worker with `PYTHONDONTWRITEBYTECODE=1`; OSDI built into the store: profile `osdi` entries become model names (`psp103`), found first in `store/build/<commit>/<variant>/osdi/`, then at today's path in the PDK tree (installs that have them), and `sim.py` and `doctor` take the paths from one function; tool version numbers and origins | two versions share unchanged objects; offline sync from the store; `sync` refuses a lock that no longer satisfies `project.json`; one commit hashes the same with `core.autocrlf=true` and an export-subst file; lock 1 → 2 only on an explicit command; prefix → full commit; a sky130 tree with `__pycache__` and an IHP tree with `osdi/` verify; a changed PDK file is reported; ciel replaced by a fake executable; `pdk fetch` refused when only `~/.volare` is scanned; an IHP simulation loads OSDI from the store; each tool's banner above gives its number | **Done**, see [Phase 1 status](#phase-1-status) |
 | 2. Manifest and resolution | `undine-package.toml`; transitive dependencies from manifests (still git URLs); project-wide local names, a package installed under each; cell-name disjointness; PDK compatibility; the trust rule for code blocks and RTL | diamond installs once; conflicting requirements name both chains; two packages with a `comparator` are refused naming both; a local alias resolves, also with the Xschem netlister backend; two libraries giving one local name different packages are refused; an incompatible PDK is refused; a dependency cell with `.control` or an absolute `.include` is refused until trusted | **Done**, see [Phase 2 status](#phase-2-status) |
 | 3. Index | index format, several indexes, the default index created (`kadomoto-lab/undine-index`), `pkg search / info / add / update / lock / outdated / tree / why`, version ranges, yank, remote-host policy and fetch size limit, library browser Packages section; `pkg licenses`, `pkg vendor` (also run by the tapeout export) and `pkg sync --from-vendor` | a `file://` index in a temporary directory; yanked skipped but kept when locked; private index named in `project.json`; a dependency without `index` comes from the declaring package's index; one name from two indexes refused; an unlisted host refused over HTTP without confirmation; a fetch over the size limit stopped; a vendored bundle, with the package repository deleted and the store emptied, installs the project again offline through `sync --from-vendor` with the locked trees; a vendored file changed by hand is refused; the tapeout bundle has `vendor/` and `report.json` lists it | **Done**, see [Phase 3 status](#phase-3-status) |
-| 4. Changesets and agents | dependency operations in changesets, review of a dependency change (code blocks and RTL listed), the confirmation token, the notice after a fetch, agent tools with the DATA rule, the merge rule for `project.json` and `undine.lock` in the git merge driver (`merge.md` updated), evidence with package and PDK information outside `key` and model files and profile fields inside it | add in a changeset, adopt, restore; an agent's add records *needs fetch*, never fetches, and continues after the person's fetch; no tool returns a token; two changesets adding different packages adopt in either order; conflicting requirements are refused at adopt; an update that changes one cell outdates only results that use that cell; a README change outdates nothing | **In progress**, see [Phase 4 status](#phase-4-status) |
+| 4. Changesets and agents | dependency operations in changesets, review of a dependency change (code blocks and RTL listed), the confirmation token, the notice after a fetch, agent tools with the DATA rule, the merge rule for `project.json` and `undine.lock` in the git merge driver (`merge.md` updated), evidence with package and PDK information outside `key` and model files and profile fields inside it | add in a changeset, adopt, restore; an agent's add records *needs fetch*, never fetches, and continues after the person's fetch; no tool returns a token; two changesets adding different packages adopt in either order; conflicting requirements are refused at adopt; an update that changes one cell outdates only results that use that cell; a README change outdates nothing | **Done**, see [Phase 4 status](#phase-4-status) |
 | 5. Publishing | `pkg init / check / pack / publish / yank`, `[checks]`, the check report and its link in the index line and PR, semver report, spec results in the report, `[renames]`, cell-level update report, refreshed layout copies, index CI workflow (no DRC / LVS) | publish refuses without a passing report for this tree, and the PR body links the report with its SHA-256; the index CI refuses a report whose SHA-256, commit or tree differs from the line; a renamed cell is reported as renamed and references rewritten; a removed pin or a moved layout pin needs a major version; a waived rule passes `check` and is shown; publish refuses a tree the repository does not serve; tag `<name>-v<version>` in a repository of two packages; after an update the copied cell is refreshed in the changeset and its LVS is outdated, and an edited copy is listed, not replaced | **In progress**, see [Phase 5 status](#phase-5-status) |
 | 6. PDK profiles | `profile.toml` per family with `schema` and `undine`, formula registry, profile packages in the index with expected PDK tree hashes, compatibility tags, `pcell.SUPPORTED` / `pixi.toml` / `setup.sh` read from them | data profile equals today's `Profile` for sky130, GF180, IHP; an unknown field is refused; a changed deck option outdates DRC results and a changed profile field no job reads (`label`, `limits`) does not | **In progress**, see [Phase 6 status](#phase-6-status) |
 
@@ -1388,8 +1416,20 @@ wait_for returns a notice that came before it, once per agent; the assistant's n
 mid-turn), the guards in
 `test_api_phase1.py` and `test_agent_phase2.py`, and the web test `ChangesPanel.test.tsx`.
 
-Still to build in phase 4: the review of a dependency change (the lock diff, licences, size, code blocks and RTL), and
-`dep_update`'s refresh of layout copies.
+Built: the review of a dependency change (store/depreview.py, the `review` recorded with each operation,
+`Changesets.get`'s `deps`, `other[].deps` of the Files tab, `get_changeset`'s `dependencies`, the Dependencies section
+of web/src/panels/DepReview.tsx; see [Changesets and evidence](#changesets-and-evidence) and the
+[HTTP API](../reference/api.md#the-review-of-a-dependency-change)). Tests: `test_pkg_review.py` (a dependency's code
+blocks and RTL listed with licence and size; an update's report: the lock entry, files, cells changed and renamed,
+the cells that use it, the trust taken back; unchecked until a run in the changeset read the package, and again once
+that run is outdated; the Files tab's semantic diff, also of an adopted commit, and an unreadable side; the review of a
+closed changeset from its evidence, checked by the archived run; a pending, a cancelled and a fetched operation; the
+review bounded and a package's control characters gone; `get_changeset` bounded with the DATA rule), and the web
+tests `ChangesPanel.test.tsx` and `gitItems.test.ts`.
+
+Phase 4 is done. `dep_update`'s refresh of layout copies, in [Cells across versions](#cells-across-versions), is the
+phase 5 row's ("refreshed layout copies"): an update still leaves a copied cell's old geometry, which the review lists
+among the cells that use it.
 
 ### Phase 5 status
 

@@ -103,8 +103,39 @@ const viewWord = (v: string): UiText => (VIEWS.includes(v as GitView) ? viewName
  * server's words when the id is of no shape known here. */
 export function changeText(kind: string, c: Change): UiText {
   const words = kind === "schematic" || kind === "symbol" ? xschemText(kind, c) : kind === "layout" ? layoutText(c)
-    : kind === "netlist" ? netlistText(c) : kind === "intent" ? intentText(c) : kind === "log" ? logText(c) : null;
+    : kind === "netlist" ? netlistText(c) : kind === "intent" ? intentText(c) : kind === "log" ? logText(c)
+    : kind === "project" || kind === "lock" ? depText(c) : null;
   return words ?? c.what;
+}
+
+/** A change of project.json or undine.lock (vcs/depmerge.diff): its entry, by the id's prefix. */
+function depText(c: Change): UiText | null {
+  let m: RegExpExecArray | null;
+  if ((m = /^lock:library:(.+)$/s.exec(c.id))) return msg("history:what.dep.lockLibrary", { name: m[1] });
+  if ((m = /^lock:package:(.+)$/s.exec(c.id))) return msg("history:what.dep.lockPackage", { name: m[1] });
+  if ((m = /^lock:tool:(.+)$/s.exec(c.id))) return msg("history:what.dep.tool", { name: m[1] });
+  if ((m = /^library:(.+)$/s.exec(c.id))) return msg("history:what.dep.library", { name: m[1] });
+  if ((m = /^index:(.+)$/s.exec(c.id))) return msg("history:what.dep.index", { name: m[1] });
+  if (c.id === "trusted") return msg("history:what.dep.trusted");
+  if (c.id === "pdk") return msg("history:what.dep.pdk");
+  return null;
+}
+
+/** An entry of project.json or undine.lock in a few characters: a locked package's version and commit, a requirement's
+ * version or rev, a list's items; null: no value (the entry is not on that side). */
+export function depValue(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (Array.isArray(v)) return v.map((x) => depValue(x) ?? "").join(", ");
+  if (typeof v !== "object") return String(v);
+  const o = v as Record<string, unknown>;
+  const commit = typeof o.commit === "string" ? o.commit.slice(0, 7) : null;
+  const label = typeof o.version === "string" ? o.version : typeof o.rev === "string" ? o.rev : null;
+  if (label && commit) return `${label} (${commit})`;
+  if (label) return label;
+  if (commit) return commit;
+  if (typeof o.git === "string") return o.git;
+  if (typeof o.id === "string") return o.id;
+  return shortValue(v, 48);
 }
 
 /** An open conflict's words: changeText's when in English they are the server's (a conflict's id can stand for more

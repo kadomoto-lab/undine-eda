@@ -137,7 +137,7 @@ from contextlib import ExitStack, contextmanager
 from functools import wraps
 from pathlib import Path
 
-from undine.store import cas, deps, oplog, provenance
+from undine.store import cas, depreview, deps, oplog, provenance
 from undine.layouts import layout, layoutstore
 from undine.server import live
 from undine.schematics import netlist, symbolsync, xschem
@@ -738,7 +738,7 @@ class _DepGuard:
     changeset checked again (open, no interrupted merge, the write lease the caller's), since the operation fetched
     without them, and project.json and undine.lock read (`before`). Leaving it after the operation wrote them, the
     locks still held, appends its record to the working copy's project log (PROJECT_LOG): {op, args, actor, reason,
-    cell: null, view: null, effects: [{k: "d", do, name, before, after, state: "installed"}]}, each file parsed
+    cell: null, view: null, effects: [{k: "d", do, name, before, after, state: "installed", review}]}, each file parsed
     whole. Re-entrant (an operation committing more than once: a record each); never held across a fetch, so a
     restore or an apply never waits for one."""
 
@@ -765,7 +765,8 @@ class _DepGuard:
                     self.cs._check_merging(self.project, self.cid)
                     self.log = srv.oplog(meta["preview"], PROJECT_LOG)
                     self.log.guard()
-                    self.path = srv.project(meta["preview"]).path
+                    self.prj = srv.project(meta["preview"])
+                    self.path = self.prj.path
                     self.before = _dep_files(self.path)
                     if self._replaying:              # restored away, or installed by another fetch meanwhile?
                         if self.cid in srv.batching:   # an agent's batch step: its put-back would undo the install
@@ -788,7 +789,10 @@ class _DepGuard:
                 after = _dep_files(self.path)
                 if after != self.before or self._replaying:
                     e = {"k": "d", "do": self.do, "name": self.name, "before": self.before, "after": after,
-                         "state": "installed"}
+                         "state": "installed",
+                         # what the review shows of it, from the working copy as the operation left it (bounded;
+                         # a closed changeset's evidence keeps it with the records): depreview.record
+                         "review": depreview.record(self.prj, self.before, after)}
                     if self.op == "pdk_set":
                         e["pdk"] = [self.before["project"].get("pdk"), after["project"].get("pdk")]
                     rec = {"op": self.op, "args": self.args, "actor": self.actor, "reason": self.reason,
@@ -873,6 +877,9 @@ class Baseline(Project):
 class Changesets:
     def __init__(self, srv):
         self.srv = srv
+        # the reviews made now of records from before reviews were recorded (_dep_review), by (working copy, files):
+        # the review is polled, and listing a package's code reads all its cells
+        self._live_reviews: dict[tuple, dict | None] = {}
 
     # ------------------------------------------------------------------ paths and records
 
@@ -2706,8 +2713,8 @@ class Changesets:
             if recs:
                 out.append({"lib": lib, "ops": self.link_causes([{k: r.get(k) for k in
                                                  ("seq", "gseq", "opid", "op", "args", "cell", "view", "actor", "reason", "t", "effects",
-                                                  *_SYMBOL_GROUP_FIELDS)
-                                                 if k not in _SYMBOL_GROUP_FIELDS or k in r}
+                                                  *_SYMBOL_GROUP_FIELDS, "fetched_by")
+                                                 if k not in (*_SYMBOL_GROUP_FIELDS, "fetched_by") or k in r}
                                                 for r in recs])})
         return out
 
@@ -2723,7 +2730,7 @@ class Changesets:
         """The record with the changes, the checks, the writer and the activity; "retained": the working copy of a
         closed changeset is still there (a closure kept it: its preview can be opened); "closing": how far its
         closure is while one runs here (live.Closings.public); a closed one's "evidence" with its "size" now
-        (_evidence_size)."""
+        (_evidence_size); "deps": the review of its dependency operations, open or closed (_dep_review)."""
         meta = self._load(project, cid)
         git = {"git": self._git_info(project, meta)} if meta.get("git") else {}
         meta["retained"] = meta["status"] != "open" and self._resolves(meta["preview"])
@@ -2733,8 +2740,10 @@ class Changesets:
             archive = self._dir(project) / cid / "evidence" / "manifest.json"
             manifest = json.loads(archive.read_text())
             evidence = {**meta["evidence"], "size": _evidence_size(archive.parent)}
-            return {**meta, **git, "evidence": evidence, "changes": _never_fetched(manifest["changes"]),
-                    "verify": manifest["verify"]}
+            changes = _never_fetched(manifest["changes"])
+            return {**meta, **git, "evidence": evidence, "changes": changes, "verify": manifest["verify"],
+                    "deps": self._dep_review(project, meta, changes,
+                                             depreview.Checks(self.srv, evidence=archive.parent, manifest=manifest))}
         meta["changes"] = self.changes(project, meta) if meta["status"] == "open" else self._applied_changes(project, meta)
         meta["verify"] = self.verify_status(project, meta)
         le = self.srv.leases.get(cid) if meta["status"] == "open" else None
@@ -2744,7 +2753,38 @@ class Changesets:
             # agents' dependency operations waiting for a person's fetch: the review's Fetch replays each
             meta["pending_deps"] = [{k: v for k, v in x.items() if k not in ("owner", "sha")}
                                     for x in self.pending_ops(meta)]
+        meta["deps"] = self._dep_review(project, meta, meta["changes"], depreview.Checks(self.srv, work=meta["preview"])
+                                        if meta["status"] == "open" else None)
         return {**meta, **git}
+
+    def _dep_review(self, project: str, meta: dict, changes: list[dict], checks: "depreview.Checks | None") -> list[dict]:
+        """The review of the changeset's dependency operations (depreview.rows): one row per operation of its project
+        log still in effect, with the semantic diffs of project.json and undine.lock, what the operation recorded of
+        the packages (licence, size, update report, code blocks and RTL files), whether the real project trusts them
+        now and whether a run in the changeset checked them. An operation recorded before reviews were: its review
+        from the working copy as it is now, while the changeset is open."""
+        from undine.store import trust
+        ops = next((lc["ops"] for lc in changes if lc.get("lib") == PROJECT_LOG), [])
+        if not ops:
+            return []
+        try:
+            trusted = trust.trusted_keys(self.srv.project(project).path)
+        except (KeyError, ValueError, OSError):
+            trusted = set()
+        live_review = None
+        if meta["status"] == "open":
+            def live_review(e: dict) -> dict | None:
+                key = (meta["preview"], json.dumps([e.get("before"), e.get("after")], sort_keys=True, default=str))
+                if key not in self._live_reviews:
+                    if len(self._live_reviews) > 64:
+                        self._live_reviews.clear()
+                    try:
+                        self._live_reviews[key] = depreview.record(self.srv.project(meta["preview"]),
+                                                                   e.get("before") or {}, e.get("after") or {})
+                    except (KeyError, ValueError):
+                        self._live_reviews[key] = None
+                return self._live_reviews[key]
+        return depreview.rows(ops, trusted, checks, live_review)
 
     def _applied_changes(self, project: str, meta: dict) -> list[dict]:
         """The operations of a changeset closed without evidence (older ones), from the project's log: on git, the net

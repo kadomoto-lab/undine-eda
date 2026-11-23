@@ -4,9 +4,9 @@
 // open conflict with each side's value.
 import { createContext, useContext, useEffect, useState } from "react";
 import { LayoutDashboard } from "lucide-react";
-import type { GitCellChange, GitConflict, GitDiff, GitFileChange, GitView, SemanticDiff, ViewKind } from "../api";
+import type { DepFileDiff, GitCellChange, GitConflict, GitDiff, GitFileChange, GitView, SemanticDiff, ViewKind } from "../api";
 import { resolveText, useI18n, type UiText } from "../i18n";
-import { cellKind, changeKind, changeText, conflictText, isFlat, shortValue, statusName, viewName } from "./gitItems";
+import { cellKind, changeKind, changeText, conflictText, depValue, isFlat, shortValue, statusName, viewName } from "./gitItems";
 
 export type OpenView = (lib: string, cell: string, view: ViewKind | "cell") => void;
 /** The views a cell has now (null: there is no such cell, undefined: its library's cells are not read yet). */
@@ -137,15 +137,43 @@ export function DiffCells({ diff, lib, cell, worktree, onOpenView }: {
   </>;
 }
 
+/** project.json's or undine.lock's semantic diff (vcs/depmerge.diff): each entry added, removed or changed, with its
+ * value in short (a locked package's version and commit, a requirement's version or rev) before → after. */
+export function DepDiffView({ diff }: { diff: DepFileDiff }) {
+  const { t } = useI18n();
+  const file = diff.kind === "lock" ? "undine.lock" : "project.json";
+  if (diff.error) return <div className="note err small">{t("history:what.dep.error", { file, error: diff.error })}</div>;
+  return (
+    <div className="gitdiff depdiff">
+      {!diff.changes.length && <div className="dim small">{t("history:what.dep.none")}</div>}
+      {diff.changes.map((c, i) => {
+        const before = depValue(c.before), after = depValue(c.after);
+        return (
+          <div key={`${i}:${c.id}`} className={`fx fx-${c.do}`}>
+            <span className="kindmark">{MARK[c.do] ?? "~"}</span>{resolveText(changeText(diff.kind, c))}
+            {c.do === "mod" ? <span className="fieldchange">{": "}<span className="before">{before ?? "∅"}</span> → <span className="after">{after ?? "∅"}</span></span>
+              : (after ?? before) && <span className="dim">{": "}{after ?? before}</span>}
+          </div>
+        );
+      })}
+      {!!diff.more && <div className="dim small">{t("history:what.dep.more", { count: diff.more })}</div>}
+    </div>
+  );
+}
+
 export function OtherFiles({ files }: { files: GitFileChange[] }) {
   const { t } = useI18n();
+  // project.json and undine.lock with their semantic diff: open at once, as a dependency change is what they hold
   return (
-    <details className="oplog">
+    <details className="oplog" open={files.some((f) => f.deps) || undefined}>
       <summary className="small dim">{t("history:otherFiles")} <span className="mono">{files.length}</span></summary>
       {files.map((f) => (
-        <div key={f.path} className="row small">
-          <span className={`gitchip gs-${changeKind(f.status)}`}>{resolveText(statusName(f.status))}</span>
-          <span className="mono ellip" title={f.path}>{f.path}</span>
+        <div key={f.path} className={f.deps ? "gitview" : undefined}>
+          <div className="row small">
+            <span className={`gitchip gs-${changeKind(f.status)}`}>{resolveText(statusName(f.status))}</span>
+            <span className="mono ellip" title={f.path}>{f.path}</span>
+          </div>
+          {f.deps && <DepDiffView diff={f.deps} />}
         </div>
       ))}
     </details>

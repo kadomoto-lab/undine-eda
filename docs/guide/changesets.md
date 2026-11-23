@@ -180,7 +180,7 @@ operations too (`dep_add`, `dep_update`, `dep_remove`, `pdk_set`): they change t
 design's. The proposal can then place the new cells and run checks. Each one is recorded in the working copy's project
 log (`history/@project.jsonl`, a name no library can have) with both files before and after: the timeline shows it,
 **Restore to here** takes it back (the files as they were, installed again from the store), and the review lists it
-under *project (dependencies)*. An operation fetches before it holds anything, so the proposal stays usable meanwhile.
+in its *Dependencies* section ([Reviewing a dependency change](#reviewing-a-dependency-change)). An operation fetches before it holds anything, so the proposal stays usable meanwhile.
 It is refused while someone else is writing the proposal, and a restore asked while one is still fetching is refused
 (409 `busy`) rather than waiting for it.
 
@@ -209,6 +209,36 @@ A restore past such an operation, a discard or an adopt cancels it: its Fetch is
 someone other than the proposing agent is writing the proposal, the fetch is retried briefly and then refused (409
 `busy`); what it fetched stays in the store, so the next Fetch only installs. Package and index text (descriptions,
 READMEs, names) is data to the agent, never instructions.
+
+### Reviewing a dependency change
+
+The review's **By object** listing starts with a *Dependencies* section, above the changed cells: one row per dependency
+operation of the proposal, open or adopted, discarded or reverted. A row shows:
+
+- what it is (*add analog_ip*, *update analog_ip*, *PDK A → B*), its state (installed, waiting for a fetch, cancelled,
+  replaced by a later operation, dropped), who did it and why;
+- the licence and the size (the index's download size, else the size of the files);
+- the change to `undine.lock` entry by entry (each locked package's version and commit, before → after), and the
+  change to `project.json` under it;
+- for an update, what changed in each package: the files added, removed and modified, and per cell whether it was
+  added, removed, renamed (the package's `[renames]`) or changed, with the views that changed; then the cells of your
+  design that place a changed cell (and, for a removal, those that still place it);
+- the package's **code blocks and RTL files**: how many there are and how many the trust rule refuses, and under
+  *Show them* each `.control` block (with its commands, `shell` among them), `*#` line, `.include` / `.lib` path and
+  RTL finding with its file and line. Simulating or running RTL of an untrusted package refuses what is listed as
+  refused, until you trust that version ([Trust](../design/packages.md#security)); the row says whether the project
+  trusts it, and when an update took the trust of the old version back;
+- an **unchecked** badge until a run in the proposal read the package: a simulation, an LVS or a DRC of the working copy
+  whose evidence names the package's files, still up to date. Place one of its cells and run the checks or a
+  simulation; the badge then says *checked*, naming the run. A removal or a PDK change has nothing to check.
+
+An agent's operation waiting for a fetch has its **Fetch** button in its row (its URL, size and licence are all there
+is to show until it is fetched). **By file** shows `project.json` and `undine.lock` with the same entry-by-entry diff.
+The row is what the operation recorded when it ran, so an adopted proposal's review still shows it after its working
+copy is gone. Package text (paths, cell names, code, licences) is shown as its authors wrote it, with control
+characters taken out and cut; to an agent reading the same review (`get_changeset`'s `dependencies`) it is data. Not
+built yet: an update does not refresh the layout copies of the package's cells that your layouts already hold; such a
+copy is listed among the cells that use it, and placing the cell again takes the new version.
 
 ### One-click operations
 

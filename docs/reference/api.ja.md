@@ -222,8 +222,8 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
          findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
- trusted, trust, untrusted?: [キー], untrusted_count?, untrusted_now: [キー], untrusted_now_count, trust_taken_back: [キー],
- trust_replaced: [キー], trust_unknown?, trust_drop: [キー],
+ trusted, trust, untrusted?: [キー], untrusted_count?, untrusted_now?: [キー], untrusted_now_count?, trust_taken_back?: [キー],
+ trust_replaced?: [キー], trust_unknown?, trust_drop: [キー],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_state: stored | made | pending | failed, review_error?}
@@ -256,8 +256,9 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
   `untrusted_count` はその全部を数え、`untrusted_now` はそのうち今信頼していないもの(その実行は今拒否される)を挙げます。`trust` は
   それを言葉で言い、今拒否されるバージョンを先に、次に取り消されるもの(下)、次に後の操作が置き換えたもの(`trust_replaced`: もう
   changeset にない)を挙げ、それぞれの言い分はそのバージョンについて正しいものです。すべてのバージョンが置き換えられた行はそれだけを
-  言い、置き換えられたバージョンのコードのエントリはそう言います(`replaced`)。インストール済みの行には `untrusted_now`、
-  `trust_taken_back`、`trust_replaced` が空でも必ず付きます。
+  言い、置き換えられたバージョンのコードのエントリはそう言います(`replaced`)。バージョンを持ち込むインストール済みの行には `untrusted_now`、
+  `trust_taken_back`、`trust_replaced` が空でも必ず付き、何も持ち込まない行(削除や、lock のエントリを変えない PDK の変更)には
+  付きません。
 - changeset が開いている間は、それが project.json の `trusted` から外すキー(信頼したバージョンの別の内容への追加や更新: その行の
   `trust_drop`)は、今プロジェクトが信頼していても、採用後のとおり信頼していないものと数え、`trust_taken_back` に挙げます。すでに
   信頼しているので、改めて信頼しても変わりません。信頼はバージョンごとなので、採用までは changeset の中の実行はそのコードを

@@ -904,7 +904,7 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
         all_gone = bool(untrusted) and not refused and not back      # every version it names was replaced
         row["trust"] = (trust_words(refused, back, all_gone, gone_keys) if untrusted else TRUST_WORDS[True]) \
             if keys else None
-        if keys:              # always there for an installed row: what the web tells apart, empty or not
+        if keys:              # always there when the row brings versions: what the web tells apart, empty or not
             row["untrusted_now"] = refused[:LISTED_UNTRUSTED]
             row["untrusted_now_count"] = len(refused)
             row["trust_taken_back"] = back[:LISTED_UNTRUSTED]

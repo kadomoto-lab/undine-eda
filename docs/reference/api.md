@@ -229,8 +229,8 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
          findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
- trusted, trust, untrusted?: [key], untrusted_count?, untrusted_now: [key], untrusted_now_count, trust_taken_back: [key],
- trust_replaced: [key], trust_unknown?, trust_drop: [key],
+ trusted, trust, untrusted?: [key], untrusted_count?, untrusted_now?: [key], untrusted_now_count?, trust_taken_back?: [key],
+ trust_replaced?: [key], trust_unknown?, trust_drop: [key],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_state: stored | made | pending | failed, review_error?}
@@ -270,7 +270,8 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
   says it in words, naming the versions refused now first, then those taken back (below), then those a later operation
   replaced (`trust_replaced`: no longer in the changeset), each claim true of the versions it names; a row all of whose
   versions were replaced says only that, and a code entry of a replaced version says so (`replaced`). An installed row
-  always has `untrusted_now`, `trust_taken_back` and `trust_replaced`, empty or not.
+  that brings versions always has `untrusted_now`, `trust_taken_back` and `trust_replaced`, empty or not; one that
+  brings none (a removal, a PDK change that leaves the lock's entries alone) has none of them.
 - While the changeset is open, a key it takes out of project.json's `trusted` (an add or update to other content
   under a trusted version: `trust_drop` of its rows) counts as not trusted, as the adopt will leave it, whatever the
   project trusts today, and is listed in `trust_taken_back`; trusting it again changes nothing, as it is trusted

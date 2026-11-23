@@ -689,10 +689,12 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   or update to other content under a trusted version) counts as not trusted, as the adopt will leave it
   (`trust_taken_back`; trust is by version, so until then runs in the changeset still run that code, and its code
   entries say so, `taken_back`); `untrusted_now` names the versions not trusted now, and the words name each kind for
-  its own versions; a replaced row says only that its code is no longer in the changeset (`untrusted` names the first ten versions not trusted once adopted, `untrusted_count` counts them all;
+  its own versions; a version a later operation replaced is named as no longer in the changeset, and a row all of whose
+  versions were replaced says only that (`untrusted` names the first ten versions not trusted once adopted, `untrusted_count` counts them all;
   `untrusted_now` the ones not trusted now, whose code a run refuses now, `untrusted_now_count` them all;
   `trust_taken_back` those trusted now that the change takes back; `trust_replaced` those a later operation replaced,
-  no longer in the changeset; the three always given, empty or not, on an installed row), `trust_drop` (the keys the
+  no longer in the changeset; the three always given, empty or not, on an installed row that brings versions, and absent
+  on one that brings none, such as a removal), `trust_drop` (the keys the
   operation took out of the working copy's `trusted`), and `checked`: false (*unchecked*) until a run of the changeset
   read the package (the trees taken from the effect's lock, so a row whose review is missing or failed is never
   shown safer), that is a done simulation, LVS or DRC of the working copy whose `about.packages` names a tree the

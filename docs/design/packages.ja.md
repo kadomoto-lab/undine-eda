@@ -660,14 +660,16 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   (`error`)、操作を失敗させることはありません。
   `GET .../changesets/{id}` は `deps` を返します。効いている依存の操作ごとに 1 行で、開いていても閉じていても、状態(`installed`、
   `needs_fetch`、`cancelled`。`outcome` は superseded か dropped。取得がインストールした提案は、インストールした記録の行で、`op_id` と
-  `fetched_by` が付く)、`project` と `lock`(効果の前後の `depmerge.diff`)、レビュー(`review_state`: stored、made、pending、failed)、名前の依存そのもののライセンスと大きさ(それが使う
-  パッケージだけが動いたときはなし: `own` が false、各パッケージのものはその報告に)、合計の大きさ(`size_total`)、
+  `fetched_by` が付く)、`project` と `lock`(効果の前後の `depmerge.diff`)、レビュー(`review_state`: stored、made、pending、failed)、名前の依存そのもののライセンスと大きさ(その報告を先に
+  挙げるので切られない。それが使うパッケージだけが動いたとき、または取得待ちで自分の取得がないときはなし: `own` が false、各パッケージ
+  と各取得のものはそれぞれに)、合計の大きさ(`size_total`)、
   操作が持ち込んだすべてのバージョンについての `trusted`(ジョブ、信頼のダイアログ、`lib trust` が使うキーで呼ぶ: trust.key_of
   の規則で、lock の形式が何を記録していても、ストアから読む木のマニフェストの名前とバージョン、なければローカルの名前ごとに名前と
   commit。レビューを作ったときに読んだキーはレビューとともに残すので、その後ストアが片付けても同じキーを示す。今は決められないもの
   (ストアにマニフェストがない)は lock のパッケージとバージョン、なければ `<名前>@?` で、信頼されず `trust_unknown` を付ける。
   changeset が開いている間は、それが project.json の `trusted` から外すキー(信頼したバージョンの別の内容への追加や更新)は、採用後の
-  とおり信頼していないものと数える(`trust_taken_back`)。バージョンはレビューの中身によらず効果の lock から読み、エントリは誰であるかで対にするので、1 つの木の 2 つのローカルの
+  とおり信頼していないものと数える(`trust_taken_back`。信頼はバージョンごとなので、それまでは changeset の中の実行はそのコードを
+  動かし、コードのエントリはそう言う、`taken_back`)。バージョンはレビューの中身によらず効果の lock から読み、エントリは誰であるかで対にするので、1 つの木の 2 つのローカルの
   名前もそれぞれ別のもの。`untrusted` は今の本物のプロジェクトが
   信頼していない最初の 10 個、`untrusted_count` はその全部の数)、
   `trust_drop`(操作が作業コピーの `trusted` から外したキー)、`checked` を持ちます。`checked` は changeset の実行がパッケージを

@@ -224,8 +224,8 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
              size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
              cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
  used_by: [text], used_by_more?,                           the project's cells that use a changed or removed cell
- license, size, size_from, own, size_total,                the dependency's own (a needs_fetch row: its plan's first
-                                                           fetch's); size_total every package's (fetch's) added up
+ license, size, size_from, own, size_total,                the dependency's own (a needs_fetch row: its own fetch's);
+                                                           size_total every package's (fetch's) added up
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
          findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
@@ -263,13 +263,18 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
   (`trust.key_of`: the tree's manifest name and version, read from the store whatever the lock format records, else
   `<local name>@<commit12>` for each local name; a code entry under several names has them in `keys`; the keys read
   when the review was made are kept with it, so a store gc'd since names the same ones; one that cannot be told now is
-  the lock's package and version, else `<name>@?`, never trusted, with `trust_unknown`). While the changeset is open, a
-  key it takes out of project.json's `trusted` (an add or update to other content under a trusted version) counts as
-  not trusted, as the adopt will leave it, and is listed in `trust_taken_back`, so a version a person trusts after the operation shows
-  as trusted; `trust` says it in words, `untrusted` names the first 10 versions not trusted and `untrusted_count` counts
-  them all. `license` and `size` are the named dependency's own: null when only packages it needs moved (`own`
-  false; each package's are in `packages`). `trust_drop` lists the keys
-  the operation took out of the working copy's `trusted` (an update drops the old version's).
+  the lock's package and version, else `<name>@?`, never trusted, with `trust_unknown`). So a version a person trusts
+  after the operation shows as trusted. `trust` says it in words, `untrusted` names the first 10 versions not trusted
+  and `untrusted_count` counts them all.
+- While the changeset is open, a key it takes out of project.json's `trusted` (an add or update to other content
+  under a trusted version: `trust_drop` of its rows) counts as not trusted, as the adopt will leave it, whatever the
+  project trusts today, and is listed in `trust_taken_back`; trusting it again changes nothing, as it is trusted
+  already. Trust is by version, so until the adopt the runs in the changeset do run that code: a code entry under such
+  a key says so (`taken_back`, and its `trust` in words). `trust_drop` lists the keys the operation took out of the
+  working copy's `trusted` (an update drops the old version's).
+- `license` and `size` are the named dependency's own (`own` true; its report is listed first): null, `own` false,
+  when only packages it needs moved, or, waiting for a fetch, when none of the fetches is its own (each package's and
+  each fetch's are in `packages` and `needs`).
 - `checked` is `false` (*unchecked*) until a run of the changeset read the package: a simulation, an LVS or a DRC of
   the working copy, done, whose evidence names one of the trees the operation brought in its `about.packages`, and
   (open) still fresh; `checked_by` names it. Only trees the operation really brought count (an entry whose tree did

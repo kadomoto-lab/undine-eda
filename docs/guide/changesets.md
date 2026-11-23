@@ -217,8 +217,9 @@ operation of the proposal, open or adopted, discarded or reverted. A row shows:
 
 - what it is (*add analog_ip*, *update analog_ip*, *PDK A → B*), its state (installed, waiting for a fetch, cancelled,
   replaced by a later operation, dropped), who did it and why;
-- the licence and the size (the index's download size, else the size of the files), and when it brings several
-  packages, their total; each package's own licence and size are in its report below;
+- the licence and the size of the dependency itself (the index's download size, else the size of the files), and when
+  it brings several packages, their total; each package's own licence and size are in its report below, and when the
+  dependency itself did not move (only packages it needs did) the row says so instead of showing another's;
 - the change to `undine.lock` entry by entry (each locked package's version and commit, before → after), and the
   change to `project.json` under it;
 - for an update, what changed in each package: the files added, removed and modified, and per cell whether it was
@@ -229,8 +230,10 @@ operation of the proposal, open or adopted, discarded or reverted. A row shows:
   RTL finding with its file and line. What is listed as refused is what a simulation or an RTL run of an untrusted
   package refuses, by the same rule (a model include under your PDK passes), until you trust that version
   ([Trust](../design/packages.md#security)); the row says whether the project trusts every version it brings (and
-  names those it does not), and when the change takes the trust of a version back (an update to other content
-  under the same version): such a version is shown as not trusted, as it will be once adopted;
+  names those it does not), and when an update took the trust of the old version back; when the change takes the
+  trust of the version it brings back (an update to other content under the same version), that version is shown as
+  not trusted, as it will be once adopted, though runs in the proposal still run its code until then (trust is by
+  version);
 - an **unchecked** badge until a run in the proposal read the package: a simulation, an LVS or a DRC of the working copy
   whose evidence names the package's files, still up to date. Place one of its cells and run the checks or a
   simulation; the badge then says *checked*, naming the run. A removal or a PDK change has nothing to check, and an

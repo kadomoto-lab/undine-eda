@@ -55,7 +55,11 @@ CHECK_JOBS = 20           # runs of the working copy looked at for `checked`, ne
 TRUST_WORDS = {True: "trusted in the project", False: "not trusted: a job that runs its code is refused until a person "
                                                       "trusts this version"}
 TRUST_TAKEN_BACK = ("not trusted once adopted: this change takes the project's trust of it back (other content under "
-                    "the same version); a job that runs its code is refused until a person trusts it again")
+                    "the same version); trust is by version, so runs in this changeset still run its code, and after "
+                    "the adopt a run of its code is refused until a person trusts it again")
+TRUST_CODE_TAKEN_BACK = ("trusted by its version now, so runs in this changeset still run this code; the adopt takes "
+                         "that trust back (other content under the same version), after which a run of it is refused "
+                         "until a person trusts it again")
 
 _VIEWS = {".sch": "schematic", ".sym": "symbol", ".oas": "layout", ".gds": "layout", ".v": "rtl", ".sv": "rtl",
           ".svh": "rtl", ".vh": "rtl"}
@@ -466,7 +470,8 @@ def code_listing(prj, before: dict, after: dict, allowed: list | None = None, en
     return {"code": code, **({"code_more": more} if more else {})}
 
 
-def record(prj, before: dict, after: dict, allowed: list | None = None, env: dict | None = None) -> dict:
+def record(prj, before: dict, after: dict, allowed: list | None = None, env: dict | None = None,
+           name: str | None = None) -> dict:
     """What the review of one dependency operation shows, from its effect (`before` and `after`: project.json and
     undine.lock parsed, as the effect keeps them), the store and the working copy `prj` (its own cells, for used_by).
     The trees are read from the store, so the review is the operation's whatever ran since. `allowed` and `env`: the
@@ -520,7 +525,14 @@ def record(prj, before: dict, after: dict, allowed: list | None = None, env: dic
                 if d is not None and len(keys) < LISTED_KEYS:
                     keys[_entry_id(eb, names)] = [data(k) for k in entry_keys(names, eb, man)]
             packages.append(row)
-        out = {"packages": None, "used_by": None, "code": None}
+        # the named dependency's own rows first, so a cut never takes them (resolve lists the packages it needs
+        # first); its licence and size kept apart too, for the row (`own`), whatever the list keeps
+        mine = [p for p in packages if name is not None and name in (p.get("names") or [])]
+        packages = mine + [p for p in packages if p not in mine]
+        own = next((p for p in mine if p.get("do") != "del"), None)
+        out = {"packages": None, "used_by": None, "code": None,
+               "own": {k: own.get(k) for k in ("package", "license", "license_from", "size", "size_from")}
+               if own is not None else None}
         out["packages"], more = _listed(packages, LISTED_PACKAGES)
         if more:
             out["packages_more"] = more
@@ -743,9 +755,14 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
             row["needs"] = needs
             if len(all_needs) > LISTED_PACKAGES:
                 row["needs_more"] = len(all_needs) - LISTED_PACKAGES
-            first = needs[0] if needs else {}
+            # the licence and size on the row are the named dependency's fetch's (by its package), the only fetch's
+            # when there is one; else none, each fetch's being listed with it
+            wanted = {x for x in (e.get("name"), (op.get("args") or {}).get("package")) if isinstance(x, str)}
+            mine_f = next((f for f in all_needs if f.get("package") in wanted), None) or (
+                all_needs[0] if len(all_needs) == 1 else None)
+            first = {k: data(mine_f.get(k)) for k in ("license", "size")} if mine_f else {}
             sizes = [f.get("size") for f in all_needs]
-            row |= {"license": first.get("license"), "size": first.get("size"),
+            row |= {"license": first.get("license"), "size": first.get("size"), "own": mine_f is not None,
                     "size_from": "index" if first.get("size") is not None else None,
                     "size_total": sum(sizes) if sizes and all(isinstance(x, int) for x in sizes) else None,
                     "project": {"kind": "project", "changes": []}, "lock": {"kind": "lock", "changes": []},
@@ -769,7 +786,8 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
         pkgs = review.get("packages") or []
         # the licence and size on the row are the named dependency's own; when it did not move (only packages it
         # needs did), none is put on it: each package's are in its report, with the total
-        mine = next((p for p in pkgs if row["name"] in (p.get("names") or []) and p.get("do") != "del"), None)
+        mine = review["own"] if "own" in review else next(           # (a review from before `own` was kept)
+            (p for p in pkgs if row["name"] in (p.get("names") or []) and p.get("do") != "del"), None)
         sizes = [p.get("size") for p in pkgs if p.get("do") != "del"]
         row |= {"packages": pkgs, "used_by": review.get("used_by") or [],
                 "license": (mine or {}).get("license"), "size": (mine or {}).get("size"),
@@ -793,8 +811,12 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
         gone = dropped if is_open else set()
         trusted_after = {k for k in trusted_now if k not in gone}
         for c in row["code"]:
-            c["trusted"] = all(k in trusted_after for k in c.get("keys") or [c.get("key")])
+            ks = c.get("keys") or [c.get("key")]
+            c["trusted"] = all(k in trusted_after for k in ks)
             c["trust"] = TRUST_WORDS[c["trusted"]]
+            if not c["trusted"] and all(k in trusted_now for k in ks):
+                c["taken_back"] = True                   # trusted by its key now: runs here still run it
+                c["trust"] = TRUST_CODE_TAKEN_BACK
         untrusted = [k for k in keys if k not in trusted_after]
         row["trusted"] = bool(keys) and not untrusted
         row["trust"] = TRUST_WORDS[row["trusted"]] if keys else None

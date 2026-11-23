@@ -484,9 +484,11 @@ def get_changeset(c: ToolCtx, a: dict):
                                     "later operation replaced its trees, and that operation's row is the one to "
                                     "check); code lists what the trust rule refuses in it, which only a person can "
                                     "trust (untrusted: the versions not trusted, trust_taken_back: trusted today but "
-                                    "this change takes it back, code_more: packages with code not listed); license "
-                                    "and size are the named dependency's own, null when only packages it needs moved "
-                                    "(each package's are in packages)")
+                                    "this change takes it back, though runs in this changeset still run it as trust is "
+                                    "by version; code_more: packages with code not listed); license and size are the "
+                                    "named dependency's own (own true), null when only packages it needs moved or, "
+                                    "waiting for a fetch, when no fetch is its own (each package's and each fetch's are "
+                                    "in packages and needs)")
         out["data_rule"] = DATA_RULE
     if g["status"] == "open":
         n = a.get("restore_points")
@@ -4209,14 +4211,16 @@ def _dep_review_public(r: dict) -> dict:
     """One row of a changeset's dependency review (depreview.rows) as get_changeset gives it: counts and the first
     few of each list, the texts as the review kept them (control characters out, cut)."""
     out = {k: r[k] for k in ("op", "action", "name", "state", "outcome", "op_id", "fetched_by", "pdk", "license",
-                             "size", "size_total", "checked", "checked_by", "replaced_by", "trust", "untrusted",
+                             "size", "size_total", "own", "checked", "checked_by", "replaced_by", "trust", "untrusted",
                              "untrusted_count", "trust_taken_back", "trust_unknown", "trust_drop", "review_error")
            if r.get(k) is not None and r.get(k) != []}
     out["by"], out["reason"] = r.get("actor"), r.get("reason") or ""
     if r.get("packages"):
+        named = [p for p in r["packages"] if r.get("name") in (p.get("names") or [])]   # the named one first
+        ordered = named + [p for p in r["packages"] if p not in named]
         out["packages"] = [{k: p[k] for k in ("package", "names", "do", "from", "to", "license", "size")
                             if p.get(k) is not None}
-                           for p in r["packages"][:DEP_ROWS]]
+                           for p in ordered[:DEP_ROWS]]
         if (more := len(r["packages"]) - DEP_ROWS + (r.get("packages_more") or 0)) > 0:
             out["packages_more"] = more
     if r.get("used_by"):

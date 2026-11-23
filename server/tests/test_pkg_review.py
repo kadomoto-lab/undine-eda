@@ -1075,6 +1075,10 @@ def test_trust_the_change_takes_back_is_not_trusted(tmp_path):
     assert row["trust_drop"] == ["ip@1.0.0"]
     assert row["trusted"] is False and row["trust_taken_back"] == ["ip@1.0.0"]
     assert row["trust"] == depreview.TRUST_TAKEN_BACK and row["code"][0]["trusted"] is False
+    # while it is open, trust is by version: runs in the changeset do run the code, and the words say so
+    assert trust.untrusted_dirs(srv.project(meta["preview"]).path) == {}
+    assert row["code"][0].get("taken_back") is True and row["code"][0]["trust"] == depreview.TRUST_CODE_TAKEN_BACK
+    assert "still run" in row["trust"] and "still run" in row["code"][0]["trust"]
     cs.apply("p", cid, "user")
     assert "ip@1.0.0" not in trust.trusted_keys(srv.project("p").path)      # what the row said
     [row] = cs.get("p", cid)["deps"]
@@ -1164,3 +1168,48 @@ def test_licence_on_the_row_is_the_named_packages_own(tmp_path):
     assert up["license"] is None and up["size"] is None                  # not sar_common's GPL as analog_ip's
     assert add["license"] == "MIT" and add.get("own") is True and up.get("own") is False
     assert up["packages"][0]["license"] == "GPL-3.0-only" and up["size_total"] == up["packages"][0]["size"]
+
+
+
+def test_the_named_package_is_never_the_one_cut(tmp_path, monkeypatch):
+    """An add that brings more packages than the review lists: the named dependency's own report is listed first and
+    its licence and size are the row's (own), whatever the list cuts; an agent's shorter list starts with it too."""
+    from undine.agents import agent_tools as T
+    root, srv, cs = _setup(tmp_path)
+    core = _release(tmp_path / "core", "1.0.0", {**CORE, "undine-package.toml":
+                                                 MANIFEST.replace('"ip"', '"core"').replace("MIT", "GPL-3.0-only")
+                                                 .format(v="1.0.0")})
+    ip = _release(tmp_path / "ip", "1.0.0", {**V1, "undine-package.toml": MANIFEST.format(v="1.0.0") +
+                                            f'\n[dependencies]\ncore = {{ git = "{core}", rev = "v1.0.0" }}\n'})
+    monkeypatch.setattr(depreview, "LISTED_PACKAGES", 1)
+    monkeypatch.setattr(T, "DEP_ROWS", 1)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    _add(cs, cid, ip, tmp_path)
+    [row] = cs.get("p", cid)["deps"]
+    assert [p["package"] for p in row["packages"]] == ["ip"] and row["packages_more"] == 1
+    assert row["own"] is True and row["license"] == "MIT" and row["size"] > 0
+    ctx = T.ToolCtx(srv, "p", actor="agent:a", owner="mcp:s1:a", owner_kind="mcp")
+    a = json.loads(T.call(ctx, "get_changeset", {"id": cid})[0])["dependencies"][0]
+    assert a["license"] == "MIT" and [p["package"] for p in a["packages"]] == ["ip"]
+
+
+def test_a_waiting_rows_licence_is_its_own_fetchs(tmp_path):
+    """An agent's add of zip waiting for two fetches (core's URL sorts first): the row's licence and size are zip's
+    fetch's, not core's; with no fetch of its own, none."""
+    root, srv, cs = _setup(tmp_path)
+    meta = cs.create("p", "zip", "", "user")
+    cid = meta["id"]
+
+    def fetch(pkg, lic, size):
+        return {"url": f"https://example.org/{pkg}.git", "rev": None, "commit": "a" * 40, "subdir": None, "tree": None,
+                "size": size, "license": lic, "package": pkg, "version": "1.0.0", "host": "example.org",
+                "allowed": False}
+    plan = {"op": "add", "complete": True, "fetches": [fetch("core", "GPL-3.0-only", 9000), fetch("zip", "MIT", 100)]}
+    cs._record_needs("p", cid, "add", {"name": "zip", "package": "zip"}, "agent:a", "zip", plan)
+    [row] = cs.get("p", cid)["deps"]
+    assert (row["license"], row["size"]) == ("MIT", 100) and row.get("own") is True and row["size_total"] == 9100
+    plan2 = {"op": "add", "complete": True, "fetches": [fetch("core", "GPL-3.0-only", 9000), fetch("lib2", "BSD", 5)]}
+    cs._record_needs("p", cid, "add", {"name": "other", "package": "other"}, "agent:a", "other", plan2)
+    other = cs.get("p", cid)["deps"][-1]
+    assert (other["license"], other["size"]) == (None, None) and other.get("own") is False

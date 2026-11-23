@@ -1059,6 +1059,14 @@ describe("the review of a dependency change", () => {
     expect(within(row).getByTestId("dep-taken-back").textContent).toContain("ip@1.0.0");
   });
 
+  it("says of code whose trust the change takes back that runs here still run it", async () => {
+    await open({ ...rec, deps: [{ ...added, code: [{ ...code, trusted: false, taken_back: true }], trust_taken_back: ["ip@1.0.0"],
+      untrusted: ["ip@1.0.0"], untrusted_count: 1 }] });
+    const c = screen.getByTestId("dep-code");
+    expect(within(c).getByTestId("dep-code-taken-back").textContent).toBe(t("review:deps.trust.takenBack"));
+    expect(c.textContent).not.toContain(t("review:deps.trust.untrusted"));
+  });
+
   it("words the row in the reader's language", async () => {
     await setLocale("ja");
     try {

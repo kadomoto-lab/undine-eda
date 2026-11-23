@@ -77,7 +77,8 @@ function CodeList({ c }: { c: DepReviewCode }) {
       <div className="small">
         <span className="mono">{c.key ?? c.name}</span>{" · "}
         <span className={c.trusted ? "okc" : (c.blocks_refused || c.rtl_refused) ? "warn" : "dim"}>
-          {c.trusted ? <><ShieldCheck size={12} /> {t("review:deps.trust.trusted")}</> : t("review:deps.trust.untrusted")}
+          {c.trusted ? <><ShieldCheck size={12} /> {t("review:deps.trust.trusted")}</>
+            : c.taken_back ? <span data-testid="dep-code-taken-back">{t("review:deps.trust.takenBack")}</span> : t("review:deps.trust.untrusted")}
         </span>
       </div>
       <div className="small">{t("review:deps.code.counts", { blocks: c.blocks_total ?? 0, blocksRefused: c.blocks_refused ?? 0,
@@ -119,7 +120,7 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
   const count = r.state === "installed" ? r.packages.filter((p) => p.do !== "del").length + (r.packages_more ?? 0)
     : (r.needs?.length ?? 0) + (r.needs_more ?? 0);
   // the named dependency did not move itself (only packages it needs did): no licence or size is its own
-  const notOwn = r.state === "installed" && r.own === false && count > 0;
+  const notOwn = r.own === false && count > 0;
   const several = count > 1 || notOwn;
   return (
     <div className={`deprow${inactive ? " dim" : ""}`} data-testid="dep-row">

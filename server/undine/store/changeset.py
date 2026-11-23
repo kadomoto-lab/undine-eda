@@ -2844,7 +2844,8 @@ class Changesets:
             except Exception as err:
                 review = {"error": depreview.data(f"the review's code listing could not be made: {err}", 400)}
         else:
-            review = depreview.record(prj, e.get("before") or {}, e.get("after") or {}, allowed=allowed, env=env)
+            review = depreview.record(prj, e.get("before") or {}, e.get("after") or {}, allowed=allowed, env=env,
+                                      name=e.get("name"))
         with _REVIEW_FAILED_LOCK:
             if review.get("error"):
                 _REVIEW_FAILED[key] = (time.time(), review)

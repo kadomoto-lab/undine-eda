@@ -217,7 +217,7 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
              size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
              cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
  used_by: [文], used_by_more?,                             変わった、または消えたセルを使うプロジェクトのセル
- license, size, size_from, own, size_total,                依存そのもののもの(needs_fetch の行は計画の最初の取得の
+ license, size, size_from, own, size_total,                依存そのもののもの(needs_fetch の行は自分の取得の
                                                            もの)。size_total はすべてのパッケージ(取得)の合計
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
@@ -246,16 +246,20 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
   ごとに(そのパッケージ全体で)コードブロック 20 個と RTL ファイル 20 個、それぞれの指摘は 3 個まで。合計と `*_more` が残りを数えます。
   パッケージから来た文(パス、セル名、コード、指摘、ライセンス、バージョン、needs_fetch の URL)は、制御文字を空白にし、200 文字で
   切ります。ほかの人が書いたデータです。
-- `trusted`(`code` の各パッケージのもの、と行のもの: 操作が持ち込んだすべてのバージョン。レビューの中身によらず lock から読む)は、ジョブと信頼の
-  ダイアログが使うキー(`trust.key_of`: lock の形式が何を記録していても、ストアから読む木のマニフェストの名前とバージョン、なければ
-  ローカルの名前ごとに `<ローカルの名前>@<commit12>`。複数の名前のコードのエントリは `keys` に持つ。レビューを作ったときに読んだキーはレビューとともに残し、その後ストアが片付けても
-  同じキーを示す。今は決められないものは lock のパッケージとバージョン、なければ `<名前>@?` で、信頼されず `trust_unknown` を付ける)
-  について、今の本物のプロジェクトの
-  `trusted` から読むので、操作の後に人が信頼したバージョンは信頼済みと出ます。`trust` はそれを言葉で言い、
-  `untrusted` は信頼していない最初の 10 バージョンを挙げ、`untrusted_count` はその全部を数えます。changeset が開いている間は、それが project.json の `trusted` から外すキー(信頼したバージョンの別の内容への追加
-  や更新)は、採用後のとおり信頼していないものと数え、`trust_taken_back` に挙げます。`license` と `size` は名前の依存そのものの
-  もので、それが使うパッケージだけが動いたときは null(`own` が false。各パッケージのものは `packages` に)です。`trust_drop` は、操作が作業コピーの `trusted` から外した
-  キーです(更新は古いバージョンのものを外す)。
+- `trusted`(`code` の各パッケージのもの、と行のもの: 操作が持ち込んだすべてのバージョン。レビューの中身によらず lock から読む)は、
+  ジョブと信頼のダイアログが使うキー(`trust.key_of`: lock の形式が何を記録していても、ストアから読む木のマニフェストの名前と
+  バージョン、なければローカルの名前ごとに `<ローカルの名前>@<commit12>`。複数の名前のコードのエントリは `keys` に持つ。レビューを
+  作ったときに読んだキーはレビューとともに残し、その後ストアが片付けても同じキーを示す。今は決められないものは lock のパッケージと
+  バージョン、なければ `<名前>@?` で、信頼されず `trust_unknown` を付ける)について、今の本物のプロジェクトの `trusted` から読みます。
+  そのため、操作の後に人が信頼したバージョンは信頼済みと出ます。`trust` はそれを言葉で言い、`untrusted` は信頼していない最初の
+  10 バージョンを挙げ、`untrusted_count` はその全部を数えます。
+- changeset が開いている間は、それが project.json の `trusted` から外すキー(信頼したバージョンの別の内容への追加や更新: その行の
+  `trust_drop`)は、今プロジェクトが信頼していても、採用後のとおり信頼していないものと数え、`trust_taken_back` に挙げます。すでに
+  信頼しているので、改めて信頼しても変わりません。信頼はバージョンごとなので、採用までは changeset の中の実行はそのコードを
+  動かします: そのようなキーのコードのエントリはそう言います(`taken_back` と、言葉での `trust`)。`trust_drop` は、操作が作業
+  コピーの `trusted` から外したキーです(更新は古いバージョンのものを外す)。
+- `license` と `size` は名前の依存そのもののもの(`own` が true。その報告を先に挙げる)で、それが使うパッケージだけが動いたとき、
+  または取得待ちで自分の取得がないときは null(`own` が false。各パッケージのもの、各取得のものは `packages` と `needs` に)です。
 - `checked` は、changeset の実行がパッケージを読むまで `false`(*未確認*)です。作業コピーのシミュレーション、LVS、DRC のうち、
   終わっていて、その証拠の `about.packages` が操作の持ち込んだツリーのどれかを挙げ、(開いている間は)まだ最新のものです。
   `checked_by` がそれを示します。数えるのは操作が本当に持ち込んだツリー(ツリーの変わらないエントリ、ローカルの名前が増えただけの

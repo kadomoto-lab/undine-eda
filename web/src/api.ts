@@ -158,6 +158,7 @@ export interface FetchRow {
 export interface FetchRequest {
   op: "add" | "update" | "remove" | "lock" | "sync"; name?: string; git?: string; rev?: string; subdir?: string;
   package?: string; version?: string; index?: string; changeset?: string; adopt?: boolean; reason?: string; title?: string;
+  op_id?: string;   // an agent's operation of the changeset waiting for a fetch: the person's Fetch replays it
 }
 /** What an operation over HTTP would fetch that no person confirmed (409 needs_fetch's params.plan): complete false
  * when what it fetches may name more (a second confirmation may follow). */
@@ -494,6 +495,9 @@ export interface Effect {
   lib?: string;
   file?: string;    // r of a flow configuration: flows/<name>.yaml
   name?: string | null; pdk?: [string | null, string | null];   // d
+  state?: "installed" | "needs_fetch" | "dropped";   // d: an agent's operation waiting for a person's fetch (nothing installed)
+  // d needs_fetch: what became of it since (absent: still waiting); installed: the next record installed it
+  outcome?: "installed" | "superseded" | "dropped" | "cancelled";
   kept?: boolean;   // a layout cell taken out with its content recorded (delete_unused_cells, delete_cell), or brought back
                     // with it; a schematic / symbol file deleted with its text (k "v", do "del": delete_cell)
   text?: string; obj?: Record<string, unknown>; changes?: Record<string, [unknown, unknown]>;
@@ -567,7 +571,16 @@ export interface ChangesetInfo {
   retained?: boolean;              // a closed changeset's working copy is still there (its preview can be opened)
   git?: ChangesetGit;               // absent: a changeset made before changesets were git branches (review, discard)
   activity?: { head: number };      // open: the last committed change of its working copy (gseq)
+  pending_deps?: PendingDep[];      // open: agents' dependency operations waiting for a person's fetch
+  notices?: ChangesetNotice[];      // what a person's fetch told the agent (wait_for returns them)
 }
+/** An agent's dependency operation recorded as needing a fetch (docs/design/packages.md, Changesets and evidence):
+ * nothing fetched or installed until a person fetches it from the review; `plan` is what the Fetch dialog shows. */
+export interface PendingDep {
+  op_id: string; action: "add" | "update" | "remove"; op: string; name: string | null; args: Record<string, unknown>;
+  actor: string; reason: string; gseq: number; t?: string; needs: FetchRow[]; plan: FetchPlan;
+}
+export interface ChangesetNotice { at: string; kind: "fetched" | "fetch_failed"; op_id: string; name: string | null; text: string }
 
 export interface LlmStatus {
   policy: "both" | "cloud" | "server" | "none"; allowed: ("cloud" | "server")[];

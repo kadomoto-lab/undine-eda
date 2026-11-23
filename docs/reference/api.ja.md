@@ -123,6 +123,7 @@ UI が行うことはすべて Design API への HTTP 呼び出しです。ス�
 | `needs_fetch` | 409 | `POST /deps`、`/deps/sync`、`/deps/lock`、`/deps/{name}/update`、`/deps/changeset`、`/changesets/{id}/deps`: 人が確かめていないリモートからの取得([依存関係の取得](#dependency-fetch)) | `plan: {op, fetches, complete, project, request}` |
 | `index_not_fetched` | 409 | `GET /api/packages`、`/api/packages/{name}`、そして手元の写しのないインデックスを読む追加、更新、ロック: 人が先に取得し直す | `index`、`url`、`host` |
 | `busy` | 409 | プロジェクトの別の依存関係の操作が動いている間の、種類 `dependency` の確認や、(何も開く前の)1 クリックの `POST /deps/changeset` | |
+| `not_pending` | 409 | `op_id` 付きの種類 `dependency` の確認や、そのトークンでの `POST /deps/fetch` で、エージェントの操作がもう取得を待っていないとき: 復元が取り消した、取得がすでにインストールした、同じ依存への後の操作が置き換えた、もう適用できない(`fetch_failed` の通知とともに取り下げ: 最初のそのような確認が取り下げる)、その changeset が採用か破棄された(トークンは使い切る) | |
 | `files_changed` | 403 | 確認の後に project.json か undine.lock が変わった依存関係の取得のジョブ。依存関係のロックを取ったところで見つける | |
 
 <a id="trusting-a-dependency"></a>
@@ -164,7 +165,7 @@ HTTP からの依存関係の操作は、人がブラウザの **依存を取得
 | `fetches` | `[{url, rev, commit, subdir, tree, size, license, package, version, host, allowed}]`: 取得する各リポジトリとコミット(または rev)。インデックスのパッケージは、コミット、ツリー、サイズ、ライセンスをインデックスの行から持つ。rev で指定した通常の git の依存関係は `rev` を持ち、最初の取得の前は `commit` が null(取得した後は、その取得が返したコミットで、もう一度確かめる)。`host` は URL のホスト(ローカルのものは null)、`allowed` はサーバーが確認なしでそこから取得するか(設定したインデックスのホストと `--dep-host`) |
 | `complete` | 取得したものがさらに取得するものを挙げることがあるとき(通常の git の依存関係のマニフェストは取得してから読む)は false: 2 回目の確認が続くことがある |
 | `project` | プロジェクト(changeset でも実際のプロジェクト) |
-| `request` | 確認がそのまま受け取る操作: `{op, name?, git?, rev?, subdir?, package?, version?, index?, changeset?, adopt?, reason?, title?}`。`changeset` はその changeset の作業コピーで行い、`adopt: true` はブラウザのワンクリックの操作(小さな changeset を作って採用する) |
+| `request` | 確認がそのまま受け取る操作: `{op, name?, git?, rev?, subdir?, package?, version?, index?, changeset?, op_id?, adopt?, reason?, title?}`。`changeset` はその changeset の作業コピーで行い、`op_id` はその changeset で取得を待つエージェントの操作を指し([下記](#an-agents-operation-waiting-for-a-fetch))、`adopt: true` はブラウザのワンクリックの操作(小さな changeset を作って採用する) |
 
 | 呼び出し | |
 |---|---|
@@ -177,6 +178,28 @@ HTTP からの依存関係の操作は、人がブラウザの **依存を取得
 (ジョブが取得したものはストアに残り、次の試みはそこからインストールします)。コマンドラインはこれまでどおり、何も尋ねずに取得します。
 MCP のツール、`undine call` のコマンド、Python のクライアントのメソッド、エージェントのツールのどれも、これらの種類のトークンを
 求めず、持たず、取得も始めません。
+
+<a id="an-agents-operation-waiting-for-a-fetch"></a>
+### 取得を待つエージェントの操作
+
+エージェントは自分の changeset で依存関係の操作を提案します(`propose_dependency`)。取得はしません。取得の要るものは、作業コピーの
+プロジェクトのログに取得待ちとして記録し(`{k: "d", state: "needs_fetch", op_id, needs}`。何も書かず、何もインストールしない)、
+`GET /api/p/{project}/changesets/{id}` は changeset が開いている間それを並べます:
+`pending_deps: [{op_id, action, op, name, args, actor, reason, gseq, t, needs, plan}]`。`plan` は needs_fetch の計画で、その
+`request` に `changeset` と `op_id` があります。記録の `notices: [{at, kind, op_id, name, text}]` は、エージェントの
+`wait_for(event='changeset')` が返すもので、各エージェントに 1 回ずつ渡します(呼ぶ前に来たものも。`notices_given` が読み手
+ごとに数える)。`closes: true` の通知はその操作を取り下げたもので、プロジェクトログの `dep_drop` の記録(`drops`)がそれを記録する
+ので、それより前への復元は操作を戻します。取り下げるのはもう適用できない操作(名前が取られた、依存ではない)だけで、過ぎ去る失敗(git、ネットワーク、ストア、
+設定)は失敗させ、操作は待ちのまま残ります。解決の拒否も同じで(409 の `resolution_refused`)、操作を閉じない `fetch_failed`
+の通知を違う文面ごとに 1 回加えます。エージェントの batch のステップがその changeset で動いている間、取得のジョブと取り下げは
+busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作を置き換えます(その記録の
+`supersedes`)。`changes` の中の needs_fetch の効果は、その後が決まると `outcome` を持ちます(`installed`、`superseded`、`dropped`。
+閉じた changeset の証拠では、取得されなかったものは `cancelled`)。
+
+| 呼び出し | |
+|---|---|
+| `POST /api/confirmations` `{kind: "dependency", project, changeset, op_id, fetches}` | レビューでの人の Fetch。操作そのものの引数を使う(本文のものではなく記録のもの)。計画は作り直し、`fetches` と違えば(その後インデックスを取得し直したなど)、ダイアログが見せる新しい計画を付けて 409 の `needs_fetch`。取得するものが残っていない計画(ストアにもうある)はそのまま受け付ける。トークンは上と同じく結び付き、さらに操作の id とその記録のハッシュに結び付く。操作がもう待っていなければ(復元で取り消した、インストールした、changeset が閉じた)409 の `not_pending` |
+| `POST /api/p/{project}/deps/fetch` `{token}` | 上と同じ。確認の後に操作が取り消されていれば 409 の `not_pending`(トークンは使い切る)。ジョブは changeset の作業コピーで操作をやり直し、インストール済みと記録し(`replays: op_id`、`fetched_by`。エージェントの actor と理由はそのまま)、changeset に種類 `fetched` の通知を加え、`{changeset, op, result, state: "installed", op_id, notice, status}` を返す。エージェント自身の書き込みのリースでは止まらない。ほかの書き手のリースならおよそ 3 秒やり直し、それでも駄目ならジョブは `code: "busy"` で失敗する(取得したものはストアに残り、次の Fetch はインストールだけをする)。もう適用できない操作は、それを閉じる `fetch_failed` の通知とともに取り下げる。解決の拒否ではジョブは `resolution_refused` で失敗し、操作は待ちのまま、閉じない `fetch_failed` の通知が残る。さらに取得の要るものが見つかれば、上と同じく `needs_fetch` と次の計画で失敗する |
 
 <a id="pdk-fetch"></a>
 ## PDK の取得
@@ -212,7 +235,7 @@ changeset は、プロジェクトの git ブランチ `undine/<project>/<id>` �
 |---|---|
 | `POST /api/p/{project}/changesets` | 開きます(`{"title", "reason"}`、`X-Undine-Actor`)。記録を返し、プロジェクトがどの git リポジトリにも入っておらず `git-setup` でリポジトリにしたときは `"git_setup": true` が付き、`"first_commit"` はそのときに作ったプロジェクトの最初のコミットです(そのときのファイル。保存していないレイアウトの編集は起点と同じくログのジャーナルのまま含み、Undine 自身の出力と changeset の記録は含みません。作らなかったとき、つまり人のコミットが先にできたときは null)。これで採用したものがコミットされます。`"first_commit_note"` はその後にすること(git のインデックスがそのコミットに合っていない: `git reset` を実行する)、または作らなかった理由で、なければ null です。Undine 用に設定されていないリポジトリにあるプロジェクトでは 400 の `not_set_up`(下記)です。プロジェクト自身のライブラリが worktree の持てないものであるときは 400 の `unsupported_library`(下記)です: ライブラリのフォルダ、その上、その中、または途中のリンクの先にある、プロジェクトの外か存在しない場所を指すシンボリックリンク、文字列が絶対パスかプロジェクトの外へ上がるシンボリックリンク、リポジトリが保存しないシンボリックリンク(またはそのリンク先)、それ自身が git リポジトリであるもの(クローン、サブモジュール)。これは何かを設定する前に確かめるので、拒否された場合はリポジトリを作りません([設計](../design/changeset-branches.md#the-repository)) |
 | `GET /api/p/{project}/changesets` | changeset の一覧: `id`、`title`、`reason`、`actor`、`created`、`status`、`preview`、`git`。採用・破棄・取り消しの処理中のものには `closing`(下記)が付きます。新しい順(`created`、同じなら id の順)です |
-| `GET /api/p/{project}/changesets/{id}` | 記録(下記)。ライブラリごとの変更(`changes`: 操作。Undo と Redo は差し引き済み)、鮮度付きのチェック(`verify`)、開いている間は書き込み中の主体(`writer`)とビューごとの最後の変更(`activity`)も付きます。閉じた後は、保存した変更とチェック、`retained`、今のサイズ付きの証拠(`evidence.size`)を返します。閉じる処理の間は `closing` が付きます |
+| `GET /api/p/{project}/changesets/{id}` | 記録(下記)。ライブラリごとの変更(`changes`: 操作。Undo と Redo は差し引き済み)、鮮度付きのチェック(`verify`)、開いている間は書き込み中の主体(`writer`)、ビューごとの最後の変更(`activity`)、取得を待つエージェントの依存関係の操作(`pending_deps`、[取得を待つエージェントの操作](#an-agents-operation-waiting-for-a-fetch))も付きます。記録の `notices` は changeset の通知です。閉じた後は、保存した変更とチェック、`retained`、今のサイズ付きの証拠(`evidence.size`)を返します。閉じる処理の間は `closing` が付きます |
 | `GET /api/p/{project}/changesets/evidence` | 閉じた changeset の証拠の今のサイズ: `{"bytes", "raw"(そのうち波形の削除で消える分), "changesets": {id: {"bytes", "raw", "files", "shared", "raw_shared", "pruned"}}}`(下の `size`) |
 | `GET /api/p/{project}/changesets/{id}/evidence[?check=true]` | 閉じた changeset の証拠: `{"path", "captured", "commits"?, "size", "bytes"(保存時), "linked", "pruned"(マニフェストの記録), "jobs"(それぞれに `"pruned"`: 削除したファイル、記録していればジョブの `"about"`: 使ったパッケージ、PDK、プロファイル), "packages" と "pdk"(`{"base", "work"}`: それぞれの側の undine.lock が固定しているもの。[ジョブの来歴](data.md#job-provenance))}`。`check=true` は保存した全ファイルをハッシュと照合します: `"check": {"ok": 数, "pruned", "missing", "changed": [証拠の中のパス]}`(削除したファイルは `missing` ではなく `pruned`)。開いている changeset には 400 |
 | `POST /api/p/{project}/changesets/{id}/evidence/prune` | 閉じた changeset の保存した実行から波形(`*.raw`、`*.vcd`、`*.fst`)を削除します。ステータス、ログ、結果、マニフェストのハッシュは残し、削除したことをマニフェストと記録に書きます(`X-Undine-Actor`): `{"pruned": {"t", "by", "files", "bytes", "freed"}, "size"}`(`"freed"`: そのバイト数のうち、他の名前が持っていなかった分。閉じる処理が残した作業コピーがある場合、残りはその作業コピーを削除したときに解放されます)。人が行う操作です: エージェントのアクター(`agent:...`)には 403、開いている changeset には 400、閉じる処理や取り消しの間は 409 の `busy` |
@@ -223,7 +246,7 @@ changeset は、プロジェクトの git ブランチ `undine/<project>/<id>` �
 | `POST /api/p/{project}/changesets/{id}/discard` | 証拠を保存し、worktree を削除し、ブランチを残します。`"discarded"` 付きの記録を返します(`X-Undine-Actor`)。中断したマージがまだ終わっていないときは 400 |
 | `POST /api/p/{project}/changesets/{id}/deps` `{action, name, git?, rev?, subdir?, package?, version?, index?, reason?}` | 作業コピーでの依存関係の操作(`action` は `add`、`update`、`remove`。フィールドは `POST /deps` と `/deps/{name}/update` と同じ): 作業コピー自身の依存関係ロックのもとで取得し、そこに書いてインストールします(プロジェクトにもベースラインにも書きません。ベースラインは 403)。作業コピーのプロジェクトログ(`history/@project.jsonl`。どのライブラリも持てない名前)に、前後の project.json と undine.lock と一緒に記録します。タイムラインに表示し、復元で取り消し(ストアからインストールします)、採用でマージしてインストールします。`{changeset, op: {gseq, opid} | null (何も変わらなかった), result: 直接のルートが返すもの, status: 作業コピーの deps の状態}` を返します。拒否は直接のルートと同じで、ほかの主体が書き込みのリースを持つ間は 409 の `busy` |
 | `POST /api/p/{project}/changesets/{id}/pdk` `{pdk, reason?}` | 作業コピーを別の PDK に固定し、同じように記録します(`pdk_set`): `{changeset, op, old, new, created}`。`POST /pdk` と同じく 409 の `pdk_incompatible` |
-| `GET .../changesets/{id}/timeline`、`POST .../restore`、`GET .../activity`、`POST .../writer/stop` | タイムライン、チェックポイントの復元、書き込み中の主体の追跡、その停止([ライブ changeset](../design/live-changesets.md)) |
+| `GET .../changesets/{id}/timeline`、`POST .../restore`、`GET .../activity`、`POST .../writer/stop` | タイムライン(changeset の `notices` 付き)、チェックポイントの復元(取得を待つエージェントの操作より前への復元はそれを取り消す: 復元の記録の `cancelled`)、書き込み中の主体の追跡、その停止([ライブ changeset](../design/live-changesets.md)) |
 
 ```text
 record       {"id", "project", "title", "reason", "actor", "created", "status": open | applied | discarded | reverted,

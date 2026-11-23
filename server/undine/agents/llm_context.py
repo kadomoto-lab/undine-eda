@@ -364,6 +364,16 @@ def _eff(e: dict, names: dict[str, str] | None = None) -> str:
             return f"PDK {e['pdk'][0]} → {e['pdk'][1]}"
         if not e.get("name"):
             return "dependencies as they were (project.json, undine.lock)"
+        if e.get("state") == "dropped":      # a person's fetch found it could no longer apply
+            return f"dropped the proposal for dependency {e['name']}: it could no longer apply, never fetched"
+        if e.get("state") == "needs_fetch":  # an agent's proposal: nothing installed until a person fetches it
+            verb = {"add": "add", "del": "remove"}.get(e["do"], "update")
+            then = {"installed": "a person fetched it: installed (the next record)",
+                    "superseded": "replaced by a later operation on the same dependency",
+                    "dropped": "it could no longer apply: dropped, never fetched",
+                    "cancelled": "the changeset closed before a fetch: never installed"}.get(e.get("outcome"))
+            then = then or "waits for a person's fetch; nothing installed yet"
+            return f"proposed: {verb} dependency {e['name']} ({then})"
         verb = {"add": "added", "del": "removed"}.get(e["do"], "updated")
         return f"{verb} dependency {e['name']}"
     if e["k"] == "o":

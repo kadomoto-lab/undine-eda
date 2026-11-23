@@ -68,6 +68,11 @@ export function describeEffect(e: Effect): UiText {
   if (e.k === "l") return msg("review:effect.library", { mark, lib: e.lib ?? "" });
   if (e.k === "d") {             // a dependency operation (the project log): a PDK change, or a restore of both files
     if (e.pdk) return msg("review:effect.pdk", { from: e.pdk[0] ?? "∅", to: e.pdk[1] ?? "∅" });
+    if (e.name && e.state === "dropped") return msg("review:effect.dependencyDropped", { name: e.name });
+    if (e.name && e.state === "needs_fetch") {   // an agent's proposal that needed a fetch, and what became of it
+      const key = e.outcome ? `review:effect.dependencyProposed.${e.outcome}` as const : "review:effect.dependencyNeedsFetch";
+      return msg(key, { mark: e.do === "mod" ? "~" : mark, name: e.name });
+    }
     return e.name ? msg("review:effect.dependency", { mark: e.do === "mod" ? "~" : mark, name: e.name })
       : msg("review:effect.dependencies");
   }

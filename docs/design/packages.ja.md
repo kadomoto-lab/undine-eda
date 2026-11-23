@@ -665,6 +665,50 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   同じです。取得するまで、レビューはその操作を *未検証* とします(changeset の中でパッケージのセルを置いても検証してもいない)。
   人の取得が終わると、エージェントの changeset に通知が届き(`wait_for` で待っているエージェントはそれを見る)、操作は *install 済み*
   になり、エージェントはセルを置いて検証を実行できます。
+  *実装済み(段階 4、store/changeset.py: Changesets.propose_dep、pending_ops、replay_pending、add_notice):* エージェントの操作は、
+  リモートから何も許さず、作業コピーの依存のロックを待たずに dep_op を実行します(`deps.Allow(wait=False)`: 人の取得がロックを
+  持つ間は busy)。取得の要らないものはすぐに install します。`NeedsFetch` なら、プロジェクトログに記録
+  `{op, args, actor, reason, plan, effects: [{k: "d", do, name, state: "needs_fetch", op_id, action, needs, owner}]}` を加え
+  (`needs` は計画の行: URL、commit か rev、大きさ、ライセンス、パッケージ、バージョン。`plan` は確認がそのまま受け取る request 付きで、
+  その中に `changeset` と `op_id`。`owner` は書き込みのリースの持ち主のハッシュ)、何も書かず、何も install しません。その記録が
+  効いていて(それより前への復元はそれを取り消す: 取り消しで、復元の記録は `cancelled` にそれを並べる)、後の記録がそれをやり直して
+  いない間、操作は *待ち* です。復元はそのためにファイルを戻しません。レビュー(changeset の GET の `pending_deps`)は取得ボタン付きで
+  それを見せます。人の確認(種類 `dependency` で `changeset` と `op_id` 付き)は記録の引数を使い、計画を作り直し(変わった計画は
+  ダイアログのための 409 の `needs_fetch`、取得するものが残っていない計画はそのまま受け付ける)、トークンを操作の id とその記録の
+  ハッシュに結び付けます。確認と `POST /deps/fetch` は、もう待っていない操作を拒否します(409 の `not_pending`: 復元で取り消した、
+  install した、changeset を採用か破棄した)。ジョブは dep_op でそれをやり直し(書き込みのリースは commit のときだけ確かめるので、取得
+  したものはストアに残る。待ちの状態は `_DepGuard` で changeset のロックのもとでもう一度確かめる)、install 済みと記録し
+  (`replays`、`fetched_by`。エージェントの actor と理由)、changeset の記録に通知を加えます(`notices: [{at, kind: fetched |
+  fetch_failed, op_id, name, text}]`)。提案したエージェントがまだリースを持っている間(`wait_for` で待っている)、ジョブはその持ち主と
+  して動きます(ハッシュが合う)。ほかの書き手のリースならおよそ 3 秒やり直してから 409 の `busy` で、次の取得は install だけをします。
+  取得してさらに取得の要るものが見つかれば、もう一回りです。`wait_for(event='changeset')` は状態と通知の数を比べ、新しい通知を
+  返します。アシスタントの次のターンもそれを聞きます(`agent._since`)。ロックの順: どこでも deps.lock が changeset のロックより先。
+  エージェントのツールは操作のまわりで changeset のロックを取らない(意図の書き込みとは違う)ので、やり直しが待つロックを持ったまま
+  依存のロックを待つことはありません。レビューの取得の行は最小限(URL、大きさ、ライセンスとボタン)で、依存の変更の完全なレビューは
+  次の区切りです。同じ依存への後の操作(2 回目の提案、またはその名前への記録される操作で、すぐに install したものもやり直したものも)は
+  待ちの操作を置き換えます: その記録が `supersedes` にそれを並べるので、それより前への復元は待ちの操作を戻します。もう適用できない
+  待ちの操作(`changeset.inapplicable`: 名前が取られた、依存ではない、`deps.Inapplicable`。パッケージが置く名前)は、人の
+  確認か取得のときに取り下げます: changeset のロックのもとでまだ待ちであることを確かめ、プロジェクトログに `dep_drop` の記録
+  (`drops`。どのファイルも変えない状態 `dropped` の効果なので、それより前、またはそれを適用できなくしたものより前への復元はそれを
+  戻す)と `fetch_failed` の通知を加え、それからは `not_pending` です。過ぎ去る失敗(git やネットワーク、ストア、設定、使用中のロック)
+  はジョブか確認を失敗させ、操作は次の取得のために待ちのまま残ります。解決の拒否も同じです(409 の `resolution_refused`: HTTP
+  からは index の手元の写しをそのまま読み、取得し直すと解決するかもしれない)。そのときは操作を閉じない `fetch_failed` の通知を、
+  操作の最新の通知が同じ文面でなければ加えます。ある changeset の batch のステップが動いている間の 2 つ目のステップは
+  拒否します(busy)。エージェントの batch のステップがその changeset で動いている間、人のやり直しと取り下げは busy です
+  (ステップはスナップショットの前に changeset のロックのもとで動いていると印を付け、やり直しはそのロックのもとで commit する)。
+  なので、戻されるステップが、エージェントに通知を渡した install や取り下げを取り消すことはありません。やり直しは少し試し直してから
+  409 の `busy` で、取得したものはストアに残ります。その後はログから、changeset の状態にかかわらず読むので、閉じる
+  処理が状態の変わる前と後で変更を比べても一致します。レビューは needs_fetch の効果ごとにその後を示します(`outcome`: installed、
+  superseded、dropped。閉じた changeset の取得されなかったものは `cancelled`)。通知はどれも、各エージェントに 1 回だけ届き
+  (`Changesets.peek_notices` / `mark_notices`。記録の `notices_given` に読み手ごとの数を、リースの持ち主か、組み込みのアシスタント
+  では会話のハッシュで持つ)、エージェントがそれを受け取ってから渡したとします: `wait_for(event='changeset')` はまだ渡していない
+  ものを、呼ぶ前に来たものも含めてすぐに返し、5 つまで、呼び手の結果の予算で切られずに入るだけです(通知の文面は JSON で 400 文字までで、制御文字は除く。`undine call` は表示するものをクライアントで切り詰めるので、その
+  `--max-chars` が切った通知も渡したことになり、`get_dependency_status` はすべての通知を並べる。
+  `more_notices` が残りの数)。印付けは不可分で、1 つのエージェントの 2 つの wait は同じ通知を渡しません。`get_dependency_status` は
+  すべてを並べて何も渡さず(`notices_not_given`)、アシスタントのターンは changeset の状態の先頭に示し(上限は操作の行だけ)、ターンが
+  モデルの最後の答えで終わったときだけ渡したとします(止められた、ステップの上限、失敗したターンでは渡さない)。ターンの終わりの記録は何も渡さないので、ターンの途中に来た通知や
+  失敗したターンの通知は次のターンに伝えます。batch を戻すとき
+  も、通知と `notices_given` はそのままです。
 - **evidence** はすでに `project.json` と `undine.lock` をハッシュしています。これに加えて、ジョブの入力の `key` の外に(参考と
   して。evidence が中身を厳密に示せるように)、そのジョブのセルが使った各 `package@version` と木、PDK の commit、プロファイルの
   パッケージとバージョンを記録します。古いかどうかの判定は、これまでどおりジョブが読むものにもとづきます。セルの内容
@@ -783,6 +827,14 @@ commit を返し、`pick_pdk` は PDK の名前だけが指定されたときに
   意図のメモ、index の行)はエージェントにとってデータです。ツールは `agent.py` の DATA の規則のもとで返し、指示としては扱いません。
   `agent.py` のシステムプロンプトと `docs/guide/changesets.md` は「依存を追加できない」から「提案できる」に変えます。skill には
   依存についての短いリファレンスを加えます(今は依存に触れていない)。
+  *実装済み(段階 4、agents/agent_tools.py):* `search_packages {query?, index?, limit?}` と `get_package {name, index?}` は index の
+  手元の写しを読み(`fetch=False` の `packages.search` / `info`。写しのない index は、人がパッケージのダイアログで取得し直すと伝える
+  ツールのエラー)、パッケージは 50、バージョンは 20 までです。`get_dependency_status`(`changeset` でほかの changeset も)は、手元の
+  写しの新しいバージョン、取得を待つ操作、通知を付けた `deps.status` です。`propose_dependency {action, name, package?, version?,
+  index?, git?, rev?, subdir?, reason}`(書き込みで、`batch` では拒否)は `Changesets.propose_dep` を実行し、`state: installed` か、
+  needs を付けた `needs_fetch` を返します。どの結果にも `data_rule` があります。システムプロンプト、MCP の指示文、skill
+  (`references/dependencies.md`)が、パッケージと index の文字列についての DATA の規則を持ちます。トークンを求め、持ち、返すツール、
+  `undine call` のコマンド、クライアントのメソッド、エージェントのコードはありません(`test_api_phase1.py`、`test_agent_phase2.py`)。
 
 ## 移行
 
@@ -1258,8 +1310,22 @@ web/src/FetchConfirmDialog.tsx。[確認のトークン](#ui-cli-http-agent-tool
 これまでどおり取得する)、`test_api_phase1.py` の確認、web のテスト `FetchConfirmDialog.test.tsx`、`PackagesDialog.test.tsx`、
 `App.phase2.test.tsx`。
 
-段階 4 でこれから作るもの: 依存の変更のレビュー(lock の差分、ライセンス、大きさ、コードブロックと RTL)、エージェントの
-*needs fetch* を changeset に記録することと、レビューの取得ボタン、人による取得の後の通知、エージェントのツール、`dep_update` の
+できたもの: パッケージと依存のためのエージェントのツール、changeset に *needs fetch* として記録するエージェントの操作、それを
+やり直すレビューからの人の取得、その後の通知(store/changeset.py の `propose_dep`、`pending_ops`、`replay_pending`、`add_notice`。
+agents/agent_tools.py の `search_packages`、`get_package`、`get_dependency_status`、`propose_dependency`。
+`POST /api/confirmations {kind: "dependency", changeset, op_id}`。web/src/panels/ChangesPanel.tsx のレビューの取得の行。
+[changeset と evidence](#changesets-and-evidence)、[UI、CLI、HTTP、エージェントのツール](#ui-cli-http-agent-tools)、
+[HTTP API](../reference/api.ja.md#an-agents-operation-waiting-for-a-fetch)を参照)。テスト: `test_pkg_agents.py`(エージェントの
+追加は *needs fetch* を記録し、取得しない。人の取得の後に続けられる: `wait_for` で通知、それからパッケージのセルを置いて
+`run_checks`。トークンを返すツールはない。index を読むツールは手元の写しがなければ拒否し、取得しない。拒否。ストアにある依存は
+すぐに install する。ほかの changeset を読む。復元、破棄、採用は待ちの操作を取り消し、そのトークンは拒否する。トークンは操作に
+結び付き、その欄は記録から取り、変わった計画はもう一度見せる。ほかの書き手のリースは busy で、次の取得は install だけ。提案と
+やり直しはデッドロックしない。プロンプト、指示文、skill の DATA の規則。同じ依存への 2 回目の提案や後の操作は待ちの操作を
+置き換える。もう適用できないものは通知とともに取り下げる。wait_for は呼ぶ前に来た通知を各エージェントに 1 回返す。アシスタントの
+次のターンはターンの途中に来た通知を聞く)、`test_api_phase1.py` と `test_agent_phase2.py` の確認、
+web のテスト `ChangesPanel.test.tsx`。
+
+段階 4 でこれから作るもの: 依存の変更のレビュー(lock の差分、ライセンス、大きさ、コードブロックと RTL)と、`dep_update` の
 レイアウトのコピーの更新。
 
 <a id="phase-5-status"></a>

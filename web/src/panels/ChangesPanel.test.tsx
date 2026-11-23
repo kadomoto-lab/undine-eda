@@ -15,6 +15,7 @@ vi.mock("../layout", () => ({ Splitter: () => null }));
 vi.mock("../api", async (original) => ({ ...await original<typeof import("../api")>(), api: {
   changesets: vi.fn(), changeset: vi.fn(), openChangeset: vi.fn(), changesetAction: vi.fn(), changesetDiff: vi.fn(),
   timeline: vi.fn(), writerStop: vi.fn(), evidenceSizes: vi.fn(), pruneEvidence: vi.fn(),
+  confirmDependencyFetch: vi.fn(), depsFetch: vi.fn(), depsFetchStatus: vi.fn(),
 } }));
 
 const git = { branch: "undine/p/cs1", base: "b".repeat(40), head: "a".repeat(40), prefix: "", tip: "c".repeat(40), ref: null, commits: 3 };
@@ -852,5 +853,65 @@ describe("the operation log's summary", () => {
     expect(summaryLine([op([{ k: "d", do: "add", name: "ip" }]), op([{ k: "d", do: "mod", name: null, pdk: ["a", "b"] }])]))
       .toBe(t("review:summary.dependencies", { count: 2 }));
     expect(summaryLine([op([])])).toBe(t("review:summary.none"));
+  });
+});
+
+describe("an agent's dependency waiting for a fetch", () => {
+  const row = { url: "https://git.example.org/amp.git", rev: null, commit: "c".repeat(40), subdir: null, tree: "sha256:" + "0".repeat(64),
+    size: 4096, license: "MIT", package: "amp", version: "1.0.0", host: "git.example.org", allowed: true };
+  const plan = { op: "add", fetches: [row], complete: true, project: "p",
+    request: { op: "add" as const, name: "amp", package: "amp", version: "^1", changeset: "cs1", op_id: "dep-0123456789" } };
+  const pending = { op_id: "dep-0123456789", action: "add" as const, op: "dep_add", name: "amp", args: { name: "amp", package: "amp" },
+    actor: "agent:claude", reason: "the output stage needs an amplifier", gseq: 2, needs: [row], plan };
+  const depOp = { seq: 2, op: "dep_add", cell: null, view: "", actor: "agent:claude", reason: "the output stage needs an amplifier", t: "",
+    effects: [{ k: "d" as const, do: "add" as const, name: "amp", state: "needs_fetch" as const }] };
+
+  it("lists it with its URL, size and licence, and its Fetch replays it through the Fetch dialog", async () => {
+    const rec: ChangesetInfo = { ...cs, changes: [{ lib: "@project", ops: [depOp] }], pending_deps: [pending] };
+    vi.mocked(api.confirmDependencyFetch).mockResolvedValue({ token: "tok", expires: 0, plan });
+    vi.mocked(api.depsFetch).mockResolvedValue({ job: { id: "j1", project: "p", kind: "dependency", state: "done", log: [], progress: null,
+      result: { state: "installed" }, error: null, code: null, created: 0, ended: 0 } });
+    const p = await open(rec);
+    const [item] = screen.getAllByTestId("pending-dep");
+    expect(item.textContent).toContain("https://git.example.org/amp.git");
+    expect(item.textContent).toContain("4.1 kB");
+    expect(item.textContent).toContain("MIT");
+    expect(screen.getByText(/waiting for a fetch: nothing installed yet/)).toBeTruthy();
+    fireEvent.click(within(item).getByRole("button", { name: t("review:pending.fetch") }));
+    await act(async () => {});
+    const dialog = screen.getByRole("dialog", { name: t("app:depFetch.title") });
+    expect(api.confirmDependencyFetch).not.toHaveBeenCalled();          // nothing asked before the click
+    vi.mocked(api.changeset).mockResolvedValue({ ...rec, pending_deps: [] });
+    fireEvent.click(within(dialog).getByRole("button", { name: t("app:depFetch.start") }));
+    await act(async () => {});
+    expect(api.confirmDependencyFetch).toHaveBeenCalledWith(plan);      // the operation's id goes with the plan
+    expect(api.depsFetch).toHaveBeenCalledWith("p", "tok");
+    expect(p.toast).toHaveBeenCalledWith(msg("review:pending.installed", { name: "amp" }));
+    expect(screen.queryByTestId("pending-dep")).toBeNull();
+  });
+
+  it("names the action in the reader's language", async () => {
+    await setLocale("ja");
+    try {
+      await open({ ...cs, pending_deps: [pending] });
+      const [item] = screen.getAllByTestId("pending-dep");
+      expect(item.textContent).toContain("amp の追加");
+      expect(item.textContent).not.toContain("add amp");
+    } finally { await setLocale("en"); }
+  });
+
+  it("calls a proposal fetched since installed, and counts it once", async () => {
+    const fetched = { ...depOp, effects: [{ ...depOp.effects[0], outcome: "installed" as const }] };
+    const installed = { ...depOp, seq: 3, effects: [{ k: "d" as const, do: "add" as const, name: "amp", state: "installed" as const }] };
+    await open({ ...cs, changes: [{ lib: "@project", ops: [fetched, installed] }], pending_deps: [] });
+    expect(screen.queryByText(/nothing installed yet/)).toBeNull();
+    expect(screen.getAllByText(/proposed, then fetched by a person: installed/).length).toBeGreaterThan(0);
+    expect(summaryLine([fetched, installed])).toBe(t("review:summary.dependencies", { count: 1 }));
+  });
+
+  it("shows nothing for a changeset with none", async () => {
+    await open(cs);
+    expect(screen.queryByTestId("pending-dep")).toBeNull();
+    expect(screen.queryByText(t("review:pending.title"))).toBeNull();
   });
 });

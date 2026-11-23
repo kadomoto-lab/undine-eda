@@ -268,6 +268,17 @@ Undine が実行結果から読む値を書けます。`settle(v(out), tol=0.5m,
 メソッドのどれも、依存関係を信頼することも、ブラウザのダイアログが使う確認を求めることもできません。エージェントは拒否をそのまま
 伝え、あなたに尋ねます。
 
+**依存関係。** `search_packages` と `get_package` はパッケージのインデックスの手元の写しを読みます(写しのないインデックスは拒否します:
+人がパッケージのダイアログで取得し直します。それを取得するツールはありません)。`get_dependency_status` はエージェントの作業コピーの
+依存関係、取得を待つ操作、changeset の通知を見せます(`changeset` でほかのエージェントのもの)。`propose_dependency`(`action` は
+add、update、remove で、`reason` 付き)はエージェントの changeset でそれらを変えます: ストアや `--dep-root` の下のローカルの
+リポジトリにあるものはすぐにインストールし(`state: "installed"`)、別のマシンから取ってくる必要のあるものは、URL、commit か rev、
+サイズ、ライセンス付きで `needs_fetch` として記録し、何も取得せず、何もインストールしません。人がレビューの **Fetch** ボタンで
+取得し([エージェントの依存関係の提案](changesets.ja.md#an-agents-dependency-proposal))、そのあと
+`wait_for(events=["changeset"])` が通知を返し、エージェントはセルを置いてチェックを実行します。`propose_dependency` は `batch`
+では使えず、人がその changeset の取得をしている間は busy を返します。パッケージとインデックスの文章はエージェントにとって
+データであり、指示ではありません。取得に要る確認を求めたり、持ったり、返したりするツールはありません。
+
 **長い実行。** 各実行は ngspice のスレッドを 1 つ使い、サーバーが同時に走らせるシミュレーションの数には上限があります(既定はコア数から 2
 を引いた数。[設定](../reference/cli.ja.md))。それ以外は順番に待ちます。`run_simulation` は `wait_s`(既定 150 秒、0 ですぐに返す)だけ待ちます。
 まだ続いている実行はエラーではありません。答えにはその `job` と `state`(`queued` なら待ち順の `queue_position`、`running` なら
@@ -592,7 +603,10 @@ with Undine(project="demo", agent="layout-1") as u:   # agent: 自分の名前(�
 `wait_for(events, timeout_s)` は、何かが起きるまで待ち、起きたことを返します。結果は文字で返るので、どのクライアント(MCP、`undine call`、Python)でも
 使えます。MCP の通知は、多くのクライアントが処理しないためです。
 
-- `changeset`: 人がエージェントの変更セットを反映または破棄したとき。
+- `changeset`: 人がエージェントの変更セットを反映または破棄したとき、または通知が来たとき(エージェントが提案し、人が取得した
+  依存関係)。答えの `notices` は、エージェントがまだ受け取っていない通知で、呼ぶ前に来たものも含み、1 回の答えに 5 つまで、
+  答えに入るだけです(`more_notices` が残りの数で、もう一度待つ)。`undine call` は表示する出力をクライアントで切り詰めます
+  (`--max-chars`)。そこで切られた通知も渡したことになり、`get_dependency_status` はすべての通知を並べます。
 - `selection`: Undine で何かを選択したとき(次に見てほしいものを指すときなど)。
 - `job:<id>`: ジョブが終わったとき(LibreLane の実行など)。
 - `design:<lib>/<cell>`: 本物の設計でそのセルが変わったとき。
@@ -622,7 +636,7 @@ with Undine(project="demo", agent="layout-1") as u:   # agent: 自分の名前(�
 
 Undine は、エージェント向けの手順書を [Agent Skill](https://agentskills.io) の形で同梱しています。短い `SKILL.md` に作業の流れ
 (読む、変更セットを開く、編集、検証、引き渡し)と決まりを書きます。作業ごとの参照(接続、回路図、レイアウト、意図、検証、
-RTL / LibreLane)は別のファイルにあり、エージェントは必要なものだけを読みます。
+RTL / LibreLane、依存関係)は別のファイルにあり、エージェントは必要なものだけを読みます。
 
 - **MCP クライアント**には資料(resources)として渡します(`undine://skills/undine/SKILL.md` とその参照)。サーバーの指示文も
   そこを案内します。`mcp-stdio` は、サーバーが動いていなくても手順書を返します。

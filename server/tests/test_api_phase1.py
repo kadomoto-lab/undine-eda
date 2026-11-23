@@ -445,7 +445,10 @@ def test_no_agent_tool_or_client_method_reaches_a_confirmation_or_a_pdk_fetch():
         # phase 4: the dependency fetch and the index refresh, their jobs and the new kinds of token too
         for word in ("/api/confirmations", "pdk/fetch", "fetchjobs", "confirmations.", "pdkops.fetch",
                      "deps/fetch", "/refresh", "dep_jobs", "plan_fetch", "deps.Allow", "Allow(", "PROGRESS",
-                     '"kind": "dependency"', '"kind": "index"', "'kind': 'dependency'", "'kind': 'index'"):
+                     '"kind": "dependency"', '"kind": "index"', "'kind': 'dependency'", "'kind': 'index'",
+                     # phase 4 slice 3: an agent proposes (Changesets.propose_dep, nothing allowed from a remote);
+                     # the replay of a pending operation and what binds it are a person's fetch job's alone
+                     "replay_pending", "op_sha", "add_notice", ".dep_op(", "allow=", "_record_needs"):
             assert word not in text, (f.name, word)
     from undine.agents.client import Undine
     assert not [m for m in dir(Undine) if "confirm" in m or "fetch" in m or "refresh" in m or "token" in m]

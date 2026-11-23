@@ -4,14 +4,15 @@
 // conflict writes nothing; one made before (no "git" in its record) can only be reviewed and discarded.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, Bot, Check, ChevronLeft, Eye, GitBranch, GitPullRequestArrow, History, Loader2, MessageSquare, Plus, RefreshCw, RotateCcw,
+  AlertTriangle, Bot, Check, ChevronLeft, Download, Eye, GitBranch, GitPullRequestArrow, History, Loader2, MessageSquare, Plus, RefreshCw, RotateCcw,
   Scissors, ShieldCheck, Square, Trash2, X,
 } from "lucide-react";
 import { hashParam } from "../App";
 import {
   api, ChangeOp, ChangesetConflictFile, ChangesetInfo, ChangesetMerge, CheckRow, EvidenceSizes, GitConflict, GitDiff, ViewKind,
-  PROJECT_LOG,
+  PROJECT_LOG, type PendingDep,
 } from "../api";
+import { FetchConfirmDialog, sizeText } from "../FetchConfirmDialog";
 import { Splitter } from "../layout";
 import { ChangeItem, checkResultLabel, describeEffect, followText, formatChangeValue, groupChanges, viewLabel } from "./changeItems";
 import { closingPhase, closingText, formatBytes } from "./closing";
@@ -63,7 +64,9 @@ const stateText = (state?: string) => {
 export function summaryLine(ops: ChangeOp[]): string {
   const n = ops.flatMap((o) => o.effects);
   const c = (k: string, d: string) => n.filter((e) => e.k === k && e.do === d).length;
-  const deps = n.filter((e) => e.k === "d").length;     // the project log's dependency operations
+  // the project log's dependency operations; a proposal that was fetched, replaced or dropped since counts once,
+  // as what replaced it
+  const deps = n.filter((e) => e.k === "d" && e.state !== "dropped" && !(e.state === "needs_fetch" && e.outcome)).length;
   const parts = [
     deps && t("review:summary.dependencies", { count: deps }),
     (c("i", "mod") + c("o", "mod")) && t("review:summary.changed", { count: c("i", "mod") + c("o", "mod") }), (c("i", "add") + c("w", "add") + c("s", "add")) && t("review:summary.added", { count: c("i", "add") + c("w", "add") + c("s", "add") }),
@@ -308,6 +311,8 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
   }, [isOpen, running, !!writer, !!closing, busy, sel, loadOne]); // eslint-disable-line
 
   const items = useMemo(() => (cs ? groupChanges(cs) : []), [cs]);
+  // an agent's dependency operation waiting for a fetch: the Fetch dialog for it (its plan, replayed by the server)
+  const [fetching, setFetching] = useState<PendingDep | null>(null);
   // a tab this changeset has not: by file needs its branch, the timeline its open working copy
   const shownTab = !cs || (tab === "files" && !cs.git) || (tab === "timeline" && cs.status !== "open") ? "changes" : tab;
   // on git the branch's commits count too, and the files: the working copy can change in ways no operation recorded and
@@ -594,6 +599,36 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
           {cs.status === "applied" && !cs.git && <div className="small dim">{t("review:legacy.revert")}</div>}
           {cs.status === "reverted" && <div className="note">{t("review:revertedAt", { time: cs.reverted?.t?.slice(0, 16).replace("T", " ") ?? "", actor: cs.reverted?.by ?? "" })}
             <MergeNote m={cs.reverted} revert onHistory={onHistory} /></div>}
+          {cs.status === "open" && !!cs.pending_deps?.length && (
+            <div className="note pendingdeps">
+              <div className="section">{t("review:pending.title")}</div>
+              <div className="small dim">{t("review:pending.note")}</div>
+              {cs.pending_deps.map((p) => (
+                <div key={p.op_id} className="row pendingdep" data-testid="pending-dep">
+                  <div className="grow">
+                    <b className="mono">{t("review:pending.row", { action: t(`review:pending.action.${p.action}`), name: p.name ?? "" })}</b>
+                    {p.needs.map((f) => (
+                      <div key={`${f.url} ${f.rev ?? f.commit ?? ""}`} className="small mono">
+                        {f.url}{f.package && f.version ? ` (${f.package} ${f.version})` : ""} · {f.size !== null ? t("review:pending.size", { size: sizeText(f.size) }) : t("review:pending.sizeUnknown")} · {f.license ?? t("review:pending.licenseUnknown")}
+                      </div>
+                    ))}
+                    {p.reason && <div className="opreason">“{p.reason}” <span className="dim">— {p.actor}</span></div>}
+                  </div>
+                  <button className="ghost" disabled={busy || !!closing} title={t("review:pending.fetchHint")}
+                    onClick={() => setFetching(p)}><Download size={13} /> {t("review:pending.fetch")}</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {fetching && <FetchConfirmDialog plan={fetching.plan} onClose={() => setFetching(null)}
+            onDone={async () => {
+              const name = fetching.name ?? "";
+              setFetching(null);
+              toast(msg("review:pending.installed", { name }));
+              await loadOne(cs.id);
+              onWorkChanged?.();
+            }}
+            onFailed={async (e) => { setFetching(null); toast(apiErrorText(e), "error"); await loadOne(cs.id); }} />}
           {review && cs.status === "open" && (
             <div className="sidetoggle" role="group" aria-label={t("review:side.label")}>
               <button className={review.side === "confirmed" ? "on" : ""} onClick={() => review.onSide("confirmed", cs.preview)}>{t("review:side.confirmed")}</button>

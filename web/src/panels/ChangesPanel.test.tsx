@@ -1048,6 +1048,17 @@ describe("the review of a dependency change", () => {
     expect(within(row).getByTestId("dep-untrusted")).toBeTruthy();
   });
 
+  it("puts no package's licence on a row whose named dependency did not move, and says a trust taken back", async () => {
+    const dep = { ...added.packages[0], package: "sar_common", names: ["sar_common"], license: "GPL-3.0-only", do: "mod" as const };
+    await open({ ...rec, deps: [{ ...added, action: "update", license: null, size: null, own: false, packages: [dep], size_total: 4096,
+      trust_taken_back: ["ip@1.0.0"], untrusted: ["ip@1.0.0"], untrusted_count: 1 }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByTestId("dep-not-own")).toBeTruthy();
+    expect(within(row).getByTestId("dep-total").textContent).toContain(t("review:deps.sizeTotal", { size: "4.1 kB", count: 1 }));
+    expect(within(row).getByTestId("dep-package").textContent).toContain("GPL-3.0-only");
+    expect(within(row).getByTestId("dep-taken-back").textContent).toContain("ip@1.0.0");
+  });
+
   it("words the row in the reader's language", async () => {
     await setLocale("ja");
     try {

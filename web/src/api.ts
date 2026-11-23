@@ -621,6 +621,9 @@ export interface DepReviewRow {
   size_total?: number | null;       // every package's (or fetch's) size added up; null: one is not known
   code: DepReviewCode[] | null; code_more?: number; trusted: boolean; trust_drop: string[];
   untrusted?: string[]; untrusted_count?: number;     // the versions it brings that the project does not trust
+  trust_taken_back?: string[];      // trusted today, but this changeset takes that trust back: untrusted once adopted
+  trust_unknown?: boolean;          // a version's key cannot be told now (the store lacks its files)
+  own?: boolean;                    // license and size are the named dependency's own (false: only packages it needs moved)
   checked: boolean | null; checked_by?: { job: string; kind: string; lib?: string; cell?: string };
   replaced_by?: number | null;      // checked null: a later operation (its gseq) replaced every tree it brought
   needs_more?: number;

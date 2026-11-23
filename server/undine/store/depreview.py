@@ -31,7 +31,6 @@ the changeset (an LVS, a DRC or a simulation whose evidence names the package's 
 from __future__ import annotations
 
 import contextlib
-import functools
 import hashlib
 import json
 import re
@@ -49,11 +48,14 @@ LISTED_BLOCKS = 20        # code blocks per review, over its packages
 LISTED_RTL = 20           # RTL files per review, over its packages
 LISTED_FINDINGS = 3       # findings per RTL file
 LISTED_UNTRUSTED = 10     # untrusted versions a row names (untrusted_count counts them all)
+LISTED_KEYS = 1000        # entries whose trust keys a review keeps (the others are read from the store again)
 TEXT = 200                # characters of a text from a package at most
 CHECK_JOBS = 20           # runs of the working copy looked at for `checked`, newest first
 # `trust` of a row and of a package's code: the trust note in words (agents read these, and only a person trusts)
 TRUST_WORDS = {True: "trusted in the project", False: "not trusted: a job that runs its code is refused until a person "
                                                       "trusts this version"}
+TRUST_TAKEN_BACK = ("not trusted once adopted: this change takes the project's trust of it back (other content under "
+                    "the same version); a job that runs its code is refused until a person trusts it again")
 
 _VIEWS = {".sch": "schematic", ".sym": "symbol", ".oas": "layout", ".gds": "layout", ".v": "rtl", ".sv": "rtl",
           ".svh": "rtl", ".vh": "rtl"}
@@ -339,12 +341,18 @@ def _used_by(prj, name: str, changes: dict[str, list[str]]) -> list[str]:
 _UNREAD = object()
 
 
-@functools.lru_cache(maxsize=4096)
+_MANIFESTS: dict[tuple[str, str], object] = {}        # (kind, hash) -> (name, version) or None, once known for good
+
+
 def _manifest_id(kind: str, value: str):
-    """(name, version) of the manifest of the tree a lock entry names, read from the store (content addressed, so kept
-    once read); None when the tree has no manifest or one that cannot be read (trust._identity reads it the same way:
-    such a tree is known by its commit); _UNREAD when the store has no record of the tree."""
+    """(name, version) of the manifest of the tree a lock entry names, read from the store; None when the tree has no
+    manifest, or one that does not parse (trust._identity reads it the same way: such a tree is known by its
+    commit); _UNREAD when that cannot be told now (the store has no record of the tree, or not the manifest's object:
+    `store verify` removed it, `lib sync` brings it back). A tree is content addressed, so what was told is kept; an
+    _UNREAD is not (the next read looks again)."""
     from undine.store import manifest as mf
+    if (kind, value) in _MANIFESTS:
+        return _MANIFESTS[(kind, value)]
     try:
         files = cas.read_tree(value) if kind == "tree" else cas.read_archive_tree(value)
     except (cas.StoreError, TypeError, ValueError):
@@ -353,12 +361,24 @@ def _manifest_id(kind: str, value: str):
         return _UNREAD
     got = files.get(mf.MANIFEST)
     if got is None:
-        return None
-    try:
-        m = mf.parse(cas.object_path(got[1]).read_bytes(), "review")
-    except (OSError, ValueError):
-        return None
-    return (m.name, str(m.version))
+        out = None
+    else:
+        try:
+            data = cas.object_path(got[1]).read_bytes()
+        except (OSError, cas.StoreError):
+            return _UNREAD                               # its object is not there: not "no manifest"
+        try:
+            m = mf.parse(data, "review")
+            out = (m.name, str(m.version))
+        except ValueError:
+            out = None
+    if len(_MANIFESTS) > 8192:
+        _MANIFESTS.clear()
+    _MANIFESTS[(kind, value)] = out
+    return out
+
+
+UNKNOWN_KEY = "?"            # the version part of a key that cannot be told now (entry_keys)
 
 
 def entry_keys(names: list[str], e: dict, man=_UNREAD) -> list[str]:
@@ -366,7 +386,8 @@ def entry_keys(names: list[str], e: dict, man=_UNREAD) -> list[str]:
     dialog, `lib trust` and POST /trust use that): '<name>@<version>' from the tree's manifest, whatever the lock
     format records, else '<local name>@<commit12>' for each local name it is installed under (the install marker's
     commit, the lock entry's). `man`: the manifest when the caller has read it; else it is read from the store, and,
-    when the store has no record of the tree, the lock's package and version stand in."""
+    when that cannot be told, the lock's package and version stand in (format 2), else '<local name>@?' for each
+    name: a key nobody trusts, so the row says it is not known rather than naming one the jobs do not use."""
     if man is _UNREAD:
         try:
             from undine.store import deps
@@ -376,6 +397,8 @@ def entry_keys(names: list[str], e: dict, man=_UNREAD) -> list[str]:
             got = _UNREAD
         if got is _UNREAD and isinstance(e.get("package"), str) and isinstance(e.get("version"), str):
             got = (e["package"], e["version"])
+        if got is _UNREAD:
+            return [f"{n}@{UNKNOWN_KEY}" for n in names]
     else:
         got = (man.name, str(man.version)) if man is not None else None
     if isinstance(got, tuple):
@@ -383,6 +406,11 @@ def entry_keys(names: list[str], e: dict, man=_UNREAD) -> list[str]:
     commit = e.get("commit")
     ver = commit[:12] if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{12,64}", commit) else "unknown"
     return [f"{n}@{ver}" for n in names]
+
+
+def _entry_id(eb: dict, names: list[str]) -> str:
+    """What a review's `keys` files an entry's keys under: its tree hash and its local names."""
+    return f"{_hash(eb)}|{','.join(names)}"
 
 
 def changed(before: dict, after: dict) -> list[tuple[dict | None, dict | None, list[str]]]:
@@ -449,7 +477,7 @@ def record(prj, before: dict, after: dict, allowed: list | None = None, env: dic
     from undine.store import vendor
     from undine.store import manifest as mf
     try:
-        packages, code, used_by = [], [], []
+        packages, code, used_by, keys = [], [], [], {}
         for ea, eb, names in changed(before, after):
             fa, fb = _files(ea), _files(eb)
             row: dict = {"package": data((eb or ea or {}).get("package")), "names": [data(n) for n in names],
@@ -488,6 +516,9 @@ def record(prj, before: dict, after: dict, allowed: list | None = None, env: dic
                         row["cells_more"] = more
                 code.append(_listing(prj, names, eb, d, row["package"], allowed, env,
                                      man if d is not None else _UNREAD))
+                # the keys made from the tree read now, kept: a later read (the store gc'd) names the same ones
+                if d is not None and len(keys) < LISTED_KEYS:
+                    keys[_entry_id(eb, names)] = [data(k) for k in entry_keys(names, eb, man)]
             packages.append(row)
         out = {"packages": None, "used_by": None, "code": None}
         out["packages"], more = _listed(packages, LISTED_PACKAGES)
@@ -499,6 +530,7 @@ def record(prj, before: dict, after: dict, allowed: list | None = None, env: dic
         out["code"], more = _code(code)
         if more:
             out["code_more"] = more
+        out["keys"] = keys
         return out
     except Exception as e:                         # the review is information: the operation stands without it
         return {"error": data(f"the review could not be made: {e}", 400)}
@@ -655,7 +687,8 @@ def _lock_hashes(lock: dict | None) -> set[str]:
     return {h for e in resolve.lock_graph(lock or {}).entries.values() if (h := _hash(e))}
 
 
-def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, review_of=None) -> list[dict]:
+def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, review_of=None,
+         is_open: bool = True) -> list[dict]:
     """The review's `deps` rows: one per dependency operation of the changeset still in effect (the project log's
     records, `changes` of Changesets.get), oldest first. A proposal a person's fetch installed is the row of the
     record that installed it (with its op_id and fetched_by); a dropped one's record (dep_drop) is no row, the
@@ -668,15 +701,23 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
     trust note: `trusted` over all of them, `untrusted` the first LISTED_UNTRUSTED not trusted, `untrusted_count`
     them all) are read from its lock before and after.
 
-    `checked` is judged on the trees of the operation that the changeset still has (the last operation's lock): an
-    operation whose trees a later one replaced all of is not unchecked, it is `replaced_by` that later operation
-    (checked null; that row says whether the package was checked)."""
+    `checked` is judged on the trees the operation really brought (an entry whose tree did not change, one that only
+    gained a local name, brought none) that the changeset still has (the last operation's lock): the named
+    dependency's own tree when the operation brought it, else any tree it brought; an operation whose trees a later one
+    replaced is not unchecked, it is `replaced_by` that later operation (checked null; that row says whether the
+    package was checked). The trust note judges, for an open changeset, the project's trust as the adopt leaves it:
+    a key the changeset takes out of project.json's `trusted` is not trusted (`trust_taken_back`)."""
     effs = [(op, i, e) for op in lc_ops for i, e in enumerate(op.get("effects") or []) if e.get("k") == "d"]
     final = None
     for op, i, e in effs:
         if e.get("state") == "installed" and isinstance(e.get("after"), dict):
             final = e["after"].get("lock")
     live_hashes = _lock_hashes(final)
+    # the keys the changeset takes out of project.json's trusted: in its first operation's before, not in its last's
+    # after (the adopt merges `trusted` as a set: a key the branch dropped goes)
+    firsts = [e for _, _, e in effs if e.get("state") == "installed" and isinstance(e.get("before"), dict)]
+    dropped = (set(_trusted_list(firsts[0]["before"].get("project"))) -
+               set(_trusted_list((firsts[-1].get("after") or {}).get("project")))) if firsts else set()
     out = []
     for op, idx, e in effs:
         if e.get("state") == "dropped":
@@ -726,11 +767,13 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
         if review.get("error"):
             row["review_error"] = review["error"]
         pkgs = review.get("packages") or []
-        mine = next((p for p in pkgs if row["name"] in (p.get("names") or [])), pkgs[0] if pkgs else None)
+        # the licence and size on the row are the named dependency's own; when it did not move (only packages it
+        # needs did), none is put on it: each package's are in its report, with the total
+        mine = next((p for p in pkgs if row["name"] in (p.get("names") or []) and p.get("do") != "del"), None)
         sizes = [p.get("size") for p in pkgs if p.get("do") != "del"]
         row |= {"packages": pkgs, "used_by": review.get("used_by") or [],
                 "license": (mine or {}).get("license"), "size": (mine or {}).get("size"),
-                "size_from": (mine or {}).get("size_from"),
+                "size_from": (mine or {}).get("size_from"), "own": mine is not None,
                 "size_total": sum(sizes) if sizes and all(isinstance(x, int) for x in sizes)
                 and not review.get("packages_more") else None,
                 # copies: stored reviews may be shared, and the trust is the reader's to add
@@ -738,29 +781,45 @@ def rows(lc_ops: list[dict], trusted_now: set[str], checks: Checks | None, revie
         for k in ("packages_more", "used_by_more", "code_more"):
             if review.get(k):
                 row[k] = review[k]
+        changes = changed(e.get("before") or {}, e.get("after") or {})
+        brought = [(eb, names) for ea, eb, names in changes if eb is not None]
+        # the keys the trust note judges: kept with the review when it read the tree (a store gc'd since names the
+        # same ones), else read from the store now
+        kept_keys = review.get("keys") or {}
+        keys = list(dict.fromkeys(data(k) for eb, names in brought
+                                  for k in (kept_keys.get(_entry_id(eb, names)) or entry_keys(names, eb))))
+        # a key this changeset takes out of project.json's trusted (an add or update to other content) is not
+        # trusted once it is adopted: an open row judges it so, whatever the project trusts today
+        gone = dropped if is_open else set()
+        trusted_after = {k for k in trusted_now if k not in gone}
         for c in row["code"]:
-            c["trusted"] = all(k in trusted_now for k in c.get("keys") or [c.get("key")])
+            c["trusted"] = all(k in trusted_after for k in c.get("keys") or [c.get("key")])
             c["trust"] = TRUST_WORDS[c["trusted"]]
-        # the trust note over every version the operation brought, from its lock (the review's code list may be cut,
-        # or missing): exact whatever the review holds
-        brought = [(eb, names) for ea, eb, names in changed(e.get("before") or {}, e.get("after") or {})
-                   if eb is not None]
-        keys = list(dict.fromkeys(data(k) for eb, names in brought for k in entry_keys(names, eb)))
-        untrusted = [k for k in keys if k not in trusted_now]
+        untrusted = [k for k in keys if k not in trusted_after]
         row["trusted"] = bool(keys) and not untrusted
         row["trust"] = TRUST_WORDS[row["trusted"]] if keys else None
         if untrusted:
             row["untrusted"] = untrusted[:LISTED_UNTRUSTED]
             row["untrusted_count"] = len(untrusted)
+            if (back := [k for k in untrusted if k in gone and k in trusted_now]):
+                row["trust_taken_back"] = back[:LISTED_UNTRUSTED]
+                row["trust"] = TRUST_TAKEN_BACK
+            if any(k.endswith(f"@{UNKNOWN_KEY}") for k in untrusted):
+                row["trust_unknown"] = True
         before_t = _trusted_list((e.get("before") or {}).get("project"))
         after_t = set(_trusted_list((e.get("after") or {}).get("project")))
         row["trust_drop"] = [data(k) for k in before_t if k not in after_t]
-        hashes = {h for eb, _ in brought if (h := _hash(eb))}         # from the effect: a missing review hides none
-        here = hashes & live_hashes
+        # checked: only trees the operation really brought (an entry that only gained a local name brought none) and
+        # that the changeset still has; the named dependency's own tree when it brought it, else any of them
+        new = [(eb, names) for ea, eb, names in changes
+               if eb is not None and (ea is None or _hash(ea) != _hash(eb)) and _hash(eb)]
+        hashes = {_hash(eb) for eb, _ in new}
+        own = {_hash(eb) for eb, names in new if row["name"] in names}
+        here = (own or hashes) & live_hashes
         if row["action"] in ("remove", "pdk_set") or not hashes:
             row["checked"] = None                       # nothing came in that a check could read
         elif not here:
-            # every tree it brought was replaced by a later operation: that operation's row is the one to check
+            # what it brought was replaced by a later operation: that operation's row is the one to check
             row["checked"] = None
             later = next((o.get("gseq") for o, _, x in effs if (o.get("gseq") or 0) > (op.get("gseq") or 0)
                           and x.get("state") == "installed" and x.get("name") == e.get("name")), None)

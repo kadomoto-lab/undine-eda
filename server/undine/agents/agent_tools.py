@@ -483,7 +483,10 @@ def get_changeset(c: ToolCtx, a: dict):
                                     "checked null has nothing to check (a removal, a PDK change, or replaced_by: a "
                                     "later operation replaced its trees, and that operation's row is the one to "
                                     "check); code lists what the trust rule refuses in it, which only a person can "
-                                    "trust (untrusted: the versions not trusted, code_more: packages not listed)")
+                                    "trust (untrusted: the versions not trusted, trust_taken_back: trusted today but "
+                                    "this change takes it back, code_more: packages with code not listed); license "
+                                    "and size are the named dependency's own, null when only packages it needs moved "
+                                    "(each package's are in packages)")
         out["data_rule"] = DATA_RULE
     if g["status"] == "open":
         n = a.get("restore_points")
@@ -4207,11 +4210,12 @@ def _dep_review_public(r: dict) -> dict:
     few of each list, the texts as the review kept them (control characters out, cut)."""
     out = {k: r[k] for k in ("op", "action", "name", "state", "outcome", "op_id", "fetched_by", "pdk", "license",
                              "size", "size_total", "checked", "checked_by", "replaced_by", "trust", "untrusted",
-                             "untrusted_count", "trust_drop", "review_error")
+                             "untrusted_count", "trust_taken_back", "trust_unknown", "trust_drop", "review_error")
            if r.get(k) is not None and r.get(k) != []}
     out["by"], out["reason"] = r.get("actor"), r.get("reason") or ""
     if r.get("packages"):
-        out["packages"] = [{k: p[k] for k in ("package", "names", "do", "from", "to") if p.get(k) is not None}
+        out["packages"] = [{k: p[k] for k in ("package", "names", "do", "from", "to", "license", "size")
+                            if p.get(k) is not None}
                            for p in r["packages"][:DEP_ROWS]]
         if (more := len(r["packages"]) - DEP_ROWS + (r.get("packages_more") or 0)) > 0:
             out["packages_more"] = more

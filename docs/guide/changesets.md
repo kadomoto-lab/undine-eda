@@ -229,11 +229,14 @@ operation of the proposal, open or adopted, discarded or reverted. A row shows:
   RTL finding with its file and line. What is listed as refused is what a simulation or an RTL run of an untrusted
   package refuses, by the same rule (a model include under your PDK passes), until you trust that version
   ([Trust](../design/packages.md#security)); the row says whether the project trusts every version it brings (and
-  names those it does not), and when an update took the trust of the old version back;
+  names those it does not), and when the change takes the trust of a version back (an update to other content
+  under the same version): such a version is shown as not trusted, as it will be once adopted;
 - an **unchecked** badge until a run in the proposal read the package: a simulation, an LVS or a DRC of the working copy
   whose evidence names the package's files, still up to date. Place one of its cells and run the checks or a
   simulation; the badge then says *checked*, naming the run. A removal or a PDK change has nothing to check, and an
-  operation whose package versions a later operation replaced says *replaced*: check the later one.
+  operation whose package versions a later operation replaced says *replaced*: check the later one. Only a run that
+  read what the operation brought counts (the package itself when it moved, else a package it brought), not one that
+  read a package it left as it was.
 
 An agent's operation waiting for a fetch has its **Fetch** button in its row (each fetch's URL, size and licence are
 all there is to show until it is fetched); on the other listings the waiting operations and their Fetch stay above

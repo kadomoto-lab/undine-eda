@@ -676,16 +676,22 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   `GET .../changesets/{id}` gives `deps`, a row per dependency operation in effect, open or closed: its state
   (`installed`, `needs_fetch`, `cancelled`; `outcome` superseded or dropped; a proposal a fetch installed is the
   installing record's row, with `op_id` and `fetched_by`), `project` and `lock` (`depmerge.diff` of the effect's
-  before and after), the review (`review_state`: stored, made, pending or failed), the total size (`size_total`),
+  before and after), the review (`review_state`: stored, made, pending or failed), the licence and size of the named dependency itself
+  (none when only packages it needs moved: `own` false, each package's in its report), the total size (`size_total`),
   `trusted` over every version the operation brought, named by the key the jobs, the trust dialog and `lib trust` use
   (trust.key_of's rule: the tree's manifest name and version, read from the store whatever the lock format records,
-  else the local name and commit for each local name), the versions read from the effect's lock (entries paired by
-  who they are, so two local names for one tree are each their own) whatever the review holds (`untrusted` names
+  else the local name and commit for each local name; the keys read when the review was made are kept with it, so a
+  store gc'd since names the same ones; one that cannot be told now, the store lacking the manifest, is the lock's
+  package and version, else `<name>@?`, never trusted, `trust_unknown`), the versions read from the effect's lock (entries paired by
+  who they are, so two local names for one tree are each their own) whatever the review holds; while the changeset is open, a key it takes out of project.json's `trusted` (an add
+  or update to other content under a trusted version) counts as not trusted, as the adopt will leave it
+  (`trust_taken_back`) (`untrusted` names
   the first ten the real project does not trust now, `untrusted_count` counts them all), `trust_drop` (the keys the
   operation took out of the working copy's `trusted`), and `checked`: false (*unchecked*) until a run of the changeset
   read the package (the trees taken from the effect's lock, so a row whose review is missing or failed is never
   shown safer), that is a done simulation, LVS or DRC of the working copy whose `about.packages` names a tree the
-  operation brought that the changeset still has (the last operation's lock) and (open) still fresh; an operation
+  operation really brought (an entry whose tree did not change, one that only gained a local name, brought none):
+  the named dependency's own tree when it brought it, else any tree it brought, that the changeset still has (the last operation's lock) and (open) still fresh; an operation
   whose trees a later one replaced all of is `replaced_by` that one (checked null: there is nothing left of it to
   check); a closed changeset looks at the runs its evidence archived. A needs_fetch row has its plan's URLs, sizes and
   licences and no code; its Fetch is `pending_deps`'. `get_changeset` gives agents the same rows in short

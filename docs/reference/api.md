@@ -224,12 +224,12 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
              size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
              cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
  used_by: [text], used_by_more?,                           the project's cells that use a changed or removed cell
- license, size, size_from, size_total,                     the dependency's own (a needs_fetch row: its plan's first
+ license, size, size_from, own, size_total,                the dependency's own (a needs_fetch row: its plan's first
                                                            fetch's); size_total every package's (fetch's) added up
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
          findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
- trusted, trust, untrusted?: [key], untrusted_count?, trust_drop: [key],
+ trusted, trust, untrusted?: [key], untrusted_count?, trust_taken_back?: [key], trust_unknown?, trust_drop: [key],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_state: stored | made | pending | failed, review_error?}
@@ -261,13 +261,20 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
 - `trusted` (each package's in `code`, and the row's: every version the operation brought, from its lock, whatever the
   review holds) is read from the real project's `trusted` now, for the key the jobs and the trust dialog use
   (`trust.key_of`: the tree's manifest name and version, read from the store whatever the lock format records, else
-  `<local name>@<commit12>` for each local name; a code entry under several names has them in `keys`), so a version a person trusts after the operation shows
+  `<local name>@<commit12>` for each local name; a code entry under several names has them in `keys`; the keys read
+  when the review was made are kept with it, so a store gc'd since names the same ones; one that cannot be told now is
+  the lock's package and version, else `<name>@?`, never trusted, with `trust_unknown`). While the changeset is open, a
+  key it takes out of project.json's `trusted` (an add or update to other content under a trusted version) counts as
+  not trusted, as the adopt will leave it, and is listed in `trust_taken_back`, so a version a person trusts after the operation shows
   as trusted; `trust` says it in words, `untrusted` names the first 10 versions not trusted and `untrusted_count` counts
-  them all. `trust_drop` lists the keys
+  them all. `license` and `size` are the named dependency's own: null when only packages it needs moved (`own`
+  false; each package's are in `packages`). `trust_drop` lists the keys
   the operation took out of the working copy's `trusted` (an update drops the old version's).
 - `checked` is `false` (*unchecked*) until a run of the changeset read the package: a simulation, an LVS or a DRC of
   the working copy, done, whose evidence names one of the trees the operation brought in its `about.packages`, and
-  (open) still fresh; `checked_by` names it. Only the trees the changeset still has count (the last operation's lock):
+  (open) still fresh; `checked_by` names it. Only trees the operation really brought count (an entry whose tree did
+  not change, one that only gained a local name, brought none): the named dependency's own tree when it brought it,
+  else any of them; and only those the changeset still has (the last operation's lock):
   an operation whose trees a later one replaced all of has `checked: null` and `replaced_by`, that operation's gseq,
   whose row says whether the package was checked. For a closed changeset, the runs its evidence archived. `null`
   otherwise: nothing to check (a removal, a PDK change, an operation that brought no tree).

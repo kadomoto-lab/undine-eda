@@ -2967,7 +2967,7 @@ class Changesets:
             if is_open:
                 return self._review_now(project, cid, op, i, e)
             return None, "failed"
-        return depreview.rows(ops, trusted, checks, review_of)
+        return depreview.rows(ops, trusted, checks, review_of, is_open=is_open)
 
     def _applied_changes(self, project: str, meta: dict) -> list[dict]:
         """The operations of a changeset closed without evidence (older ones), from the project's log: on git, the net

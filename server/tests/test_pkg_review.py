@@ -422,8 +422,9 @@ def test_get_changeset_gives_agents_the_review_bounded_as_data(tmp_path):
     out = json.loads(text)
     add, pending = out["dependencies"]
     assert add["name"] == "ip" and add["state"] == "installed" and add["checked"] is False
-    assert add["license"] == "MIT" and add["packages"] == [{"package": "ip", "names": ["ip"], "do": "add",
-                                                             "to": "1.0.0"}]
+    [pk] = add["packages"]
+    assert add["license"] == "MIT" and {k: pk[k] for k in ("package", "names", "do", "to", "license")} == \
+        {"package": "ip", "names": ["ip"], "do": "add", "to": "1.0.0", "license": "MIT"} and pk["size"] > 0
     [code] = add["code"]
     assert code["rtl_total"] == 31 and len(code["refused"]) <= 2 * T.DEP_ROWS
     assert add["trust"].startswith("not trusted") and code["trust"] == add["trust"]
@@ -516,9 +517,9 @@ def test_trust_note_covers_packages_the_code_list_leaves_out(tmp_path, monkeypat
                                             f'\n[dependencies]\ncore = {{ git = "{core}", rev = "v1.0.0" }}\n'})
     monkeypatch.setattr(depreview, "LISTED_PACKAGES", 1)
     monkeypatch.setattr(T, "DEP_ROWS", 0)
-    trust.set_trusted(srv.project("p"), "core@1.0.0", True)
     meta = cs.create("p", "ip", "", "user")
     cid = meta["id"]
+    trust.set_trusted(srv.project("p"), "core@1.0.0", True)     # after it opened: the add takes nothing back
     _add(cs, cid, ip, tmp_path)
     [row] = cs.get("p", cid)["deps"]
     assert len(row["code"]) == 1 and row["code_more"] == 1
@@ -1027,3 +1028,139 @@ def test_retry_wait_holds_for_every_reader(tmp_path, monkeypatch):
         [row] = Changesets(srv).get("p", cid)["deps"]
         assert row["review_state"] == "failed"
     assert len(builds) == 1
+
+
+# ------------------------------------------------------------------ checked on what was brought, trust taken back, keys
+
+
+def test_unchanged_package_gaining_a_name_does_not_check_a_new_one(tmp_path, monkeypatch):
+    """core is added, placed and simulated; ip then brings core again under another local name (its tree unchanged).
+    That run never read ip: ip's add is unchecked, and core's new name brings no tree a check could satisfy."""
+    root, srv, cs = _setup(tmp_path)
+    _no_ngspice(srv, monkeypatch)
+    core = _release(tmp_path / "core", "1.0.0", {**CORE, "undine-package.toml":
+                                                 MANIFEST.replace('"ip"', '"core"').format(v="1.0.0")})
+    ip = _release(tmp_path / "ip", "1.0.0", {**V1, "undine-package.toml": MANIFEST.format(v="1.0.0") +
+                                            f'\n[dependencies]\ncr = {{ package = "core", git = "{core}", rev = "v1.0.0" }}\n'})
+    meta = cs.create("p", "x", "", "user")
+    cid, P = meta["id"], meta["preview"]
+    lr = [tmp_path.resolve()]
+    cs.dep_op("p", cid, "add", {"name": "core", "git": str(core), "rev": "v1.0.0"}, "user", "core", local_roots=lr)
+    ed = srv.editor(P, "l", "top", "schematic")
+    with ed.recording("add_instance", {"sym": "core/core.sym"}, "user", "place", cid):
+        ed.add_instance("core/core.sym", 200, 0)
+    srv.start_sim(P, "l", "top", {"type": "op"})
+    assert cs.get("p", cid)["deps"][0]["checked"] is True
+    cs.dep_op("p", cid, "add", {"name": "ip", "git": str(ip), "rev": "v1.0.0"}, "user", "ip", local_roots=lr)
+    core_row, ip_row = cs.get("p", cid)["deps"]
+    assert core_row["checked"] is True and ip_row["checked"] is False and "checked_by" not in ip_row
+
+
+def test_trust_the_change_takes_back_is_not_trusted(tmp_path):
+    """An update to other content under the same version takes the project's trust of that version back (its
+    project.json drops the key, and the adopt merges that): the open row says not trusted, taken back, and the
+    adopted project indeed no longer trusts it."""
+    root, srv, cs = _setup(tmp_path)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    prj = srv.project("p")
+    deps.add(prj, "ip", str(ip), "v1.0.0", local_roots=[tmp_path.resolve()])
+    trust.set_trusted(prj, "ip@1.0.0", True)
+    (ip / "buf.sch").write_text(CONTROL.replace("shell echo hi", "shell rm -rf ~"))
+    _git(ip, "commit", "-qam", "change")
+    _git(ip, "tag", "v1.0.0-b")
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v1.0.0-b"}, "user", "fix", local_roots=[tmp_path.resolve()])
+    [row] = cs.get("p", cid)["deps"]
+    assert row["trust_drop"] == ["ip@1.0.0"]
+    assert row["trusted"] is False and row["trust_taken_back"] == ["ip@1.0.0"]
+    assert row["trust"] == depreview.TRUST_TAKEN_BACK and row["code"][0]["trusted"] is False
+    cs.apply("p", cid, "user")
+    assert "ip@1.0.0" not in trust.trusted_keys(srv.project("p").path)      # what the row said
+    [row] = cs.get("p", cid)["deps"]
+    assert row["trusted"] is False
+
+
+def _forget_manifests() -> None:
+    """What a server restart forgets of the manifests read (2670c08's lru_cache, or the dict since)."""
+    getattr(depreview, "_MANIFESTS", {}).clear()
+    getattr(depreview._manifest_id, "cache_clear", lambda: None)()
+
+
+def _record_and_object(W: Path, name: str = "ip"):
+    from undine.store import cas
+    e = deps.read_lock(W)["libraries"][name]
+    kind, value = deps.entry_hash(e)
+    files = cas.read_tree(value) if kind == "tree" else cas.read_archive_tree(value)
+    rec = cas.tree_path(value) if kind == "tree" else cas.archive_path(value)
+    return kind, value, rec, cas.object_path(files["undine-package.toml"][1])
+
+
+@pytest.mark.parametrize("fmt", [1, 2])
+def test_a_manifest_the_store_cannot_show_now_is_not_called_none(tmp_path, fmt):
+    """The manifest's object gone from the store (store verify removed it, lib sync brings it back) is not "no
+    manifest": the row keeps the jobs' key (kept with the review, or the lock's in format 2), and what could not be
+    told is not kept, so the object back reads it again."""
+    import os
+    root, srv, cs = _setup(tmp_path, fmt)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    _add(cs, cid, ip, tmp_path)
+    W = srv.project(meta["preview"]).path
+    trust.set_trusted(srv.project("p"), "ip@1.0.0", True)
+    kind, value, rec, obj = _record_and_object(W)
+    _forget_manifests()
+    away = obj.with_suffix(".away")
+    os.rename(obj, away)
+    try:
+        assert depreview._manifest_id(kind, value) is depreview._UNREAD
+        [row] = cs.get("p", cid)["deps"]
+        assert row["trusted"] is True and "untrusted" not in row
+    finally:
+        os.rename(away, obj)
+    assert depreview._manifest_id(kind, value) == ("ip", "1.0.0")        # looked at again, not a kept "none"
+
+
+def test_closed_row_keeps_its_keys_after_the_store_lost_the_tree(tmp_path):
+    """A format 1 changeset adopted, its tree's record later gone from the store (store gc): the closed row names the
+    key its review read then, the same as its code entry, not one made from the commit."""
+    import os
+    root, srv, cs = _setup(tmp_path, fmt=1)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    _add(cs, cid, ip, tmp_path)
+    W = srv.project(meta["preview"]).path
+    kind, value, rec, obj = _record_and_object(W)
+    cs.apply("p", cid, "user")
+    os.chmod(rec, 0o644)
+    rec.unlink()                                             # store gc
+    _forget_manifests()                                      # a server restart
+    [row] = cs.get("p", cid)["deps"]
+    assert row["untrusted"] == ["ip@1.0.0"] and row["code"][0]["key"] == "ip@1.0.0"
+    trust.set_trusted(srv.project("p"), "ip@1.0.0", True)
+    [row] = cs.get("p", cid)["deps"]
+    assert row["trusted"] is True
+
+
+def test_licence_on_the_row_is_the_named_packages_own(tmp_path):
+    """update analog_ip moves only sar_common (analog_ip is the newest already): the row does not show sar_common's
+    licence and size as analog_ip's; the package that moved has them in its report."""
+    from test_pkg_index import World
+    w = World(tmp_path)
+    w.default()
+    w.publish("sar_common", "1.1.0", license="GPL-3.0-only")
+    w.publish("analog_ip", "1.2.0", [{"name": "sar_common", "req": "^1.0"}], license="MIT")
+    root, srv, cs = _setup(tmp_path)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    lr = [tmp_path.resolve()]
+    cs.dep_op("p", cid, "add", {"name": "analog_ip", "package": "analog_ip"}, "user", "add", local_roots=lr)
+    w.publish("sar_common", "1.2.0", license="GPL-3.0-only")
+    cs.dep_op("p", cid, "update", {"name": "analog_ip"}, "user", "update", local_roots=lr)
+    add, up = cs.get("p", cid)["deps"]
+    assert [p["package"] for p in up["packages"]] == ["sar_common"]
+    assert up["license"] is None and up["size"] is None                  # not sar_common's GPL as analog_ip's
+    assert add["license"] == "MIT" and add.get("own") is True and up.get("own") is False
+    assert up["packages"][0]["license"] == "GPL-3.0-only" and up["size_total"] == up["packages"][0]["size"]

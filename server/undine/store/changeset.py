@@ -738,7 +738,7 @@ class _DepGuard:
     changeset checked again (open, no interrupted merge, the write lease the caller's), since the operation fetched
     without them, and project.json and undine.lock read (`before`). Leaving it after the operation wrote them, the
     locks still held, appends its record to the working copy's project log (PROJECT_LOG): {op, args, actor, reason,
-    cell: null, view: null, effects: [{k: "d", do, name, before, after, state: "installed", review}]}, each file parsed
+    cell: null, view: null, effects: [{k: "d", do, name, before, after, state: "installed"}]}, each file parsed
     whole. Re-entrant (an operation committing more than once: a record each); never held across a fetch, so a
     restore or an apply never waits for one."""
 
@@ -765,8 +765,7 @@ class _DepGuard:
                     self.cs._check_merging(self.project, self.cid)
                     self.log = srv.oplog(meta["preview"], PROJECT_LOG)
                     self.log.guard()
-                    self.prj = srv.project(meta["preview"])
-                    self.path = self.prj.path
+                    self.path = srv.project(meta["preview"]).path
                     self.before = _dep_files(self.path)
                     if self._replaying:              # restored away, or installed by another fetch meanwhile?
                         if self.cid in srv.batching:   # an agent's batch step: its put-back would undo the install
@@ -788,11 +787,9 @@ class _DepGuard:
             if self.depth == 0 and et is None:
                 after = _dep_files(self.path)
                 if after != self.before or self._replaying:
+                    # what the review shows of it is made after the guard, outside the locks (Changesets._reviews)
                     e = {"k": "d", "do": self.do, "name": self.name, "before": self.before, "after": after,
-                         "state": "installed",
-                         # what the review shows of it, from the working copy as the operation left it (bounded;
-                         # a closed changeset's evidence keeps it with the records): depreview.record
-                         "review": depreview.record(self.prj, self.before, after)}
+                         "state": "installed"}
                     if self.op == "pdk_set":
                         e["pdk"] = [self.before["project"].get("pdk"), after["project"].get("pdk")]
                     rec = {"op": self.op, "args": self.args, "actor": self.actor, "reason": self.reason,
@@ -877,9 +874,6 @@ class Baseline(Project):
 class Changesets:
     def __init__(self, srv):
         self.srv = srv
-        # the reviews made now of records from before reviews were recorded (_dep_review), by (working copy, files):
-        # the review is polled, and listing a package's code reads all its cells
-        self._live_reviews: dict[tuple, dict | None] = {}
 
     # ------------------------------------------------------------------ paths and records
 
@@ -1425,6 +1419,8 @@ class Changesets:
         captured = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         manifest = {"version": EVIDENCE if meta.get("git") else 1, "changeset": meta["id"], "captured": captured,
                     "changes": self.changes(project, meta), "verify": self.verify_status(project, meta), "jobs": []}
+        # the reviews of its dependency operations, by fingerprint (depreview): its working copy goes with the closure
+        manifest["reviews"] = self._reviews(project, meta, manifest["changes"])
         if meta.get("git"):
             manifest["commits"] = {"base": meta["git"]["base"], "tip": self._branch_tip(project, meta)}
         parent = self._dir(project) / meta["id"]
@@ -2280,6 +2276,7 @@ class Changesets:
             with guard:
                 pass
         self.srv.deps_changed(meta["preview"])         # packages it moved under names already open
+        self._review_records(project, cid, guard.records)
         return {"changeset": cid, "op": guard.public(), "result": result,
                 **({"superseded": guard.superseded} if guard.superseded else {})}
 
@@ -2294,6 +2291,7 @@ class Changesets:
         with guard:
             move = prj.set_pdk(spec, prepared)
         self._forget(project, cid)
+        self._review_records(project, cid, guard.records)
         old, new = move
         return {"changeset": cid, "op": guard.public(), "old": old, "new": new, "created": move.created}
 
@@ -2743,7 +2741,8 @@ class Changesets:
             changes = _never_fetched(manifest["changes"])
             return {**meta, **git, "evidence": evidence, "changes": changes, "verify": manifest["verify"],
                     "deps": self._dep_review(project, meta, changes,
-                                             depreview.Checks(self.srv, evidence=archive.parent, manifest=manifest))}
+                                             depreview.Checks(self.srv, evidence=archive.parent, manifest=manifest),
+                                             archived=manifest.get("reviews") or {})}
         meta["changes"] = self.changes(project, meta) if meta["status"] == "open" else self._applied_changes(project, meta)
         meta["verify"] = self.verify_status(project, meta)
         le = self.srv.leases.get(cid) if meta["status"] == "open" else None
@@ -2757,12 +2756,72 @@ class Changesets:
                                         if meta["status"] == "open" else None)
         return {**meta, **git}
 
-    def _dep_review(self, project: str, meta: dict, changes: list[dict], checks: "depreview.Checks | None") -> list[dict]:
+    # ------------------------------------------------------------------ the review of the dependency operations
+
+    def _review_dir(self, project: str, cid: str) -> Path:
+        """Where an open changeset keeps the reviews of its dependency operations (depreview.record), by the effect's
+        fingerprint: beside its worktrees, out of the project's repository; the evidence copies them at closure."""
+        return self._shadow_root(project, cid) / "reviews"
+
+    def _stored_review(self, project: str, cid: str, e: dict) -> dict | None:
+        try:
+            v = json.loads((self._review_dir(project, cid) / f"{depreview.fingerprint(e)}.json").read_text())
+        except (OSError, ValueError):
+            return None
+        return v if isinstance(v, dict) else None
+
+    def _make_review(self, project: str, cid: str, e: dict) -> dict | None:
+        """The review of effect `e` of the open changeset `cid`, made now (depreview.record: from the effect, the store
+        and the working copy's own cells; no lock of the server's held, no index refresh waited for) and stored."""
+        try:
+            prj = self.srv.project(f"{project}~{cid}")
+        except (KeyError, ValueError):
+            return None
+        pdk = prj.pdk
+        allowed = [pdk.root] if pdk else []
+        env = self.srv.model_env(prj) if hasattr(self.srv, "model_env") else {}
+        review = depreview.record(prj, e.get("before") or {}, e.get("after") or {}, allowed=allowed, env=env)
+        d = self._review_dir(project, cid)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            tmp = d / f".{depreview.fingerprint(e)}.{uuid.uuid4().hex[:8]}"
+            tmp.write_text(json.dumps(review))
+            tmp.replace(d / f"{depreview.fingerprint(e)}.json")
+        except OSError:
+            pass
+        return review
+
+    def _review_records(self, project: str, cid: str, records: list[dict]) -> None:
+        """The reviews of the records a dependency operation just appended, made after its guard let the locks go."""
+        for rec in records:
+            for e in rec.get("effects") or []:
+                if e.get("k") == "d" and e.get("state") == "installed":
+                    try:
+                        self._make_review(project, cid, e)
+                    except Exception:                  # information: the operation stands; a read makes it again
+                        pass
+
+    def _reviews(self, project: str, meta: dict, changes: list[dict]) -> dict[str, dict]:
+        """{fingerprint: review} of the installed dependency effects in `changes` (the archive's copy), each made now
+        when it was not stored yet."""
+        out: dict[str, dict] = {}
+        for lc in changes:
+            if lc.get("lib") != PROJECT_LOG:
+                continue
+            for op in lc.get("ops") or []:
+                for e in op.get("effects") or []:
+                    if e.get("k") == "d" and e.get("state") == "installed":
+                        r = self._stored_review(project, meta["id"], e) or self._make_review(project, meta["id"], e)
+                        if r is not None:
+                            out[depreview.fingerprint(e)] = r
+        return out
+
+    def _dep_review(self, project: str, meta: dict, changes: list[dict], checks: "depreview.Checks | None",
+                    archived: dict | None = None) -> list[dict]:
         """The review of the changeset's dependency operations (depreview.rows): one row per operation of its project
-        log still in effect, with the semantic diffs of project.json and undine.lock, what the operation recorded of
-        the packages (licence, size, update report, code blocks and RTL files), whether the real project trusts them
-        now and whether a run in the changeset checked them. An operation recorded before reviews were: its review
-        from the working copy as it is now, while the changeset is open."""
+        log still in effect, with the semantic diffs of project.json and undine.lock, its stored review (open: made
+        now when missing; closed: the evidence's copy, `archived`), whether the real project trusts the packages now
+        and whether a run in the changeset checked them."""
         from undine.store import trust
         ops = next((lc["ops"] for lc in changes if lc.get("lib") == PROJECT_LOG), [])
         if not ops:
@@ -2771,20 +2830,19 @@ class Changesets:
             trusted = trust.trusted_keys(self.srv.project(project).path)
         except (KeyError, ValueError, OSError):
             trusted = set()
-        live_review = None
-        if meta["status"] == "open":
-            def live_review(e: dict) -> dict | None:
-                key = (meta["preview"], json.dumps([e.get("before"), e.get("after")], sort_keys=True, default=str))
-                if key not in self._live_reviews:
-                    if len(self._live_reviews) > 64:
-                        self._live_reviews.clear()
-                    try:
-                        self._live_reviews[key] = depreview.record(self.srv.project(meta["preview"]),
-                                                                   e.get("before") or {}, e.get("after") or {})
-                    except (KeyError, ValueError):
-                        self._live_reviews[key] = None
-                return self._live_reviews[key]
-        return depreview.rows(ops, trusted, checks, live_review)
+        cid, is_open = meta["id"], meta["status"] == "open"
+
+        def review_of(e: dict) -> tuple[dict | None, bool]:
+            if archived is not None:
+                r = archived.get(depreview.fingerprint(e))
+                return (r, True) if r is not None else (e.get("review"), "review" in e)
+            r = self._stored_review(project, cid, e)
+            if r is not None:
+                return r, True
+            if is_open:
+                return self._make_review(project, cid, e), False
+            return e.get("review"), "review" in e
+        return depreview.rows(ops, trusted, checks, review_of)
 
     def _applied_changes(self, project: str, meta: dict) -> list[dict]:
         """The operations of a changeset closed without evidence (older ones), from the project's log: on git, the net

@@ -991,6 +991,55 @@ describe("the review of a dependency change", () => {
     expect(screen.getByRole("dialog", { name: t("app:depFetch.title") })).toBeTruthy();
   });
 
+  it("keeps an agent's waiting operation and its Fetch in sight on the other tabs, listed once on By object", async () => {
+    const fetchRow = { url: "https://git.example.org/amp.git", rev: null, commit: "c".repeat(40), subdir: null, tree: null,
+      size: 4096, license: "MIT", package: "amp", version: "1.0.0", host: "git.example.org", allowed: true };
+    const plan = { op: "add", fetches: [fetchRow], complete: true, project: "p",
+      request: { op: "add" as const, name: "amp", package: "amp", changeset: "cs1", op_id: "dep-0123456789" } };
+    const pending = { op_id: "dep-0123456789", action: "add" as const, op: "dep_add", name: "amp", args: { name: "amp" },
+      actor: "agent:claude", reason: "an amplifier", gseq: 4, needs: [fetchRow], plan };
+    const waiting: DepReviewRow = { ...added, gseq: 4, name: "amp", state: "needs_fetch", op_id: "dep-0123456789", code: null, packages: [],
+      lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] }, needs: [fetchRow], size_from: "index" };
+    await open({ ...rec, deps: [waiting], pending_deps: [pending] });
+    const fetchButtons = () => screen.queryAllByRole("button", { name: t("review:pending.fetch") });
+    expect(fetchButtons()).toHaveLength(1);                               // the row's, not a second list
+    fireEvent.click(screen.getByRole("button", { name: t("review:listing.files") }));
+    await act(async () => {});
+    expect(screen.getAllByTestId("pending-dep")).toHaveLength(1);
+    expect(fetchButtons()).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: t("review:timeline") }));
+    await act(async () => {});
+    expect(fetchButtons()).toHaveLength(1);
+  });
+
+  it("shows each package's licence and size, and the total, for an operation that brings several", async () => {
+    const core = { ...added.packages[0], package: "core", names: ["core"], license: "GPL-3.0-only", size: 2_000_000,
+      size_from: "files" as const, to: "2.0.0" };
+    await open({ ...rec, deps: [{ ...added, packages: [added.packages[0], core], size_total: 2_004_096 }] });
+    const pkgs = screen.getAllByTestId("dep-package");
+    expect(pkgs[1].textContent).toContain("GPL-3.0-only");
+    expect(pkgs[1].textContent).toContain(t("review:deps.sizeFiles", { size: "2.0 MB" }));
+    expect(screen.getByTestId("dep-total").textContent).toContain(t("review:deps.sizeTotal", { size: "2.0 MB", count: 2 }));
+    // a waiting operation's fetches: each with its size and licence
+    const fetches = [{ url: "https://x.example/amp.git", rev: null, commit: null, subdir: null, size: 4096, license: "MIT", package: "amp", version: "1" },
+      { url: "https://x.example/core.git", rev: null, commit: null, subdir: null, size: 2_000_000, license: "GPL-3.0-only", package: "core", version: "2" }];
+    cleanup();
+    await open({ ...rec, deps: [{ ...added, state: "needs_fetch", code: null, packages: [], needs: fetches, size_total: 2_004_096,
+      lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] } }] });
+    const needs = screen.getAllByTestId("dep-need");
+    expect(needs[1].textContent).toContain("GPL-3.0-only");
+    expect(needs[1].textContent).toContain(t("review:deps.sizeDownload", { size: "2.0 MB" }));
+  });
+
+  it("says a row replaced by a later operation, and the versions not trusted, rather than unchecked", async () => {
+    await open({ ...rec, deps: [{ ...added, checked: null, replaced_by: 5, untrusted: ["core@1.0.0"], untrusted_count: 1, code_more: 2 }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).queryByTestId("dep-unchecked")).toBeNull();
+    expect(within(row).getByTestId("dep-replaced")).toBeTruthy();
+    expect(within(row).getByTestId("dep-untrusted").textContent).toContain("core@1.0.0");
+    expect(row.textContent).toContain(t("review:deps.codeMore", { count: 2 }));
+  });
+
   it("words the row in the reader's language", async () => {
     await setLocale("ja");
     try {

@@ -224,36 +224,45 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
              size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
              cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
  used_by: [text], used_by_more?,                           the project's cells that use a changed or removed cell
- license, size, size_from,                                 the dependency's own (a needs_fetch row: its plan's)
+ license, size, size_from, size_total,                     the dependency's own (a needs_fetch row: its plan's first
+                                                           fetch's); size_total every package's (fetch's) added up
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
-         findings: [{kind, line, text, path?}], findings_more?}]}] | null,
- trusted, trust, trust_drop: [key],
- checked: true | false | null, checked_by?: {job, kind, lib?, cell?},
- needs?: [{url, rev, commit, subdir, size, license, package, version}],
+         findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
+ trusted, trust, untrusted?: [key], untrusted_count?, trust_drop: [key],
+ checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
+ needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_error?}
 ```
 
-- `packages`, `used_by` and `code` are what the operation **recorded** when it ran (the effect's `review`, written by
-  `store/depreview.py` once the files were written and installed in the working copy), not recomputed: the working
-  copy's installs follow the latest operation, and a closed changeset's working copy is gone while its evidence keeps
-  the records (the manifest's `changes`). `packages` compares the store's records of both trees, so its `changed`
-  is `null` when the store has no record of a side; `cells` applies the new version's `[renames]`; `size` is the
-  index line's (`size_from: "index"`) else the bytes of the files in the store (`"files"`). `code` lists, per package
-  added or moved, every code block of its cells and every RTL file ([trust](../design/packages.md#security)), the
-  refused ones first. `recorded: false`: a record from before reviews were recorded; while the changeset is open it is
-  made from the working copy as it is now.
-- Bounded: at most 10 packages, 20 files per list, 30 cells per package, 20 cells in `used_by`, 20 code blocks and 20
-  RTL files per operation (over its packages) with 3 findings each; the totals and `*_more` count the rest. Every text
+- `packages`, `used_by` and `code` are the operation's **review** (`store/depreview.py`), made once, right after the
+  operation and outside the server's locks, from the effect's before and after and the store (the trees read from the
+  store's objects), and kept beside the changeset's worktrees; the evidence copies the reviews at closure (the
+  manifest's `reviews`, by a hash of each effect's before and after), so a closed changeset's review reads the same.
+  `recorded: false`: the review was not kept yet (the server stopped right after the operation) and this read of the
+  open changeset made it. `packages` compares the store's records of both trees, so its `changed` is `null` when the
+  store has no record of a side; `cells` applies the new version's `[renames]`; `license` is the manifest's
+  (`license_from: "manifest"`), else the local copy of the index's (`"index"`); `size` is the index line's
+  (`size_from: "index"`) else the bytes of the files in the store (`"files"`). An index copy being refreshed is not
+  read (the review never waits for a fetch): the store's size and the manifest's licence stand. `code` lists, per
+  package added or moved, every code block of its cells and every RTL file ([trust](../design/packages.md#security))
+  with `refused` exactly as a job's trust rule decides it (the PDK root and the netlister's variables given, so a
+  model include under the project's PDK is not refused), packages with refused code first.
+- Bounded: at most 10 packages, 10 code entries (`code_more`), 20 files per list, 30 cells per package, 20 cells in
+  `used_by`, 20 code blocks and 20 RTL files per operation (over its packages) with 3 findings each, 10 fetches of a
+  needs_fetch row; the totals and `*_more` count the rest. Every text
   from a package (paths, cell names, code, findings, licences, versions, a needs_fetch URL) has its control characters
   made spaces and is cut (200 characters): it is data written by others.
-- `trusted` (each package's in `code`, and the row's: all of them) is read from the real project's `trusted` now, so a
-  version a person trusts after the operation shows as trusted; `trust` says it in words. `trust_drop` lists the keys
+- `trusted` (each package's in `code`, and the row's: every package the operation brought, listed in `code` or not)
+  is read from the real project's `trusted` now, so a version a person trusts after the operation shows as trusted;
+  `trust` says it in words, and `untrusted` (`untrusted_count`) names the versions not trusted. `trust_drop` lists the keys
   the operation took out of the working copy's `trusted` (an update drops the old version's).
 - `checked` is `false` (*unchecked*) until a run of the changeset read the package: a simulation, an LVS or a DRC of
   the working copy, done, whose evidence names one of the trees the operation brought in its `about.packages`, and
-  (open) still fresh; `checked_by` names it. For a closed changeset, the runs its evidence archived. `null`: nothing to
-  check (a removal, a PDK change, an operation that brought no tree).
+  (open) still fresh; `checked_by` names it. Only the trees the changeset still has count (the last operation's lock):
+  an operation whose trees a later one replaced all of has `checked: null` and `replaced_by`, that operation's gseq,
+  whose row says whether the package was checked. For a closed changeset, the runs its evidence archived. `null`
+  otherwise: nothing to check (a removal, a PDK change, an operation that brought no tree).
 - A `needs_fetch` row has `needs` (the URL, the size, the licence) and no `code` (nothing fetched yet); its Fetch is
   `pending_deps`' ([An agent's operation waiting for a fetch](#an-agents-operation-waiting-for-a-fetch)).
 

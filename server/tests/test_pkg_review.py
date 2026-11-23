@@ -131,9 +131,10 @@ def test_review_lists_dependency_change_code_blocks_and_rtl(tmp_path):
     assert code["rtl_total"] == 1 and code["rtl_refused"] == 1
     assert row["trusted"] is False and row["trust_drop"] == []
     assert row["checked"] is False                         # nothing placed or run yet
-    # the record keeps it with the operation
+    # the review was made with the operation and kept beside the changeset (not in its record)
     [rec] = srv.oplog(meta["preview"], PROJECT_LOG).read(limit=None)
-    assert rec["effects"][0]["review"]["code"][0]["key"] == "ip@1.0.0"
+    assert "review" not in rec["effects"][0]
+    assert cs._stored_review("p", cid, rec["effects"][0])["code"][0]["key"] == "ip@1.0.0"
     # a person trusts the version in the project: the review says so (read from the real project)
     trust.set_trusted(srv.project("p"), "ip@1.0.0", True)
     [row] = cs.get("p", cid)["deps"]
@@ -309,7 +310,8 @@ def test_review_of_closed_changeset(tmp_path, monkeypatch):
     assert row["checked"] is True and row["checked_by"]["job"] == job.id
     manifest = json.loads((srv.project("p").path / g["evidence"]["path"] / "manifest.json").read_text())
     [lc] = [x for x in manifest["changes"] if x["lib"] == PROJECT_LOG]
-    assert lc["ops"][0]["effects"][0]["review"]["packages"][0]["package"] == "ip"
+    e = lc["ops"][0]["effects"][0]
+    assert manifest["reviews"][depreview.fingerprint(e)]["packages"][0]["package"] == "ip"
 
 
 def test_review_of_discarded_changeset_and_unchecked(tmp_path):
@@ -395,9 +397,10 @@ def test_review_is_bounded_and_package_text_is_data(tmp_path):
     assert code["rtl"][0]["findings_more"] == 1
     changed = row["packages"][0]["changed"]
     assert len(changed["added"]) == depreview.LISTED_FILES and changed["added_more"] == 102 - depreview.LISTED_FILES   # and the manifest
-    text = json.dumps(row, ensure_ascii=False)
-    assert not any(ord(ch) < 0x20 for ch in text)               # no control character from the package
-    assert len(text) < 60_000
+    # no control character from the package in any text of the row (the decoded strings: JSON would escape them)
+    assert not [t for t in _strings(row) if any(ord(ch) < 0x20 or 0x7f <= ord(ch) <= 0x9f for ch in t)]
+    assert any("]0;evil" in t for t in _strings(row))           # the finding is there, as text
+    assert len(json.dumps(row, ensure_ascii=False)) < 60_000
 
 
 # ------------------------------------------------------------------ an agent reads the review
@@ -430,28 +433,22 @@ def test_get_changeset_gives_agents_the_review_bounded_as_data(tmp_path):
     assert len(text) < 20_000
 
 
-def test_record_from_before_reviews_is_reviewed_from_the_working_copy(tmp_path):
-    """An operation recorded before reviews were (no `review` in its effect): while the changeset is open its row is
-    made from the working copy now (recorded: false)."""
+def test_review_missing_is_made_again_on_read(tmp_path):
+    """A review that was not stored (the server stopped right after the operation): while the changeset is open a read
+    makes it (recorded: false) and stores it; the next read has it."""
     root, srv, cs = _setup(tmp_path)
     ip = _release(tmp_path / "ip", "1.0.0", V1)
     meta = cs.create("p", "ip", "", "user")
-    cid, P = meta["id"], meta["preview"]
+    cid = meta["id"]
     _add(cs, cid, ip, tmp_path)
-    log = srv.project(P).path / "history" / f"{PROJECT_LOG}.jsonl"
-    lines = [json.loads(x) for x in log.read_text().splitlines() if x.strip()]
-    for r in lines:
-        for e in r.get("effects") or []:
-            e.pop("review", None)
-    log.write_text("".join(json.dumps(r) + "\n" for r in lines))
-    from undine.store import changeset as changesetmod
-    changesetmod._forget_parsed(log.parent)
+    shutil.rmtree(cs._review_dir("p", cid))
     [row] = cs.get("p", cid)["deps"]
     assert row["recorded"] is False and row["code"][0]["key"] == "ip@1.0.0" and row["license"] == "MIT"
+    assert cs.get("p", cid)["deps"][0]["recorded"] is True
 
 
 def test_reading_the_review_changes_no_record(tmp_path):
-    """The trust a review adds is the reader's: the records (parsed once, shared) and the evidence keep none of it."""
+    """The trust a review adds is the reader's: the stored review keeps none of it."""
     root, srv, cs = _setup(tmp_path)
     ip = _release(tmp_path / "ip", "1.0.0", V1)
     meta = cs.create("p", "ip", "", "user")
@@ -459,4 +456,183 @@ def test_reading_the_review_changes_no_record(tmp_path):
     _add(cs, cid, ip, tmp_path)
     cs.get("p", cid)
     [lc] = [x for x in cs.changes("p", cs._load("p", cid)) if x["lib"] == PROJECT_LOG]
-    assert "trusted" not in lc["ops"][0]["effects"][0]["review"]["code"][0]
+    assert "trusted" not in cs._stored_review("p", cid, lc["ops"][0]["effects"][0])["code"][0]
+
+
+def _strings(v) -> list[str]:
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, dict):
+        return [t for k, x in v.items() for t in [*_strings(k), *_strings(x)]]
+    if isinstance(v, list):
+        return [t for x in v for t in _strings(x)]
+    return []
+
+
+# ------------------------------------------------------------------ fixes after the review of 2670c08
+
+
+def test_operation_replaced_by_a_later_one_is_not_unchecked(tmp_path, monkeypatch):
+    """add 1.0.0, update to 1.1.0, then a run reads 1.1.0: the add's tree is gone from the changeset, so no run can
+    ever read it; its row says which operation replaced it (checked null), not "unchecked" for good, and an agent is
+    not asked to check it."""
+    from undine.agents import agent_tools as T
+    root, srv, cs = _setup(tmp_path)
+    _no_ngspice(srv, monkeypatch)
+    ip = _release(tmp_path / "ip", "1.0.0", CLEAN)
+    _release(ip, "1.1.0", {"buf.sch": V + "C {ip/res.sym} 0 0 0 0 {name=R1 value=3k}\n"})
+    meta = cs.create("p", "ip", "", "user")
+    cid, P = meta["id"], meta["preview"]
+    _add(cs, cid, ip, tmp_path)
+    up = cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v1.1.0"}, "user", "newer",
+                   local_roots=[tmp_path.resolve()])
+    _place(srv, cs, P, cid, "buf")
+    add, update = cs.get("p", cid)["deps"]
+    assert update["checked"] is False and "replaced_by" not in update
+    assert add["checked"] is None and add["replaced_by"] == up["op"]["gseq"]
+    srv.start_sim(P, "l", "top", {"type": "op"})
+    add, update = cs.get("p", cid)["deps"]
+    assert update["checked"] is True and add["checked"] is None
+    ctx = T.ToolCtx(srv, "p", actor="agent:a", owner="mcp:s1:a", owner_kind="mcp")
+    out = json.loads(T.call(ctx, "get_changeset", {"id": cid})[0])
+    a = out["dependencies"][0]
+    assert a.get("checked") is None and a["replaced_by"] == up["op"]["gseq"]
+    assert "replaced_by" in out["dependencies_note"]
+
+
+CORE = {"core.sym": SYM, "core.sch": V + "C {core/res.sym} 0 0 0 0 {name=R1 value=1k}\n", "res.sym": tc.R_SYM}
+
+
+def test_trust_note_covers_packages_the_code_list_leaves_out(tmp_path, monkeypatch):
+    """ip brings core. With one code entry listed, the one left out is counted (code_more), and the row is not called
+    trusted while one of the packages it brings is not, listed or not; get_changeset counts what it leaves out too."""
+    from undine.agents import agent_tools as T
+    root, srv, cs = _setup(tmp_path)
+    core = _release(tmp_path / "core", "1.0.0", {**CORE, "undine-package.toml": MANIFEST.replace('"ip"', '"core"').format(v="1.0.0")})
+    ip = _release(tmp_path / "ip", "1.0.0", {**V1, "undine-package.toml": MANIFEST.format(v="1.0.0") +
+                                            f'\n[dependencies]\ncore = {{ git = "{core}", rev = "v1.0.0" }}\n'})
+    monkeypatch.setattr(depreview, "LISTED_PACKAGES", 1)
+    monkeypatch.setattr(T, "DEP_ROWS", 0)
+    trust.set_trusted(srv.project("p"), "core@1.0.0", True)
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    _add(cs, cid, ip, tmp_path)
+    [row] = cs.get("p", cid)["deps"]
+    assert [c["key"] for c in row["code"]] == ["ip@1.0.0"] and row["code_more"] == 1      # refused code first
+    assert row["trusted"] is False and row["untrusted"] == ["ip@1.0.0"] and row["untrusted_count"] == 1
+    # the person trusts ip too: every package is trusted, the row says so
+    trust.set_trusted(srv.project("p"), "ip@1.0.0", True)
+    [row] = cs.get("p", cid)["deps"]
+    assert row["trusted"] is True and "untrusted" not in row
+    trust.set_trusted(srv.project("p"), "core@1.0.0", False)        # the one the code list leaves out
+    [row] = cs.get("p", cid)["deps"]
+    assert row["trusted"] is False and row["untrusted"] == ["core@1.0.0"]
+    ctx = T.ToolCtx(srv, "p", actor="agent:a", owner="mcp:s1:a", owner_kind="mcp")
+    a = json.loads(T.call(ctx, "get_changeset", {"id": cid})[0])["dependencies"][0]
+    assert a.get("code", []) == [] and a["code_more"] == 2 and a["untrusted"] == ["core@1.0.0"]
+    assert a["trust"].startswith("not trusted")
+
+
+def _owned(lock) -> bool:
+    return lock._is_owned()
+
+
+def test_review_is_made_outside_the_servers_locks(tmp_path, monkeypatch):
+    """The review is made after the operation's guard let the changesets' and the server's locks go (an index refresh
+    or a large package never holds them), and reads no layout when no layout cell of the package changed."""
+    from undine.store.project import Library
+    root, srv, cs = _setup(tmp_path)
+    ip = _release(tmp_path / "ip", "1.0.0", V1)
+    _release(ip, "1.1.0", {"buf.sym": SYM.replace("name=x1", "name=x2")})
+    seen, inside = [], []
+    real = depreview.record
+
+    def spy(*a, **k):
+        seen.append((_owned(srv.lock), _owned(srv.changeset_lock)))
+        inside.append(1)
+        try:
+            return real(*a, **k)
+        finally:
+            inside.pop()
+    monkeypatch.setattr(depreview, "record", spy)
+    reads = []                                            # layouts the review reads (deps.update's own report aside)
+    real_cells = Library.layout_cells
+    monkeypatch.setattr(Library, "layout_cells",
+                        lambda self, *a, **k: (reads.append(self.name) if inside else None) or real_cells(self, *a, **k))
+    meta = cs.create("p", "ip", "", "user")
+    cid = meta["id"]
+    _add(cs, cid, ip, tmp_path)
+    reads.clear()
+    cs.dep_op("p", cid, "update", {"name": "ip", "rev": "v1.1.0"}, "user", "newer", local_roots=[tmp_path.resolve()])
+    assert seen and all(x == (False, False) for x in seen), seen
+    assert reads == []                                    # only buf.sym changed: no layout read for used_by
+    assert [r["action"] for r in cs.get("p", cid)["deps"]] == ["add", "update"]
+
+
+def test_review_never_waits_for_an_index_refresh(tmp_path):
+    """An index refresh holds its copy's lock for the whole fetch: the review takes the store's size instead of
+    waiting for it."""
+    import fcntl
+    import subprocess
+    import threading
+    import time
+    from undine.store import index as ix
+    url = "https://example.invalid/acme/undine-index.git"
+    repo = ix._dir(url)
+    repo.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
+
+    def git(*a, data=None):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a], input=data,
+                              capture_output=True, check=True).stdout.decode().strip()
+    blob = git("hash-object", "-w", "--stdin", data=b"{}")
+    tree = git("mktree", data=f"100644 blob {blob}\tconfig.json\n".encode())
+    git("update-ref", ix.REF, git("commit-tree", tree, "-m", "x"))
+    assert ix.Index(url, fetch=False).fetched()                 # a local copy the review would read
+
+    class P:
+        path, name, meta = tmp_path, "p", {}
+
+        def library_specs(self):
+            return {}
+    entry = {"package": "ip", "version": "1.0.0", "index": url, "commit": "a" * 40, "tree": "sha256:" + "b" * 64}
+    after = {"project": {}, "lock": {"format": 2, "libraries": {"ip": entry}}}
+    before = {"project": {}, "lock": {"format": 2, "libraries": {}}}
+    with open(repo.with_name(repo.name + ".lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        done: dict = {}
+        t = threading.Thread(target=lambda: done.setdefault("r", depreview.record(P(), before, after)), daemon=True)
+        t0 = time.time()
+        t.start()
+        t.join(2)
+        alive = t.is_alive()
+        fcntl.flock(f, fcntl.LOCK_UN)
+    t.join(10)
+    assert not alive and time.time() - t0 < 2
+    assert done["r"]["packages"][0]["package"] == "ip" and done["r"]["packages"][0]["size_from"] != "index"
+
+
+def test_review_uses_the_jobs_trust_rule(tmp_path):
+    """A model include under the project's PDK passes the trust rule at a job, so the review does not list it as
+    refused; a path outside the PDK is refused in both."""
+    import test_pkg_changesets as tpc
+    pdks = tpc._pdks(tmp_path / "pdks")
+    root, srv, cs = _setup(tmp_path)
+    srv.pdks.update(pdks)
+    lib = '.lib $PDK_ROOT/$PDK/libs.tech/models.spice tt'
+    sch = V + (f'C {{devices/code_shown.sym}} 0 300 0 0 {{name=s1 only_toplevel=false value="{lib}"}}\n'
+               'C {devices/code_shown.sym} 0 400 0 0 {name=s2 only_toplevel=false value=".include /etc/passwd"}\n')
+    ip = _release(tmp_path / "ip", "1.0.0", {"buf.sym": SYM, "buf.sch": sch})
+    meta = cs.create("p", "ip", "", "user")
+    cid, P = meta["id"], meta["preview"]
+    cs.pdk_set("p", cid, "fakeA", "user", "a PDK")
+    _add(cs, cid, ip, tmp_path)
+    rows = cs.get("p", cid)["deps"]
+    [code] = [r for r in rows if r["action"] == "add"][0]["code"]
+    by = {b["path"]: b["refused"] for b in code["blocks"] if b.get("path")}
+    assert by["/etc/passwd"] is True
+    [pdk_lib] = [p for p in by if p.endswith("models.spice")]
+    assert by[pdk_lib] is False and code["blocks_refused"] == 1
+    # the same as the rule a job applies (trust.spice_findings with the PDK root and the netlister's variables)
+    prj = srv.project(P)
+    assert not trust.spice_findings(lib, allowed=[prj.pdk.root], env=srv.model_env(prj))

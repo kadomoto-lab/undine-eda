@@ -39,6 +39,12 @@ function PackageReport({ p }: { p: DepReviewPackage }) {
           : t("review:deps.pkg.moved", { from: p.from ?? "", to: p.to ?? "" })}
         {p.names.length > 1 && <span className="dim"> · {t("review:deps.pkg.names", { names: p.names.join(", ") })}</span>}
       </div>
+      {p.do !== "del" && (
+        <div className="small">{p.license ?? t("review:pending.licenseUnknown")}
+          {" · "}{p.size !== null && p.size !== undefined ? t(p.size_from === "index" ? "review:deps.sizeDownload"
+            : "review:deps.sizeFiles", { size: sizeText(p.size) }) : t("review:pending.sizeUnknown")}
+          {!!p.license_files?.length && <span className="dim"> · {p.license_files.join(", ")}</span>}</div>
+      )}
       {ch ? (
         <div className="small dim">{t("review:deps.files", {
           added: ch.added.length + (ch.added_more ?? 0), removed: ch.removed.length + (ch.removed_more ?? 0),
@@ -108,6 +114,11 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
   const size = r.size !== null && r.size !== undefined ? t(r.size_from === "index" ? "review:deps.sizeDownload" : "review:deps.sizeFiles",
     { size: sizeText(r.size) }) : t("review:pending.sizeUnknown");
   const inactive = r.state === "cancelled" || !!r.outcome;
+  // more than one package (or fetch) comes with it: its licence and size above are its own; the total, and each
+  // package's in its report
+  const count = r.state === "installed" ? r.packages.filter((p) => p.do !== "del").length + (r.packages_more ?? 0)
+    : (r.needs?.length ?? 0) + (r.needs_more ?? 0);
+  const several = count > 1;
   return (
     <div className={`deprow${inactive ? " dim" : ""}`} data-testid="dep-row">
       <div className="row">
@@ -115,19 +126,32 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
         <span className="chip">{rowState(r)}</span>
         {r.checked === false && !inactive && <span className="chip warn" title={t("review:deps.uncheckedHint")} data-testid="dep-unchecked">
           <AlertTriangle size={11} /> {t("review:deps.unchecked")}</span>}
+        {r.checked === null && r.replaced_by != null && <span className="chip" title={t("review:deps.replacedHint")}
+          data-testid="dep-replaced">{t("review:deps.replaced")}</span>}
         {r.checked === true && <span className="chip okc" title={r.checked_by ? t("review:deps.checkedBy", {
           job: r.checked_by.job, cell: r.checked_by.lib && r.checked_by.cell ? `${r.checked_by.lib}/${r.checked_by.cell}` : "—" }) : undefined}>
           {t("review:deps.checked")}</span>}
       </div>
       {r.action !== "pdk_set" && r.action !== "remove" && (
-        <div className="small">{r.license ?? t("review:pending.licenseUnknown")} · {size}</div>
+        <div className="small">{r.license ?? t("review:pending.licenseUnknown")} · {size}
+          {several && <span data-testid="dep-total"> · {r.size_total !== null && r.size_total !== undefined
+            ? t("review:deps.sizeTotal", { size: sizeText(r.size_total), count: count })
+            : t("review:deps.sizeTotalUnknown", { count })}</span>}
+        </div>
       )}
       {r.reason && <div className="opreason">“{r.reason}” <span className="dim">— {r.actor}{r.fetched_by ? ` · ${t("review:deps.fetchedBy", { who: r.fetched_by })}` : ""}</span></div>}
       {r.review_error && <div className="small warn">{r.review_error}</div>}
       {r.state === "needs_fetch" && (
         <div className="row">
           <div className="grow">
-            {(r.needs ?? []).map((f) => <div key={`${f.url} ${f.rev ?? f.commit ?? ""}`} className="small mono">{f.url}{f.package && f.version ? ` (${f.package} ${f.version})` : ""}</div>)}
+            {(r.needs ?? []).map((f) => (
+              <div key={`${f.url} ${f.rev ?? f.commit ?? ""}`} className="small" data-testid="dep-need">
+                <span className="mono">{f.url}{f.package && f.version ? ` (${f.package} ${f.version})` : ""}</span>
+                {" · "}{f.size !== null ? t("review:deps.sizeDownload", { size: sizeText(f.size) }) : t("review:pending.sizeUnknown")}
+                {" · "}{f.license ?? t("review:pending.licenseUnknown")}
+              </div>
+            ))}
+            {!!r.needs_more && <div className="small dim">{t("review:deps.more", { count: r.needs_more })}</div>}
             <div className="small dim">{t("review:deps.notFetched")}</div>
           </div>
           {pending && <button className="ghost" disabled={busy} title={t("review:pending.fetchHint")}
@@ -152,7 +176,10 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
       {!!r.code?.length && <>
         <div className="small dim">{t("review:deps.code.title")}</div>
         {r.code.map((c) => <CodeList key={c.name} c={c} />)}
+        {!!r.code_more && <div className="small dim">{t("review:deps.codeMore", { count: r.code_more })}</div>}
       </>}
+      {!!r.untrusted?.length && <div className="small warn" data-testid="dep-untrusted">
+        {t("review:deps.untrustedKeys", { count: r.untrusted_count ?? r.untrusted.length, keys: r.untrusted.join(", ") })}</div>}
       {!!r.trust_drop.length && <div className="small warn">{t("review:deps.trustDrop", { keys: r.trust_drop.join(", ") })}</div>}
     </div>
   );

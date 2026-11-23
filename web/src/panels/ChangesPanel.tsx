@@ -314,7 +314,8 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
   // the dependency operations have a section of their own (cs.deps, the review of each) when the server gives it: the
   // project log's items are left out of the objects then
   const items = useMemo(() => (cs ? groupChanges(cs).filter((it) => !cs.deps || it.lib !== PROJECT_LOG) : []), [cs]);
-  // agents' operations waiting for a fetch that no review row shows (an older server: all of them) keep their own rows
+  // agents' operations waiting for a fetch, with their Fetch, above the listing whatever its tab: on "By object" the
+  // Dependencies section shows those it has a row for (an older server: none), so they are not listed twice
   const loosePending = cs?.pending_deps?.filter((p) => !cs.deps?.some((r) => r.op_id === p.op_id)) ?? [];
   // an agent's dependency operation waiting for a fetch: the Fetch dialog for it (its plan, replayed by the server)
   const [fetching, setFetching] = useState<PendingDep | null>(null);
@@ -604,11 +605,11 @@ export function ChangesPanel({ initialId, project, onClose, onPreview, onOpen, o
           {cs.status === "applied" && !cs.git && <div className="small dim">{t("review:legacy.revert")}</div>}
           {cs.status === "reverted" && <div className="note">{t("review:revertedAt", { time: cs.reverted?.t?.slice(0, 16).replace("T", " ") ?? "", actor: cs.reverted?.by ?? "" })}
             <MergeNote m={cs.reverted} revert onHistory={onHistory} /></div>}
-          {cs.status === "open" && !!loosePending.length && (
+          {cs.status === "open" && !!(shownTab === "changes" ? loosePending : cs.pending_deps ?? []).length && (
             <div className="note pendingdeps">
               <div className="section">{t("review:pending.title")}</div>
               <div className="small dim">{t("review:pending.note")}</div>
-              {loosePending.map((p) => (
+              {(shownTab === "changes" ? loosePending : cs.pending_deps ?? []).map((p) => (
                 <div key={p.op_id} className="row pendingdep" data-testid="pending-dep">
                   <div className="grow">
                     <b className="mono">{t("review:pending.row", { action: t(`review:pending.action.${p.action}`), name: p.name ?? "" })}</b>

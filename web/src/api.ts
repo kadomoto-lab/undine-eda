@@ -587,7 +587,8 @@ export interface DepFileChanges {
 export interface DepReviewPackage {
   package: string | null; names: string[]; do: "add" | "mod" | "del"; from: string | null; to: string | null;
   commit_from: string | null; commit_to: string | null; hash: string | null;
-  license?: string | null; license_files?: string[]; size?: number | null; size_from?: "index" | "files" | null;
+  license?: string | null; license_from?: "manifest" | "index" | null; license_files?: string[];
+  size?: number | null; size_from?: "index" | "files" | null;
   changed: DepFileChanges | null;
   cells?: { cell: string; do: "add" | "del" | "mod" | "renamed"; views: string[]; from?: string; exported?: boolean }[];
   cells_more?: number;
@@ -617,8 +618,12 @@ export interface DepReviewRow {
   project: DepFileDiff; lock: DepFileDiff;
   packages: DepReviewPackage[]; packages_more?: number; used_by: string[]; used_by_more?: number;
   license: string | null; size: number | null; size_from: "index" | "files" | null;
-  code: DepReviewCode[] | null; trusted: boolean; trust_drop: string[];
+  size_total?: number | null;       // every package's (or fetch's) size added up; null: one is not known
+  code: DepReviewCode[] | null; code_more?: number; trusted: boolean; trust_drop: string[];
+  untrusted?: string[]; untrusted_count?: number;     // the versions it brings that the project does not trust
   checked: boolean | null; checked_by?: { job: string; kind: string; lib?: string; cell?: string };
+  replaced_by?: number | null;      // checked null: a later operation (its gseq) replaced every tree it brought
+  needs_more?: number;
   needs?: Pick<FetchRow, "url" | "rev" | "commit" | "subdir" | "size" | "license" | "package" | "version">[];
   recorded?: boolean; review_error?: string;
 }

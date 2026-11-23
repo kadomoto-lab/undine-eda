@@ -478,9 +478,12 @@ def get_changeset(c: ToolCtx, a: dict):
         if len(g["deps"]) > DEPS_LISTED:
             out["dependencies_more"] = len(g["deps"]) - DEPS_LISTED
         out["dependencies_note"] = ("each dependency operation as the person reviews it: checked false is unchecked "
-                                    "(no run in this changeset read the package: place one of its cells and "
-                                    "run_checks or run_simulation); code lists what the trust rule refuses in it, "
-                                    "which only a person can trust")
+                                    "(no up-to-date run in this changeset read the package: place one of its cells "
+                                    "and run_simulation, or run_checks on a cell with a layout, whose LVS reads it); "
+                                    "checked null has nothing to check (a removal, a PDK change, or replaced_by: a "
+                                    "later operation replaced its trees, and that operation's row is the one to "
+                                    "check); code lists what the trust rule refuses in it, which only a person can "
+                                    "trust (untrusted: the versions not trusted, code_more: packages not listed)")
         out["data_rule"] = DATA_RULE
     if g["status"] == "open":
         n = a.get("restore_points")
@@ -4203,7 +4206,8 @@ def _dep_review_public(r: dict) -> dict:
     """One row of a changeset's dependency review (depreview.rows) as get_changeset gives it: counts and the first
     few of each list, the texts as the review kept them (control characters out, cut)."""
     out = {k: r[k] for k in ("op", "action", "name", "state", "outcome", "op_id", "fetched_by", "pdk", "license",
-                             "size", "checked", "checked_by", "trust", "trust_drop", "review_error")
+                             "size", "size_total", "checked", "checked_by", "replaced_by", "trust", "untrusted",
+                             "untrusted_count", "trust_drop", "review_error")
            if r.get(k) is not None and r.get(k) != []}
     out["by"], out["reason"] = r.get("actor"), r.get("reason") or ""
     if r.get("packages"):
@@ -4223,6 +4227,8 @@ def _dep_review_public(r: dict) -> dict:
                         + [f"{x['path']}:{f.get('line')} {f.get('kind')}: {f.get('text')}"
                            for x in c.get("rtl") or [] for f in x.get("findings") or []][:DEP_ROWS]}
                        for c in r["code"][:DEP_ROWS]]
+    if (more := len(r.get("code") or []) - DEP_ROWS + (r.get("code_more") or 0)) > 0:
+        out["code_more"] = more             # packages whose code is not listed here: the trust note covers them too
     if r.get("needs"):
         out["needs"] = [{k: f.get(k) for k in ("url", "size", "license", "package", "version")}
                         for f in r["needs"][:DEP_ROWS]]

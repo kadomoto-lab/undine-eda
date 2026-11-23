@@ -217,34 +217,42 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
              size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
              cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
  used_by: [文], used_by_more?,                             変わった、または消えたセルを使うプロジェクトのセル
- license, size, size_from,                                 依存そのもののもの(needs_fetch の行は計画のもの)
+ license, size, size_from, size_total,                     依存そのもののもの(needs_fetch の行は計画の最初の取得の
+                                                           もの)。size_total はすべてのパッケージ(取得)の合計
  code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
          text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
-         findings: [{kind, line, text, path?}], findings_more?}]}] | null,
- trusted, trust, trust_drop: [キー],
- checked: true | false | null, checked_by?: {job, kind, lib?, cell?},
- needs?: [{url, rev, commit, subdir, size, license, package, version}],
+         findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
+ trusted, trust, untrusted?: [キー], untrusted_count?, trust_drop: [キー],
+ checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
+ needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
  recorded, review_error?}
 ```
 
-- `packages`、`used_by`、`code` は、操作が動いたときに**記録した**もの(効果の `review`。ファイルを書いて作業コピーにインストール
-  した後で `store/depreview.py` が書く)で、読むたびに計算し直しはしません。作業コピーのインストールは最後の操作に従い、閉じた
-  changeset の作業コピーはなくなりますが、証拠は記録を残すからです(マニフェストの `changes`)。`packages` は両方のツリーのストアの
-  記録を比べるので、ストアにどちらかの記録がなければ `changed` は `null` です。`cells` は新しいバージョンの `[renames]` を当てはめます。
-  `size` はインデックスの行のもの(`size_from: "index"`)、なければストアのファイルのバイト数(`"files"`)です。`code` は、追加または
-  移動したパッケージごとに、そのセルのすべてのコードブロックとすべての RTL ファイルを並べます([信頼](../design/packages.ja.md#security))。
-  拒否されるものが先です。`recorded: false` はレビューを記録する前の記録で、changeset が開いている間は今の作業コピーから作ります。
-- 上限があります: パッケージは 10 個まで、リストごとにファイル 20 個、パッケージごとにセル 30 個、`used_by` のセル 20 個、操作
+- `packages`、`used_by`、`code` は操作の**レビュー**(`store/depreview.py`)です。操作の直後に、サーバーのロックの外で、効果の
+  前後とストアから 1 回だけ作り(木はストアのオブジェクトから読む)、changeset の worktree の隣に置きます。閉じるときに証拠が
+  レビューを写す(マニフェストの `reviews`。各効果の前後のハッシュで引く)ので、閉じた changeset のレビューも同じに読めます。
+  `recorded: false` は、レビューがまだ置かれておらず(操作の直後にサーバーが止まった)、開いている changeset のこの読み出しが
+  作ったことを表します。`packages` は両方のツリーのストアの記録を比べるので、ストアにどちらかの記録がなければ `changed` は `null`
+  です。`cells` は新しいバージョンの `[renames]` を当てはめます。`license` はマニフェストのもの(`license_from: "manifest"`)、
+  なければ index の手元の写しのもの(`"index"`)、`size` はインデックスの行のもの(`size_from: "index"`)、なければストアのファイルの
+  バイト数(`"files"`)です。取得し直している index の写しは読みません(レビューは取得を待たない): ストアの大きさとマニフェストの
+  ライセンスにします。`code` は、追加または移動したパッケージごとに、そのセルのすべてのコードブロックとすべての RTL ファイルを
+  並べます([信頼](../design/packages.ja.md#security))。`refused` はジョブの信頼の規則が決めるとおりで(PDK のルートとネットリスタの
+  変数を渡すので、プロジェクトの PDK の下のモデルの include は拒否としない)、拒否されるコードのあるパッケージが先です。
+- 上限があります: パッケージは 10 個まで、コードのエントリ 10 個(`code_more`)、needs_fetch の行の取得 10 個、リストごとにファイル 20 個、パッケージごとにセル 30 個、`used_by` のセル 20 個、操作
   ごとに(そのパッケージ全体で)コードブロック 20 個と RTL ファイル 20 個、それぞれの指摘は 3 個まで。合計と `*_more` が残りを数えます。
   パッケージから来た文(パス、セル名、コード、指摘、ライセンス、バージョン、needs_fetch の URL)は、制御文字を空白にし、200 文字で
   切ります。ほかの人が書いたデータです。
-- `trusted`(`code` の各パッケージのもの、と行のもの: その全部)は今の本物のプロジェクトの `trusted` から読むので、操作の後に人が
-  信頼したバージョンは信頼済みと出ます。`trust` はそれを言葉で言います。`trust_drop` は、操作が作業コピーの `trusted` から外した
+- `trusted`(`code` の各パッケージのもの、と行のもの: 操作が持ち込んだすべてのパッケージ。`code` に挙がっていてもいなくても)は今の
+  本物のプロジェクトの `trusted` から読むので、操作の後に人が信頼したバージョンは信頼済みと出ます。`trust` はそれを言葉で言い、
+  `untrusted`(`untrusted_count`)は信頼していないバージョンを挙げます。`trust_drop` は、操作が作業コピーの `trusted` から外した
   キーです(更新は古いバージョンのものを外す)。
 - `checked` は、changeset の実行がパッケージを読むまで `false`(*未確認*)です。作業コピーのシミュレーション、LVS、DRC のうち、
   終わっていて、その証拠の `about.packages` が操作の持ち込んだツリーのどれかを挙げ、(開いている間は)まだ最新のものです。
-  `checked_by` がそれを示します。閉じた changeset では証拠が保存した実行を見ます。`null` は確かめるものがないこと(削除、PDK の
-  変更、ツリーを持ち込まなかった操作)です。
+  `checked_by` がそれを示します。数えるのは changeset がまだ持つツリー(最後の操作の lock)だけで、持ち込んだツリーを後の操作が
+  すべて置き換えた操作は `checked: null` と `replaced_by`(その操作の gseq)を持ち、確認したかはその操作の行が示します。閉じた
+  changeset では証拠が保存した実行を見ます。それ以外の `null` は確かめるものがないこと(削除、PDK の変更、ツリーを持ち込まなかった
+  操作)です。
 - `needs_fetch` の行は `needs`(URL、サイズ、ライセンス)を持ち、`code` はありません(まだ何も取得していない)。その Fetch は
   `pending_deps` のものです([取得を待つエージェントの操作](#an-agents-operation-waiting-for-a-fetch))。
 

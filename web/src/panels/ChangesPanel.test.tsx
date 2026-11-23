@@ -1040,6 +1040,14 @@ describe("the review of a dependency change", () => {
     expect(row.textContent).toContain(t("review:deps.codeMore", { count: 2 }));
   });
 
+  it("says the package listing is still being made, the warnings shown all the same", async () => {
+    await open({ ...rec, deps: [{ ...added, review_state: "pending", packages: [], code: [], untrusted: ["ip@1.0.0"], untrusted_count: 1 }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByTestId("dep-pending-review")).toBeTruthy();
+    expect(within(row).getByTestId("dep-unchecked")).toBeTruthy();
+    expect(within(row).getByTestId("dep-untrusted")).toBeTruthy();
+  });
+
   it("words the row in the reader's language", async () => {
     await setLocale("ja");
     try {

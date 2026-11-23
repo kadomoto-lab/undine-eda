@@ -646,12 +646,17 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   and RTL files (see [Security](#security)).
   *Implemented (phase 4, store/depreview.py; Changesets.get's `deps`; the review's Dependencies section,
   web/src/panels/DepReview.tsx):* each dependency operation's review is made once it is recorded, after its guard let
-  the changesets' and the server's locks go (`Changesets._review_records`; it never holds them, nor waits for an
-  index refresh: an index copy being refreshed is not read, and the store's size and the manifest's licence stand), and
-  is kept beside the changeset's worktrees (`reviews/<fingerprint>.json`, the fingerprint a hash of the effect's
-  before and after), out of the project's repository; the evidence copies them at closure (the manifest's `reviews`),
-  and a review not kept yet (a server stopped right after the operation) is made at the next read of the open
-  changeset. It is made from the effect and the store, so it describes the operation whatever ran since: the trees of
+  the changesets' and the server's locks go (`Changesets._review_records`; no review is ever made while a thread holds
+  them, so a read under them, restore's or verify's answer, shows it `pending`; and it never waits for an index
+  refresh: it reads an index copy only under a non-blocking shared lock held across the read, else the store's size
+  and the manifest's licence stand), and is kept beside the changeset's worktrees, one file per operation
+  (`reviews/<gseq>-<effect>.json` with a hash of the effect's before and after and the PDK its code listing was made
+  for), out of the project's repository. Two operations with the same files before and after keep a review each, of
+  its own time. A review made for another PDK than the working copy's now has its code listing made again (what the
+  trust rule refuses depends on the PDK); one that could not be made is not kept, and is tried again at a later read
+  (at most every ten seconds); one not kept yet (a server stopped right after the operation) is made at the next read
+  of the open changeset. Before a closure takes its locks every review is made for the PDK then, and the evidence
+  copies them (the manifest's `reviews`); one still missing is archived as failed. It is made from the effect and the store, so it describes the operation whatever ran since: the trees of
   the lock entries whose content changed are linked from the store's objects into a temporary directory and read
   there. Per such entry (`packages`): its package, local names, version and commit before and after, its tree hash
   after, the licence (the manifest's, else the local copy of its index) with its licence files, the size (the index
@@ -659,20 +664,22 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   and, for an update, per cell added, removed, renamed (the new version's `[renames]` for the versions crossed) or
   changed with the views that changed, and whether it is exported; the project's cells that place a changed or
   removed cell (`used_by`, deps._used_by's rule, a layout read only when a layout cell of the package changed); per
-  package added or moved its key (`keys`, all of them) and every code block and RTL file (`trust.listing` with the PDK
-  root and the netlister's variables, exactly as a job's trust rule takes them, so a model include under the PDK is
-  not refused), packages with refused code first. Bounded (10 packages, 10 code entries with `code_more` for the
-  rest, 200 keys, 20 files per list, 30 cells, 20 `used_by`, 20 code blocks and 20 RTL files per operation with 3
+  package added or moved that has a code block or an RTL file, every code block and RTL file (`trust.listing` with
+  the PDK root and the netlister's variables, exactly as a job's trust rule takes them, so a model include under the
+  PDK is not refused), packages with refused code first. Bounded (10 packages, 10 code entries with `code_more` for
+  the packages with code not listed, 20 files per list, 30 cells, 20 `used_by`, 20 code blocks and 20 RTL files per operation with 3
   findings each; counts for the rest), and every text from a package has its control characters made spaces and is
   cut at 200 characters (`depreview.data`, as a notice's `_cut`): it is shown to people and read by agents. A review
   that cannot be made is said (`error`), never failing the operation.
   `GET .../changesets/{id}` gives `deps`, a row per dependency operation in effect, open or closed: its state
   (`installed`, `needs_fetch`, `cancelled`; `outcome` superseded or dropped; a proposal a fetch installed is the
   installing record's row, with `op_id` and `fetched_by`), `project` and `lock` (`depmerge.diff` of the effect's
-  before and after), the review, the total size (`size_total`), `trusted` over every key the operation brought, listed
-  in `code` or not (`untrusted` names those the real project does not trust now), `trust_drop` (the keys the
+  before and after), the review (`review_state`: stored, made, pending or failed), the total size (`size_total`),
+  `trusted` over every version the operation brought, read from its lock whatever the review holds (`untrusted` names
+  the first ten the real project does not trust now, `untrusted_count` counts them all), `trust_drop` (the keys the
   operation took out of the working copy's `trusted`), and `checked`: false (*unchecked*) until a run of the changeset
-  read the package, that is a done simulation, LVS or DRC of the working copy whose `about.packages` names a tree the
+  read the package (the trees taken from the effect's lock, so a row whose review is missing or failed is never
+  shown safer), that is a done simulation, LVS or DRC of the working copy whose `about.packages` names a tree the
   operation brought that the changeset still has (the last operation's lock) and (open) still fresh; an operation
   whose trees a later one replaced all of is `replaced_by` that one (checked null: there is nothing left of it to
   check); a closed changeset looks at the runs its evidence archived. A needs_fetch row has its plan's URLs, sizes and

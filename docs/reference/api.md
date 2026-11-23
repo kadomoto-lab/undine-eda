@@ -232,15 +232,18 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
  trusted, trust, untrusted?: [key], untrusted_count?, trust_drop: [key],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
- recorded, review_error?}
+ recorded, review_state: stored | made | pending | failed, review_error?}
 ```
 
-- `packages`, `used_by` and `code` are the operation's **review** (`store/depreview.py`), made once, right after the
+- `packages`, `used_by` and `code` are the operation's **review** (`store/depreview.py`), made right after the
   operation and outside the server's locks, from the effect's before and after and the store (the trees read from the
-  store's objects), and kept beside the changeset's worktrees; the evidence copies the reviews at closure (the
-  manifest's `reviews`, by a hash of each effect's before and after), so a closed changeset's review reads the same.
-  `recorded: false`: the review was not kept yet (the server stopped right after the operation) and this read of the
-  open changeset made it. `packages` compares the store's records of both trees, so its `changed` is `null` when the
+  store's objects), and kept beside the changeset's worktrees, one per operation, with the PDK its code listing was
+  made for; the evidence copies the reviews at closure (the manifest's `reviews`, by `<gseq>-<effect index>`), so a
+  closed changeset's review reads the same. `review_state`: `stored` (kept), `made` (this read made it: it was not
+  kept yet, or was made for another PDK than the working copy's now, whose code listing is made again), `pending`
+  (this read was made under a lock no review is made under: a restore's or a verify's answer) or `failed` (it could
+  not be made: `review_error`; not kept, tried again at a later read, and archived as failed at closure);
+  `recorded` is `review_state == "stored"`. `packages` compares the store's records of both trees, so its `changed` is `null` when the
   store has no record of a side; `cells` applies the new version's `[renames]`; `license` is the manifest's
   (`license_from: "manifest"`), else the local copy of the index's (`"index"`); `size` is the index line's
   (`size_from: "index"`) else the bytes of the files in the store (`"files"`). An index copy being refreshed is not
@@ -248,14 +251,16 @@ adopting a dependency change. A proposal a person's fetch installed is the row o
   package added or moved, every code block of its cells and every RTL file ([trust](../design/packages.md#security))
   with `refused` exactly as a job's trust rule decides it (the PDK root and the netlister's variables given, so a
   model include under the project's PDK is not refused), packages with refused code first.
-- Bounded: at most 10 packages, 10 code entries (`code_more`), 20 files per list, 30 cells per package, 20 cells in
+- Bounded: at most 10 packages, 10 code entries (a package with no code block and no RTL file is none; `code_more`
+  counts the packages with code not listed), 20 files per list, 30 cells per package, 20 cells in
   `used_by`, 20 code blocks and 20 RTL files per operation (over its packages) with 3 findings each, 10 fetches of a
   needs_fetch row; the totals and `*_more` count the rest. Every text
   from a package (paths, cell names, code, findings, licences, versions, a needs_fetch URL) has its control characters
   made spaces and is cut (200 characters): it is data written by others.
-- `trusted` (each package's in `code`, and the row's: every package the operation brought, listed in `code` or not)
-  is read from the real project's `trusted` now, so a version a person trusts after the operation shows as trusted;
-  `trust` says it in words, and `untrusted` (`untrusted_count`) names the versions not trusted. `trust_drop` lists the keys
+- `trusted` (each package's in `code`, and the row's: every version the operation brought, from its lock, whatever the
+  review holds) is read from the real project's `trusted` now, so a version a person trusts after the operation shows
+  as trusted; `trust` says it in words, `untrusted` names the first 10 versions not trusted and `untrusted_count` counts
+  them all. `trust_drop` lists the keys
   the operation took out of the working copy's `trusted` (an update drops the old version's).
 - `checked` is `false` (*unchecked*) until a run of the changeset read the package: a simulation, an LVS or a DRC of
   the working copy, done, whose evidence names one of the trees the operation brought in its `about.packages`, and

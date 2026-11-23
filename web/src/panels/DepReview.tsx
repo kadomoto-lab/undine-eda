@@ -141,6 +141,7 @@ function DepRow({ r, pending, onFetch, busy }: { r: DepReviewRow; pending?: Pend
       )}
       {r.reason && <div className="opreason">“{r.reason}” <span className="dim">— {r.actor}{r.fetched_by ? ` · ${t("review:deps.fetchedBy", { who: r.fetched_by })}` : ""}</span></div>}
       {r.review_error && <div className="small warn">{r.review_error}</div>}
+      {r.review_state === "pending" && <div className="small dim" data-testid="dep-pending-review">{t("review:deps.reviewPending")}</div>}
       {r.state === "needs_fetch" && (
         <div className="row">
           <div className="grow">

@@ -225,27 +225,30 @@ busy です(409 の `busy`)。同じ依存への後の操作は待ちの操作�
  trusted, trust, untrusted?: [キー], untrusted_count?, trust_drop: [キー],
  checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
  needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
- recorded, review_error?}
+ recorded, review_state: stored | made | pending | failed, review_error?}
 ```
 
 - `packages`、`used_by`、`code` は操作の**レビュー**(`store/depreview.py`)です。操作の直後に、サーバーのロックの外で、効果の
-  前後とストアから 1 回だけ作り(木はストアのオブジェクトから読む)、changeset の worktree の隣に置きます。閉じるときに証拠が
-  レビューを写す(マニフェストの `reviews`。各効果の前後のハッシュで引く)ので、閉じた changeset のレビューも同じに読めます。
-  `recorded: false` は、レビューがまだ置かれておらず(操作の直後にサーバーが止まった)、開いている changeset のこの読み出しが
-  作ったことを表します。`packages` は両方のツリーのストアの記録を比べるので、ストアにどちらかの記録がなければ `changed` は `null`
+  前後とストアから作り(木はストアのオブジェクトから読む)、changeset の worktree の隣に、操作ごとに、コードの一覧を作ったときの PDK
+  とともに置きます。閉じるときに証拠がレビューを写す(マニフェストの `reviews`。`<gseq>-<効果の番号>` で引く)ので、閉じた changeset
+  のレビューも同じに読めます。`review_state` は `stored`(置いてある)、`made`(この読み出しが作った: まだ置かれていなかった、または
+  今の作業コピーと違う PDK で作ったもので、コードの一覧を作り直した)、`pending`(レビューを作らないロックのもとでの読み出し: restore や
+  verify の答え)、`failed`(作れなかった: `review_error`。置かず、後の読み出しでもう一度試し、閉じるときは失敗として保存する)です。
+  `recorded` は `review_state == "stored"` です。`packages` は両方のツリーのストアの記録を比べるので、ストアにどちらかの記録がなければ `changed` は `null`
   です。`cells` は新しいバージョンの `[renames]` を当てはめます。`license` はマニフェストのもの(`license_from: "manifest"`)、
   なければ index の手元の写しのもの(`"index"`)、`size` はインデックスの行のもの(`size_from: "index"`)、なければストアのファイルの
   バイト数(`"files"`)です。取得し直している index の写しは読みません(レビューは取得を待たない): ストアの大きさとマニフェストの
   ライセンスにします。`code` は、追加または移動したパッケージごとに、そのセルのすべてのコードブロックとすべての RTL ファイルを
   並べます([信頼](../design/packages.ja.md#security))。`refused` はジョブの信頼の規則が決めるとおりで(PDK のルートとネットリスタの
   変数を渡すので、プロジェクトの PDK の下のモデルの include は拒否としない)、拒否されるコードのあるパッケージが先です。
-- 上限があります: パッケージは 10 個まで、コードのエントリ 10 個(`code_more`)、needs_fetch の行の取得 10 個、リストごとにファイル 20 個、パッケージごとにセル 30 個、`used_by` のセル 20 個、操作
+- 上限があります: パッケージは 10 個まで、コードのエントリ 10 個(コードブロックも RTL ファイルもないパッケージはエントリに
+  ならず、`code_more` は一覧にないコードのあるパッケージの数)、needs_fetch の行の取得 10 個、リストごとにファイル 20 個、パッケージごとにセル 30 個、`used_by` のセル 20 個、操作
   ごとに(そのパッケージ全体で)コードブロック 20 個と RTL ファイル 20 個、それぞれの指摘は 3 個まで。合計と `*_more` が残りを数えます。
   パッケージから来た文(パス、セル名、コード、指摘、ライセンス、バージョン、needs_fetch の URL)は、制御文字を空白にし、200 文字で
   切ります。ほかの人が書いたデータです。
-- `trusted`(`code` の各パッケージのもの、と行のもの: 操作が持ち込んだすべてのパッケージ。`code` に挙がっていてもいなくても)は今の
+- `trusted`(`code` の各パッケージのもの、と行のもの: 操作が持ち込んだすべてのバージョン。レビューの中身によらず lock から読む)は今の
   本物のプロジェクトの `trusted` から読むので、操作の後に人が信頼したバージョンは信頼済みと出ます。`trust` はそれを言葉で言い、
-  `untrusted`(`untrusted_count`)は信頼していないバージョンを挙げます。`trust_drop` は、操作が作業コピーの `trusted` から外した
+  `untrusted` は信頼していない最初の 10 バージョンを挙げ、`untrusted_count` はその全部を数えます。`trust_drop` は、操作が作業コピーの `trusted` から外した
   キーです(更新は古いバージョンのものを外す)。
 - `checked` は、changeset の実行がパッケージを読むまで `false`(*未確認*)です。作業コピーのシミュレーション、LVS、DRC のうち、
   終わっていて、その証拠の `about.packages` が操作の持ち込んだツリーのどれかを挙げ、(開いている間は)まだ最新のものです。

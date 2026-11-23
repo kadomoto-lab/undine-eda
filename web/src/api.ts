@@ -626,6 +626,7 @@ export interface DepReviewRow {
   needs_more?: number;
   needs?: Pick<FetchRow, "url" | "rev" | "commit" | "subdir" | "size" | "license" | "package" | "version">[];
   recorded?: boolean; review_error?: string;
+  review_state?: "stored" | "made" | "pending" | "failed";   // pending: not made yet (a moment), its warnings shown
 }
 /** An agent's dependency operation recorded as needing a fetch (docs/design/packages.md, Changesets and evidence):
  * nothing fetched or installed until a person fetches it from the review; `plan` is what the Fetch dialog shows. */

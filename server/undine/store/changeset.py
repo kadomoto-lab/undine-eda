@@ -137,7 +137,7 @@ from contextlib import ExitStack, contextmanager
 from functools import wraps
 from pathlib import Path
 
-from undine.store import cas, deps, oplog, provenance
+from undine.store import cas, depreview, deps, oplog, provenance
 from undine.layouts import layout, layoutstore
 from undine.server import live
 from undine.schematics import netlist, symbolsync, xschem
@@ -218,6 +218,17 @@ _DEP_OPS = {"add": ("dep_add", "add"), "update": ("dep_update", "mod"), "remove"
 _DEP_KEYS = ("name", "git", "rev", "subdir", "package", "version", "index")
 REPLAY_RETRY_S = 3.0          # how long a person's fetch retries while another writer holds the changeset's lease
 NOTICES_GIVEN = 5             # notices one answer gives an agent at most (the rest: the next wait_for)
+REVIEW_RETRY_S = 10.0         # a dependency review that could not be made is tried again after this, at a read
+# the dependency reviews that could not be made: (when last tried, the answer) by (shadow root, gseq-index). Here, not
+# on a Changesets (the agent tools, MCP and some routes make one per access), so the retry wait holds for every reader
+_REVIEW_FAILED: dict[tuple, tuple[float, dict]] = {}
+_REVIEW_FAILED_LOCK = threading.Lock()
+REVIEW_CLOSURE_TRIES = 3      # a closure that finds reviews not made yet lets its locks go, makes them, and tries again
+
+
+class _ReviewsMissing(Exception):
+    """A closure found, under its locks, dependency reviews not made yet (an operation committed after its prepare):
+    nothing was changed; the caller makes them outside the locks and runs the closure again."""
 OLD_FORM = ("changeset {cid} is a copy made before changesets were git branches: it can be reviewed and discarded; "
             "to apply it, open the proposal again as a new changeset")
 
@@ -787,6 +798,7 @@ class _DepGuard:
             if self.depth == 0 and et is None:
                 after = _dep_files(self.path)
                 if after != self.before or self._replaying:
+                    # what the review shows of it is made after the guard, outside the locks (Changesets._reviews)
                     e = {"k": "d", "do": self.do, "name": self.name, "before": self.before, "after": after,
                          "state": "installed"}
                     if self.op == "pdk_set":
@@ -1232,15 +1244,17 @@ class Changesets:
     def discard(self, project: str, cid: str, actor: str = "user") -> dict:
         """Closes the changeset without merging it: its evidence archived, its branch kept (_close_git); the record's
         "discarded" = {"t", "by"}. Seen as it waits and runs (_closing)."""
-        with self._closing(project, cid, "discard", actor):
-            return self._discard(project, cid, actor)
+        with self._closing(project, cid, "discard", actor):     # the reviews the evidence keeps made outside the locks
+            return self._closing_with_reviews(project, cid, lambda last: self._discard(project, cid, actor, last))
 
     @_serialized
-    def _discard(self, project: str, cid: str, actor: str) -> dict:
+    def _discard(self, project: str, cid: str, actor: str, last: bool = True) -> dict:
         meta = self._load(project, cid)
         self._check_open(meta)
         self._check_writer(cid)
         self._check_merging(project, cid)
+        if not last and meta.get("git") and self._missing_reviews(project, meta):
+            raise _ReviewsMissing(cid)
         progress = self._progress(cid)
         with _busy(self._shadow_root(project, cid)):
             progress.phase("committing")
@@ -1418,6 +1432,8 @@ class Changesets:
         captured = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         manifest = {"version": EVIDENCE if meta.get("git") else 1, "changeset": meta["id"], "captured": captured,
                     "changes": self.changes(project, meta), "verify": self.verify_status(project, meta), "jobs": []}
+        # the reviews of its dependency operations, by fingerprint (depreview): its working copy goes with the closure
+        manifest["reviews"] = self._reviews(project, meta, manifest["changes"])
         if meta.get("git"):
             manifest["commits"] = {"base": meta["git"]["base"], "tip": self._branch_tip(project, meta)}
         parent = self._dir(project) / meta["id"]
@@ -2273,6 +2289,7 @@ class Changesets:
             with guard:
                 pass
         self.srv.deps_changed(meta["preview"])         # packages it moved under names already open
+        self._review_records(project, cid, guard.records)
         return {"changeset": cid, "op": guard.public(), "result": result,
                 **({"superseded": guard.superseded} if guard.superseded else {})}
 
@@ -2287,6 +2304,7 @@ class Changesets:
         with guard:
             move = prj.set_pdk(spec, prepared)
         self._forget(project, cid)
+        self._review_records(project, cid, guard.records)
         old, new = move
         return {"changeset": cid, "op": guard.public(), "old": old, "new": new, "created": move.created}
 
@@ -2320,7 +2338,8 @@ class Changesets:
                       plan: dict) -> dict:
         """Appends the pending operation to the working copy's project log, under the changesets' lock and the
         server's with the changeset checked again (as _DepGuard): {op, args, actor, reason, changeset, cell: null,
-        view: null, plan, effects: [{k: "d", do, name, state: "needs_fetch", op_id, action, needs, owner}]}; `plan`
+        view: null, plan, effects: [{k: "d", do, name, package, git?, subdir?, state: "needs_fetch", op_id, action, needs,
+        owner}]}; `plan`
         the NeedsFetch plan with the project and the request a person's confirmation takes ({op, ...args,
         changeset, op_id, reason}); `owner` a hash of the write lease's owner (live.writer), so a person's fetch can
         install while the proposing agent still holds the lease (replay_pending). Nothing else is written."""
@@ -2330,7 +2349,17 @@ class Changesets:
         request = {"op": action, **{k: clean[k] for k in _DEP_KEYS if k in clean}, "changeset": cid, "op_id": op_id,
                    **({"reason": reason} if reason else {})}
         needs = [dict(f) for f in plan.get("fetches") or []]
-        e = {"k": "d", "do": do, "name": clean.get("name"), "state": "needs_fetch", "op_id": op_id, "action": action,
+        # the package the dependency stands for (an update or a removal names only its local name)
+        try:
+            spec = self.srv.project(self._load(project, cid)["preview"]).library_specs().get(clean.get("name"))
+        except Exception:
+            spec = None
+        package = clean.get("package") or (spec.get("package") if isinstance(spec, dict) else None) or clean.get("name")
+        git = clean.get("git") or (spec.get("git") if isinstance(spec, dict) else None)
+        subdir = clean.get("subdir") or (spec.get("subdir") if isinstance(spec, dict) else None)
+        e = {"k": "d", "do": do, "name": clean.get("name"), "package": package,
+             **({"git": git} if isinstance(git, str) else {}), **({"subdir": subdir} if isinstance(subdir, str) else {}),
+             "state": "needs_fetch", "op_id": op_id, "action": action,
              "needs": needs, "owner": _owner_hash(live.writer())}
         srv = self.srv
         with srv.changeset_lock, srv.lock:
@@ -2706,8 +2735,8 @@ class Changesets:
             if recs:
                 out.append({"lib": lib, "ops": self.link_causes([{k: r.get(k) for k in
                                                  ("seq", "gseq", "opid", "op", "args", "cell", "view", "actor", "reason", "t", "effects",
-                                                  *_SYMBOL_GROUP_FIELDS)
-                                                 if k not in _SYMBOL_GROUP_FIELDS or k in r}
+                                                  *_SYMBOL_GROUP_FIELDS, "fetched_by")
+                                                 if k not in (*_SYMBOL_GROUP_FIELDS, "fetched_by") or k in r}
                                                 for r in recs])})
         return out
 
@@ -2723,7 +2752,7 @@ class Changesets:
         """The record with the changes, the checks, the writer and the activity; "retained": the working copy of a
         closed changeset is still there (a closure kept it: its preview can be opened); "closing": how far its
         closure is while one runs here (live.Closings.public); a closed one's "evidence" with its "size" now
-        (_evidence_size)."""
+        (_evidence_size); "deps": the review of its dependency operations, open or closed (_dep_review)."""
         meta = self._load(project, cid)
         git = {"git": self._git_info(project, meta)} if meta.get("git") else {}
         meta["retained"] = meta["status"] != "open" and self._resolves(meta["preview"])
@@ -2733,8 +2762,11 @@ class Changesets:
             archive = self._dir(project) / cid / "evidence" / "manifest.json"
             manifest = json.loads(archive.read_text())
             evidence = {**meta["evidence"], "size": _evidence_size(archive.parent)}
-            return {**meta, **git, "evidence": evidence, "changes": _never_fetched(manifest["changes"]),
-                    "verify": manifest["verify"]}
+            changes = _never_fetched(manifest["changes"])
+            return {**meta, **git, "evidence": evidence, "changes": changes, "verify": manifest["verify"],
+                    "deps": self._dep_review(project, meta, changes,
+                                             depreview.Checks(self.srv, evidence=archive.parent, manifest=manifest),
+                                             archived=manifest.get("reviews") or {})}
         meta["changes"] = self.changes(project, meta) if meta["status"] == "open" else self._applied_changes(project, meta)
         meta["verify"] = self.verify_status(project, meta)
         le = self.srv.leases.get(cid) if meta["status"] == "open" else None
@@ -2744,7 +2776,219 @@ class Changesets:
             # agents' dependency operations waiting for a person's fetch: the review's Fetch replays each
             meta["pending_deps"] = [{k: v for k, v in x.items() if k not in ("owner", "sha")}
                                     for x in self.pending_ops(meta)]
+        meta["deps"] = self._dep_review(project, meta, meta["changes"], depreview.Checks(self.srv, work=meta["preview"])
+                                        if meta["status"] == "open" else None)
         return {**meta, **git}
+
+    # ------------------------------------------------------------------ the review of the dependency operations
+    #
+    # Each installed dependency effect of an open changeset has its review (depreview.record) in the changeset's
+    # shadow root, reviews/<gseq>-<effect index>.json: {fingerprint (of the effect's before and after: a check that the
+    # file is that effect's), pdk (the PDK its code listing was made for), review}. One file per effect, so two
+    # operations with the same files before and after (an update back and forth) each keep the review of their own
+    # time (used_by is read from the working copy's cells then). A review is never made while this thread holds the
+    # changesets' lock or the server's (a read made under them, restore's or verify's, shows it pending); one that
+    # could not be made is not kept (the next read tries again, at most every REVIEW_RETRY_S seconds); one made for
+    # another PDK than the working copy's now has its code listing made again (what the trust rule refuses depends on
+    # the PDK). The evidence copies them at closure (the manifest's `reviews`), made before the closure takes its locks
+    # (_prepare_reviews); one still missing then is archived as failed.
+
+    def _review_dir(self, project: str, cid: str) -> Path:
+        return self._shadow_root(project, cid) / "reviews"
+
+    @staticmethod
+    def _review_key(op: dict, i: int) -> str:
+        return f"{op.get('gseq')}-{i}"
+
+    def _locked(self) -> bool:
+        """Whether this thread holds the changesets' lock or the server's: no review is made then."""
+        return any(getattr(lk, "_is_owned", lambda: False)() for lk in (self.srv.changeset_lock, self.srv.lock))
+
+    def _pdk_of(self, project: str, cid: str) -> str | None:
+        try:
+            pdk = self.srv.project(f"{project}~{cid}").pdk
+        except (KeyError, ValueError):
+            return None
+        return pdk.id if pdk else None
+
+    def _stored_review(self, project: str, cid: str, op: dict, i: int, e: dict) -> dict | None:
+        """The kept file {fingerprint, pdk, review} of effect `i` of record `op`, when it is that effect's."""
+        try:
+            v = json.loads((self._review_dir(project, cid) / f"{self._review_key(op, i)}.json").read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(v, dict) or v.get("fingerprint") != depreview.fingerprint(e) \
+                or not isinstance(v.get("review"), dict):
+            return None
+        return v
+
+    def _model(self, prj) -> tuple[list, dict]:
+        """The PDK root and the netlister's variables, as a job's trust rule takes them (trust.check_netlist)."""
+        pdk = prj.pdk
+        return ([pdk.root] if pdk else []), (self.srv.model_env(prj) if hasattr(self.srv, "model_env") else {})
+
+    def _build_review(self, project: str, cid: str, op: dict, i: int, e: dict, kept: dict | None = None,
+                      force: bool = False) -> dict | None:
+        """The review of effect `i` of record `op` of the open changeset `cid`, made now and kept: in full
+        (depreview.record), or, `kept` being one made for another PDK, its code listing again for the working copy's
+        PDK (depreview.code_listing; the rest stays as made at its time). None while this thread holds a lock no
+        review is made under. A review that could not be made ({"error"}) is returned, not kept, and not tried again
+        for REVIEW_RETRY_S, unless `force` (a closure's: its evidence keeps what it gets)."""
+        if self._locked():
+            return None
+        key = (str(self._shadow_root(project, cid)), self._review_key(op, i))
+        with _REVIEW_FAILED_LOCK:
+            failed = _REVIEW_FAILED.get(key)
+        if failed is not None and not force and time.time() - failed[0] < REVIEW_RETRY_S:
+            return failed[1]
+        try:
+            prj = self.srv.project(f"{project}~{cid}")
+        except (KeyError, ValueError):
+            return None
+        allowed, env = self._model(prj)
+        pdk = prj.pdk.id if prj.pdk else None
+        if kept is not None:
+            try:
+                review = {**kept["review"], **{k: None for k in ("code", "code_more")},
+                          **depreview.code_listing(prj, e.get("before") or {}, e.get("after") or {}, allowed, env)}
+                review = {k: v for k, v in review.items() if v is not None or k == "code"}
+            except Exception as err:
+                review = {"error": depreview.data(f"the review's code listing could not be made: {err}", 400)}
+        else:
+            review = depreview.record(prj, e.get("before") or {}, e.get("after") or {}, allowed=allowed, env=env,
+                                      name=e.get("name"))
+        with _REVIEW_FAILED_LOCK:
+            if review.get("error"):
+                _REVIEW_FAILED[key] = (time.time(), review)
+            else:
+                _REVIEW_FAILED.pop(key, None)
+        if review.get("error"):
+            return review
+        d = self._review_dir(project, cid)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            tmp = d / f".{self._review_key(op, i)}.{uuid.uuid4().hex[:8]}"
+            tmp.write_text(json.dumps({"fingerprint": depreview.fingerprint(e), "pdk": pdk, "review": review}))
+            tmp.replace(d / f"{self._review_key(op, i)}.json")
+        except OSError:
+            pass
+        return review
+
+    def _review_now(self, project: str, cid: str, op: dict, i: int, e: dict,
+                    force: bool = False) -> tuple[dict | None, str]:
+        """(review, state) of an installed dependency effect of an open changeset, for the PDK it has now: "stored",
+        "made" (by this call), "pending" (not made: a lock is held) or "failed"."""
+        kept = self._stored_review(project, cid, op, i, e)
+        if kept is not None and kept.get("pdk") == self._pdk_of(project, cid):
+            return kept["review"], "stored"
+        r = self._build_review(project, cid, op, i, e, kept, force=force)
+        if r is None:                        # not made under a lock: a review for another PDK is not shown as this one
+            return None, "pending"
+        return r, "failed" if r.get("error") else "made"
+
+    def _installed_effects(self, changes: list[dict]):
+        for lc in changes:
+            if lc.get("lib") == PROJECT_LOG:
+                for op in lc.get("ops") or []:
+                    for i, e in enumerate(op.get("effects") or []):
+                        if e.get("k") == "d" and e.get("state") == "installed":
+                            yield op, i, e
+
+    def _review_records(self, project: str, cid: str, records: list[dict]) -> None:
+        """The reviews of the records a dependency operation just appended, made after its guard let the locks go."""
+        for rec in records:
+            for i, e in enumerate(rec.get("effects") or []):
+                if e.get("k") == "d" and e.get("state") == "installed":
+                    try:
+                        self._build_review(project, cid, rec, i, e)
+                    except Exception:                  # information: the operation stands; a read makes it again
+                        pass
+
+    def _prepare_reviews(self, project: str, cid: str) -> None:
+        """Every review of an open changeset made and kept for its PDK now, before a closure takes the locks under
+        which none is made (the evidence copies them)."""
+        try:
+            meta = self._load(project, cid)
+            if meta["status"] != "open" or not meta.get("git"):
+                return
+            for op, i, e in self._installed_effects(self.changes(project, meta)):
+                self._review_now(project, cid, op, i, e, force=True)    # a failure tried once more, now
+        except Exception:
+            pass
+
+    def _missing_reviews(self, project: str, meta: dict) -> bool:
+        """Whether an installed dependency effect of the open changeset has no review kept for its PDK now (read only:
+        under a closure's locks)."""
+        pdk = self._pdk_of(project, meta["id"])
+        for op, i, e in self._installed_effects(self.changes(project, meta)):
+            kept = self._stored_review(project, meta["id"], op, i, e)
+            if kept is None or kept.get("pdk") != pdk:
+                return True
+        return False
+
+    def _closing_with_reviews(self, project: str, cid: str, run):
+        """run() (an apply's or a discard's serialized part, `tries` its attempt), the reviews its evidence keeps made
+        before it takes its locks: when it still finds some missing under them (an operation committed meanwhile, its
+        review not made yet) it changes nothing and raises _ReviewsMissing, and they are made again outside the
+        locks; on the last try what is still missing is archived as failed, with why."""
+        for attempt in range(REVIEW_CLOSURE_TRIES):
+            self._prepare_reviews(project, cid)
+            try:
+                return run(attempt == REVIEW_CLOSURE_TRIES - 1)
+            except _ReviewsMissing:
+                continue
+        raise AssertionError("unreachable")
+
+    def _reviews(self, project: str, meta: dict, changes: list[dict]) -> dict[str, dict]:
+        """{gseq-index: review} of the installed dependency effects in `changes`, as kept (the archive's copy, under
+        the closure's locks: nothing is made here); one not kept for the PDK now is archived as failed."""
+        out: dict[str, dict] = {}
+        pdk = self._pdk_of(project, meta["id"])
+        for op, i, e in self._installed_effects(changes):
+            kept = self._stored_review(project, meta["id"], op, i, e)
+            if kept is not None and kept.get("pdk") == pdk:
+                out[self._review_key(op, i)] = kept["review"]
+                continue
+            with _REVIEW_FAILED_LOCK:
+                failed = _REVIEW_FAILED.get((str(self._shadow_root(project, meta["id"])), self._review_key(op, i)))
+            why = failed[1].get("error") if failed is not None else None
+            out[self._review_key(op, i)] = {"error": why or "the review was not made before the changeset closed",
+                                            "failed": True}
+        return out
+
+    def _dep_review(self, project: str, meta: dict, changes: list[dict], checks: "depreview.Checks | None",
+                    archived: dict | None = None) -> list[dict]:
+        """The review of the changeset's dependency operations (depreview.rows): one row per operation of its project
+        log still in effect, with the semantic diffs of project.json and undine.lock, its review (open: kept, or made
+        now outside the locks; closed: the evidence's copy, `archived`), whether the real project trusts the packages
+        now and whether a run in the changeset checked them."""
+        from undine.store import trust
+        ops = next((lc["ops"] for lc in changes if lc.get("lib") == PROJECT_LOG), [])
+        if not ops:
+            return []
+        try:
+            trusted = trust.trusted_keys(self.srv.project(project).path)
+        except (KeyError, ValueError, OSError):
+            trusted = set()
+        cid, is_open = meta["id"], meta["status"] == "open"
+
+        def review_of(op: dict, i: int, e: dict) -> tuple[dict | None, str]:
+            if archived is not None:
+                r = archived.get(self._review_key(op, i))
+                return (r, "failed" if r.get("error") else "stored") if r is not None else (None, "failed")
+            if is_open:
+                return self._review_now(project, cid, op, i, e)
+            return None, "failed"
+        work_lock = work_project = None
+        if is_open:                          # the working copy's lock and project.json: a dependency's package
+            try:
+                d = self.srv.project(meta["preview"]).path
+                work_lock = deps.read_lock(d)
+                work_project = json.loads((d / "project.json").read_text())
+            except Exception:
+                pass
+        return depreview.rows(ops, trusted, checks, review_of, is_open=is_open, work_lock=work_lock,
+                              work_project=work_project)
 
     def _applied_changes(self, project: str, meta: dict) -> list[dict]:
         """The operations of a changeset closed without evidence (older ones), from the project's log: on git, the net
@@ -3064,17 +3308,19 @@ class Changesets:
         working copy committed (the tip), the evidence archived, then the merge of the archived tip (what was
         reviewed). A conflict: MergeConflict, nothing written, the changeset still open. An older copy is refused
         (OLD_FORM). Seen as it waits and runs (_closing): committing, evidence, merging, cleanup."""
-        with self._closing(project, cid, "apply", actor):
-            return self._apply(project, cid, actor)
+        with self._closing(project, cid, "apply", actor):       # the reviews the evidence keeps made outside the locks
+            return self._closing_with_reviews(project, cid, lambda last: self._apply(project, cid, actor, last))
 
     @_serialized
-    def _apply(self, project: str, cid: str, actor: str) -> dict:
+    def _apply(self, project: str, cid: str, actor: str, last: bool = True) -> dict:
         meta = self._load(project, cid)
         self._check_open(meta)
         if not meta.get("git"):
             raise ChangesetError(OLD_FORM.format(cid=cid))
         self._check_writer(cid)
         self._check_merging(project, cid)
+        if not last and self._missing_reviews(project, meta):
+            raise _ReviewsMissing(cid)               # nothing changed: made outside the locks, then again
         progress = self._progress(cid)
         with _busy(self._shadow_root(project, cid)):
             progress.phase("committing")

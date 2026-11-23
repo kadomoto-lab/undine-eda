@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, type ChangeOp, type ChangesetInfo, type GitDiff } from "../api";
+import { api, ApiError, type ChangeOp, type ChangesetInfo, type DepReviewRow, type GitDiff } from "../api";
 import { DialogHost } from "../dialog";
 import { msg, setLocale, t } from "../i18n";
 import { ChangesPanel, summaryLine } from "./ChangesPanel";
@@ -913,5 +913,208 @@ describe("an agent's dependency waiting for a fetch", () => {
     await open(cs);
     expect(screen.queryByTestId("pending-dep")).toBeNull();
     expect(screen.queryByText(t("review:pending.title"))).toBeNull();
+  });
+});
+
+describe("the review of a dependency change", () => {
+  const lock = { kind: "lock" as const, changes: [{ do: "add" as const, id: "lock:library:ip", what: "locked library ip", before: null,
+    after: { git: "/r/ip", rev: "v1.0.0", commit: "1234567890abcdef", version: "1.0.0", package: "ip" } }] };
+  const project = { kind: "project" as const, changes: [{ do: "add" as const, id: "library:ip", what: "library ip", before: null,
+    after: { git: "/r/ip", rev: "v1.0.0" } }] };
+  const code = { name: "ip", package: "ip", key: "ip@1.0.0", trusted: false, blocks_total: 3, blocks_refused: 1, rtl_total: 1, rtl_refused: 1,
+    blocks: [{ cell: "buf", file: "buf.sch", where: "buf.sch s1 value", kind: "control", line: 1, text: ".control", commands: ["shell"],
+      refused: true, why: "a .control block" }],
+    rtl: [{ path: "rtl/core.v", refused: true, findings: [{ kind: "rtl_c", line: 3, text: "initial $c(\"x\");" }] }] };
+  const added: DepReviewRow = { gseq: 2, opid: "o1", op: "dep_add", action: "add", name: "ip", actor: "agent:claude", reason: "a buffer",
+    state: "installed", project, lock, used_by: [], license: "MIT", size: 4096, size_from: "files", code: [code], trusted: false,
+    trust_drop: [], checked: false,
+    packages: [{ package: "ip", names: ["ip"], do: "add", from: null, to: "1.0.0", commit_from: null, commit_to: "1234567890abcdef",
+      hash: "sha256:00", license: "MIT", size: 4096, size_from: "files", changed: { added: ["buf.sch", "rtl/core.v"], removed: [], modified: [] } }] };
+  const depOp = { seq: 2, gseq: 2, op: "dep_add", cell: null, view: "", actor: "agent:claude", reason: "a buffer", t: "",
+    effects: [{ k: "d" as const, do: "add" as const, name: "ip", state: "installed" as const }] };
+  const rec: ChangesetInfo = { ...cs, changes: [...cs.changes!, { lib: "@project", ops: [depOp] }], deps: [added] };
+
+  it("lists the lock diff, the licence, the size, the code blocks and RTL with findings, the trust note, unchecked", async () => {
+    await open(rec);
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByText(t("review:deps.row", { action: t("review:deps.action.add"), name: "ip" }))).toBeTruthy();
+    expect(row.textContent).toContain("MIT");
+    expect(row.textContent).toContain(t("review:deps.sizeFiles", { size: "4.1 kB" }));
+    expect(row.textContent).toContain(t("history:what.dep.lockLibrary", { name: "ip" }));
+    expect(row.textContent).toContain("1.0.0 (1234567)");
+    expect(within(row).getByTestId("dep-unchecked")).toBeTruthy();
+    const c = within(row).getByTestId("dep-code");
+    expect(c.textContent).toContain("ip@1.0.0");
+    expect(c.textContent).toContain(t("review:deps.trust.untrusted"));
+    expect(c.textContent).toContain(t("review:deps.code.counts", { blocks: 3, blocksRefused: 1, rtl: 1, rtlRefused: 1 }));
+    expect(c.textContent).toContain("rtl/core.v");
+    expect(c.textContent).toContain("initial $c(\"x\");");
+    expect(c.textContent).toContain(t("review:deps.code.kind.control"));
+    // the project log's own item is not listed again among the objects
+    expect(screen.queryByText(t("review:item.dependency", { name: "ip" }))).toBeNull();
+    expect(screen.getAllByText(/M1/).length).toBeGreaterThan(0);
+  });
+
+  it("says checked once a run of the changeset read it, and what an update changed and who uses it", async () => {
+    const update: DepReviewRow = { ...added, gseq: 3, op: "dep_update", action: "update", checked: true,
+      checked_by: { job: "sim-0001", kind: "sim", lib: "l", cell: "tb" }, trust_drop: ["ip@1.0.0"], used_by: ["l/top (schematic) places buf"],
+      packages: [{ ...added.packages[0], do: "mod", from: "1.0.0", to: "1.1.0", changed: { added: [], removed: ["inv.sym"], modified: ["buf.sym"] },
+        cells: [{ cell: "buf", do: "mod", views: ["symbol"] }, { cell: "inverter", do: "renamed", from: "inv", views: ["symbol"] }] }] };
+    await open({ ...rec, deps: [update] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).queryByTestId("dep-unchecked")).toBeNull();
+    expect(within(row).getByText(t("review:deps.checked")).getAttribute("title")).toContain("sim-0001");
+    expect(row.textContent).toContain(t("review:deps.pkg.moved", { from: "1.0.0", to: "1.1.0" }));
+    expect(row.textContent).toContain(t("review:deps.cell.renamed", { from: "inv" }));
+    expect(row.textContent).toContain("l/top (schematic) places buf");
+    expect(row.textContent).toContain(t("review:deps.trustDropOpen", { keys: "ip@1.0.0" }));
+  });
+
+  it("gives an agent's operation waiting for a fetch its Fetch button in its row", async () => {
+    const fetchRow = { url: "https://git.example.org/amp.git", rev: null, commit: "c".repeat(40), subdir: null, tree: null,
+      size: 4096, license: "MIT", package: "amp", version: "1.0.0", host: "git.example.org", allowed: true };
+    const plan = { op: "add", fetches: [fetchRow], complete: true, project: "p",
+      request: { op: "add" as const, name: "amp", package: "amp", changeset: "cs1", op_id: "dep-0123456789" } };
+    const pending = { op_id: "dep-0123456789", action: "add" as const, op: "dep_add", name: "amp", args: { name: "amp" },
+      actor: "agent:claude", reason: "an amplifier", gseq: 4, needs: [fetchRow], plan };
+    const waiting: DepReviewRow = { ...added, gseq: 4, name: "amp", state: "needs_fetch", op_id: "dep-0123456789", code: null, packages: [],
+      lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] }, needs: [fetchRow], size_from: "index" };
+    vi.mocked(api.confirmDependencyFetch).mockResolvedValue({ token: "tok", expires: 0, plan });
+    await open({ ...rec, deps: [waiting], pending_deps: [pending] });
+    expect(screen.queryByTestId("pending-dep")).toBeNull();               // in the review row, not a second list
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(row.textContent).toContain("https://git.example.org/amp.git");
+    expect(row.textContent).toContain(t("review:deps.state.needs_fetch"));
+    expect(row.textContent).toContain(t("review:deps.sizeDownload", { size: "4.1 kB" }));
+    fireEvent.click(within(row).getByRole("button", { name: t("review:pending.fetch") }));
+    await act(async () => {});
+    expect(screen.getByRole("dialog", { name: t("app:depFetch.title") })).toBeTruthy();
+  });
+
+  it("keeps an agent's waiting operation and its Fetch in sight on the other tabs, listed once on By object", async () => {
+    const fetchRow = { url: "https://git.example.org/amp.git", rev: null, commit: "c".repeat(40), subdir: null, tree: null,
+      size: 4096, license: "MIT", package: "amp", version: "1.0.0", host: "git.example.org", allowed: true };
+    const plan = { op: "add", fetches: [fetchRow], complete: true, project: "p",
+      request: { op: "add" as const, name: "amp", package: "amp", changeset: "cs1", op_id: "dep-0123456789" } };
+    const pending = { op_id: "dep-0123456789", action: "add" as const, op: "dep_add", name: "amp", args: { name: "amp" },
+      actor: "agent:claude", reason: "an amplifier", gseq: 4, needs: [fetchRow], plan };
+    const waiting: DepReviewRow = { ...added, gseq: 4, name: "amp", state: "needs_fetch", op_id: "dep-0123456789", code: null, packages: [],
+      lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] }, needs: [fetchRow], size_from: "index" };
+    await open({ ...rec, deps: [waiting], pending_deps: [pending] });
+    const fetchButtons = () => screen.queryAllByRole("button", { name: t("review:pending.fetch") });
+    expect(fetchButtons()).toHaveLength(1);                               // the row's, not a second list
+    fireEvent.click(screen.getByRole("button", { name: t("review:listing.files") }));
+    await act(async () => {});
+    expect(screen.getAllByTestId("pending-dep")).toHaveLength(1);
+    expect(fetchButtons()).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: t("review:timeline") }));
+    await act(async () => {});
+    expect(fetchButtons()).toHaveLength(1);
+  });
+
+  it("shows each package's licence and size, and the total, for an operation that brings several", async () => {
+    const core = { ...added.packages[0], package: "core", names: ["core"], license: "GPL-3.0-only", size: 2_000_000,
+      size_from: "files" as const, to: "2.0.0" };
+    await open({ ...rec, deps: [{ ...added, packages: [added.packages[0], core], size_total: 2_004_096 }] });
+    const pkgs = screen.getAllByTestId("dep-package");
+    expect(pkgs[1].textContent).toContain("GPL-3.0-only");
+    expect(pkgs[1].textContent).toContain(t("review:deps.sizeFiles", { size: "2.0 MB" }));
+    expect(screen.getByTestId("dep-total").textContent).toContain(t("review:deps.sizeTotal", { size: "2.0 MB", count: 2 }));
+    // a waiting operation's fetches: each with its size and licence
+    const fetches = [{ url: "https://x.example/amp.git", rev: null, commit: null, subdir: null, size: 4096, license: "MIT", package: "amp", version: "1" },
+      { url: "https://x.example/core.git", rev: null, commit: null, subdir: null, size: 2_000_000, license: "GPL-3.0-only", package: "core", version: "2" }];
+    cleanup();
+    await open({ ...rec, deps: [{ ...added, state: "needs_fetch", code: null, packages: [], needs: fetches, size_total: 2_004_096,
+      lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] } }] });
+    const needs = screen.getAllByTestId("dep-need");
+    expect(needs[1].textContent).toContain("GPL-3.0-only");
+    expect(needs[1].textContent).toContain(t("review:deps.sizeDownload", { size: "2.0 MB" }));
+  });
+
+  it("says a row replaced by a later operation, and the versions not trusted, rather than unchecked", async () => {
+    await open({ ...rec, deps: [{ ...added, checked: null, replaced_by: 5, untrusted: ["core@1.0.0"], untrusted_count: 1, code_more: 2 }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).queryByTestId("dep-unchecked")).toBeNull();
+    expect(within(row).getByTestId("dep-replaced")).toBeTruthy();
+    expect(within(row).getByTestId("dep-untrusted").textContent).toContain("core@1.0.0");
+    expect(row.textContent).toContain(t("review:deps.codeMore", { count: 2 }));
+  });
+
+  it("says the package listing is still being made, the warnings shown all the same", async () => {
+    await open({ ...rec, deps: [{ ...added, review_state: "pending", packages: [], code: [], untrusted: ["ip@1.0.0"], untrusted_count: 1 }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByTestId("dep-pending-review")).toBeTruthy();
+    expect(within(row).getByTestId("dep-unchecked")).toBeTruthy();
+    expect(within(row).getByTestId("dep-untrusted")).toBeTruthy();
+  });
+
+  it("puts no package's licence on a row whose named dependency did not move, and says a trust taken back", async () => {
+    const dep = { ...added.packages[0], package: "sar_common", names: ["sar_common"], license: "GPL-3.0-only", do: "mod" as const };
+    await open({ ...rec, deps: [{ ...added, action: "update", license: null, size: null, own: false, packages: [dep], size_total: 4096,
+      trust_taken_back: ["ip@1.0.0"], untrusted: ["ip@1.0.0"], untrusted_count: 1 }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByTestId("dep-not-own")).toBeTruthy();
+    expect(within(row).getByTestId("dep-total").textContent).toContain(t("review:deps.sizeTotal", { size: "4.1 kB", count: 1 }));
+    expect(within(row).getByTestId("dep-package").textContent).toContain("GPL-3.0-only");
+    expect(within(row).getByTestId("dep-taken-back").textContent).toContain("ip@1.0.0");
+  });
+
+  it("says of code whose trust the change takes back that runs here still run it", async () => {
+    await open({ ...rec, deps: [{ ...added, code: [{ ...code, trusted: false, taken_back: true }], trust_taken_back: ["ip@1.0.0"],
+      untrusted: ["ip@1.0.0"], untrusted_count: 1 }] });
+    const c = screen.getByTestId("dep-code");
+    expect(within(c).getByTestId("dep-code-taken-back").textContent).toBe(t("review:deps.trust.takenBack"));
+    expect(c.textContent).not.toContain(t("review:deps.trust.untrusted"));
+  });
+
+  it("names the versions refused now apart from those the change takes back, and words the trust dropped truly", async () => {
+    await open({ ...rec, deps: [{ ...added, untrusted: ["ip@1.0.0", "core@1.0.0"], untrusted_count: 2, untrusted_now: ["ip@1.0.0"],
+      trust_taken_back: ["core@1.0.0"], trust_drop: ["core@1.0.0"] }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).getByTestId("dep-untrusted").textContent).toBe(t("review:deps.untrustedKeys", { count: 1, keys: "ip@1.0.0" }));
+    expect(within(row).getByTestId("dep-taken-back").textContent).toContain("core@1.0.0");
+    expect(within(row).getByTestId("dep-trust-drop").textContent).toBe(t("review:deps.trustDropOpen", { keys: "core@1.0.0" }));
+    cleanup();
+    await open({ ...rec, status: "applied", deps: [{ ...added, trust_drop: ["core@1.0.0"] }] });
+    expect(screen.getByTestId("dep-trust-drop").textContent).toBe(t("review:deps.trustDrop", { keys: "core@1.0.0" }));
+  });
+
+  it("says a waiting row's own files need no download when no fetch is its own", async () => {
+    const need = { url: "https://x.example/core.git", rev: null, commit: null, subdir: null, size: 9000, license: "GPL-3.0-only", package: "core", version: "1" };
+    await open({ ...rec, deps: [{ ...added, state: "needs_fetch", code: null, packages: [], needs: [need], own: false, license: null, size: null,
+      size_total: 9000, lock: { kind: "lock", changes: [] }, project: { kind: "project", changes: [] } }] });
+    expect(screen.getByTestId("dep-not-own").textContent).toBe(t("review:deps.notOwnFetch"));
+  });
+
+  it("tells a replaced or taken-back version from one refused now, as the server gives them", async () => {
+    await open({ ...rec, deps: [{ ...added, checked: null, replaced_by: 5, untrusted: ["ip@1.0.0", "core@1.0.0"], untrusted_count: 2,
+      untrusted_now: [], untrusted_now_count: 0, trust_taken_back: ["core@1.0.0"], trust_replaced: ["ip@1.0.0"],
+      code: [{ ...code, trusted: false, replaced: true }] }] });
+    const [row] = screen.getAllByTestId("dep-row");
+    expect(within(row).queryByTestId("dep-untrusted")).toBeNull();          // nothing is refused now
+    expect(within(row).getByTestId("dep-trust-replaced").textContent).toContain("ip@1.0.0");
+    expect(within(row).getByTestId("dep-taken-back").textContent).toContain("core@1.0.0");
+    expect(within(row).getByTestId("dep-code-replaced").textContent).toBe(t("review:deps.trust.replaced"));
+  });
+
+  it("words the row in the reader's language", async () => {
+    await setLocale("ja");
+    try {
+      await open(rec);
+      const [row] = screen.getAllByTestId("dep-row");
+      expect(row.textContent).toContain("ip の追加");
+      expect(row.textContent).toContain("未確認");
+      expect(row.textContent).not.toContain("unchecked");
+    } finally { await setLocale("en"); }
+  });
+
+  it("shows project.json's and undine.lock's semantic diff in the Files tab", async () => {
+    vi.mocked(api.changesetDiff).mockResolvedValue({ ...diff, other: [
+      { path: "project.json", status: "modified", deps: project }, { path: "undine.lock", status: "modified", deps: lock }] });
+    await open(rec);
+    fireEvent.click(screen.getByRole("button", { name: t("review:listing.files") }));
+    await act(async () => {});
+    expect(screen.getByText(t("history:what.dep.library", { name: "ip" }))).toBeTruthy();
+    expect(screen.getByText(t("history:what.dep.lockLibrary", { name: "ip" }))).toBeTruthy();
   });
 });

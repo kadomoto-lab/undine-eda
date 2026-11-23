@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SemanticChange } from "../api";
 import { resolveText, setLocale } from "../i18n";
-import { changeText, conflictText } from "./gitItems";
+import { changeText, conflictText, depValue } from "./gitItems";
 
 type Row = [kind: string, change: SemanticChange, en: string | null, ja: string];   // en null: the server's words
 const ROWS: Row[] = [
@@ -94,5 +94,23 @@ describe("the words of a semantic diff", () => {
     const both = { id: "inst:M9", what: "instance M9: added on both sides with different content", ours: {}, theirs: {} };
     expect(resolveText(conflictText("schematic", both))).toBe(both.what);
     expect(resolveText(conflictText(null, c))).toBe(c.what);
+  });
+});
+
+describe("project.json's and undine.lock's changes", () => {
+  const ch = (id: string, what = id): SemanticChange => ({ do: "mod", id, what, before: null, after: null });
+  it("names each entry by its id, as the server's English does", () => {
+    expect(resolveText(changeText("lock", ch("lock:library:ip", "locked library ip")))).toBe("locked library ip");
+    expect(resolveText(changeText("lock", ch("lock:package:amp")))).toBe("locked package amp");
+    expect(resolveText(changeText("lock", ch("lock:tool:klayout")))).toBe("tool klayout");
+    expect(resolveText(changeText("project", ch("library:ip", "library ip")))).toBe("library ip");
+    expect(resolveText(changeText("project", ch("trusted")))).toBe("trusted versions");
+    expect(resolveText(changeText("lock", ch("format")))).toBe("format");        // the server's words otherwise
+  });
+  it("says an entry's value in short", () => {
+    expect(depValue({ git: "/r/ip", rev: "v1", commit: "1234567890", version: "1.0.0" })).toBe("1.0.0 (1234567)");
+    expect(depValue({ git: "/r/ip", rev: "v1" })).toBe("v1");
+    expect(depValue(["ip@1.0.0", "amp@2.0.0"])).toBe("ip@1.0.0, amp@2.0.0");
+    expect(depValue(null)).toBeNull();
   });
 });

@@ -69,7 +69,7 @@ from typing import Iterable
 
 from undine.design import rtl
 from undine.layouts import layoutstore
-from undine.vcs import gitmerge, yamlmerge
+from undine.vcs import depmerge, gitmerge, yamlmerge
 
 VIEWS = ("schematic", "symbol", "layout", "netlist", "intent", "rtl", "other")    # a cell's views in this order
 _SUFFIXES = [("schematic", ".sch"), ("symbol", ".sym"), ("layout", layoutstore.SUFFIX),
@@ -82,6 +82,7 @@ _FORMAT = "%x1e" + "%x00".join(("%H", "%h", "%P", "%an", "%ae", "%aI", "%D", "%s
 _FIELDS = 9
 MAX_LIMIT = 500
 MAX_OTHER = 500                 # "other" files a status or a diff lists
+MAX_DEP_CHANGES = 200           # entries of project.json's or undine.lock's semantic diff (`deps`) a diff lists
 _ESCAPED = re.compile(r"\\x([89a-f][0-9a-f])")      # _text's escape of a byte that is not UTF-8 (0x80 and up)
 
 
@@ -296,11 +297,24 @@ def _between(p: _Project, a: str, b: str | None, paths: list[str]) -> list[tuple
     return list(found.items())
 
 
+def _dep_diff(old: bytes | None, new: bytes | None, rel: str) -> dict:
+    """project.json's or undine.lock's semantic diff (depmerge.diff: entry by entry), at most MAX_DEP_CHANGES of its
+    changes ("more": how many were left out); {"error"} when a side is not the JSON object it should be."""
+    try:
+        d = depmerge.diff(old, new, path=rel)
+    except ValueError as e:
+        return {"kind": depmerge.kind_of(rel), "changes": [], "error": str(e)}
+    more = len(d["changes"]) - MAX_DEP_CHANGES
+    return _texts({**d, "changes": d["changes"][:MAX_DEP_CHANGES], **({"more": more} if more > 0 else {})})
+
+
 def _group(p: _Project, entries: Iterable[tuple[str, str]], diffs: dict[str, dict] | None = None,
-           stamped: bool = False) -> tuple[list[dict], list[dict]]:
+           stamped: bool = False, blobs=None) -> tuple[list[dict], list[dict]]:
     """The cells and the other files of the project among (path from the top, status) pairs; with `diffs` (diff_revs'),
     each view with its diff; `stamped` (the working tree), each view with its file's "stamp" (mtime and size: a shown
-    diff is read again when it moves, also while the status stays the same)."""
+    diff is read again when it moves, also while the status stays the same). `blobs(path)` ((old bytes, new bytes) of
+    a file, None for a side that has none): project.json and undine.lock get "deps", their semantic diff entry by
+    entry (_dep_diff), as the review of a dependency change shows it."""
     cells: dict[tuple[str, str], list[dict]] = {}
     other = []
     for path, st in entries:
@@ -309,7 +323,13 @@ def _group(p: _Project, entries: Iterable[tuple[str, str]], diffs: dict[str, dic
             continue
         at = p.place(rel)
         if at is None:
-            other.append({"path": _text(rel), "status": st})
+            o = {"path": _text(rel), "status": st}
+            if blobs is not None and rel in depmerge.KINDS:
+                try:
+                    o["deps"] = _dep_diff(*blobs(path), rel)
+                except OSError as e:
+                    o["deps"] = {"kind": depmerge.kind_of(rel), "changes": [], "error": str(e)}
+            other.append(o)
             continue
         view: dict = {"view": at[2], "path": _text(rel), "status": st}
         if stamped:
@@ -481,7 +501,17 @@ def diff(project_dir: str | Path, rev: str, lib: str | None = None, cell: str | 
         entries = _between(p, base or p.repo.empty_tree(), new, paths)
     views = [r for path, _ in entries if (r := p.listed(path)) is not None and p.place(r) is not None]
     diffs = gitmerge.diff_revs(p.dir, base, new, [_literal(r) for r in views])
-    cells, other = _group(p, entries, diffs)
+    if not any(p.listed(path) in depmerge.KINDS for path, _ in entries):
+        cells, other = _group(p, entries, diffs)
+        return {"base": base, "rev": new, "cells": cells, "other": other[:MAX_OTHER]}
+    with gitmerge._Objects(p.repo.top) as objs:       # project.json, undine.lock: both sides, for their "deps"
+        def blobs(path: str) -> tuple[bytes | None, bytes | None]:
+            old = objs.get(f"{base}:{path}") if base else None
+            if new is not None:
+                return old, objs.get(f"{new}:{path}")
+            f = p.repo.top / path
+            return old, f.read_bytes() if f.is_file() else None
+        cells, other = _group(p, entries, diffs, blobs=blobs)
     return {"base": base, "rev": new, "cells": cells, "other": other[:MAX_OTHER]}
 
 

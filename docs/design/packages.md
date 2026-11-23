@@ -644,6 +644,69 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
   the restore holds). `dep_update`'s refresh of layout copies is not built yet.
 - The review shows the lock diff, the update report above, licences, the download size, and the package's code blocks
   and RTL files (see [Security](#security)).
+  *Implemented (phase 4, store/depreview.py; Changesets.get's `deps`; the review's Dependencies section,
+  web/src/panels/DepReview.tsx):* each dependency operation's review is made once it is recorded, after its guard let
+  the changesets' and the server's locks go (`Changesets._review_records`; no review is ever made while a thread holds
+  them, so a read under them, restore's or verify's answer, shows it `pending`; and it never waits for an index
+  refresh: it reads an index copy only under a non-blocking shared lock held across the read, and never fetches or updates
+  one, else the store's size and the manifest's licence stand), and is kept beside the changeset's worktrees, one file per operation
+  (`reviews/<gseq>-<effect>.json` with a hash of the effect's before and after and the PDK its code listing was made
+  for), out of the project's repository. Two operations with the same files before and after keep a review each, of
+  its own time. A review made for another PDK than the working copy's now has its code listing made again (what the
+  trust rule refuses depends on the PDK); one that could not be made is not kept, and is tried again at a later read
+  (at most every ten seconds, whichever reader: the wait is the server's, not a reader's); one not kept yet (a server stopped right after the operation) is made at the next read
+  of the open changeset. Before a closure takes its locks every review is made for the PDK then (one that just failed tried
+  once more, whatever the wait), and the evidence copies them (the manifest's `reviews`); a closure that still finds
+  one missing under its locks (an operation committed meanwhile) changes nothing, lets them go, makes it and tries
+  again, and only its third try archives what could not be made as failed, with why. It is made from the effect and the store, so it describes the operation whatever ran since: the trees of
+  the lock entries whose content changed are linked from the store's objects into a temporary directory and read
+  there. Per such entry (`packages`): its package, local names, version and commit before and after, its tree hash
+  after, the licence (the manifest's, else the local copy of its index) with its licence files, the size (the index
+  line's, else the files' bytes in the store), the files added, removed and modified (the store's records compared)
+  and, for an update, per cell added, removed, renamed (the new version's `[renames]` for the versions crossed) or
+  changed with the views that changed, and whether it is exported; the project's cells that place a changed or
+  removed cell (`used_by`, deps._used_by's rule, a layout read only when a layout cell of the package changed); per
+  package added or moved that has a code block or an RTL file, every code block and RTL file (`trust.listing` with
+  the PDK root and the netlister's variables, exactly as a job's trust rule takes them, so a model include under the
+  PDK is not refused), packages with refused code first. Bounded (10 packages, 10 code entries with `code_more` for
+  the packages with code not listed, 20 files per list, 30 cells, 20 `used_by`, 20 code blocks and 20 RTL files per operation with 3
+  findings each; counts for the rest), and every text from a package has its control characters made spaces and is
+  cut at 200 characters (`depreview.data`, as a notice's `_cut`): it is shown to people and read by agents. A review
+  that cannot be made is said (`error`), never failing the operation.
+  `GET .../changesets/{id}` gives `deps`, a row per dependency operation in effect, open or closed: its state
+  (`installed`, `needs_fetch`, `cancelled`; `outcome` superseded or dropped; a proposal a fetch installed is the
+  installing record's row, with `op_id` and `fetched_by`), `project` and `lock` (`depmerge.diff` of the effect's
+  before and after), the review (`review_state`: stored, made, pending or failed), the licence and size of the named dependency itself
+  (its report listed first, so no cut takes it; none when only packages it needs moved, or, waiting for a fetch, when
+  no fetch is of its package (from the proposal, the working copy's lock or project.json; its own files need no
+  download): `own` false, each package's and fetch's listed with it), the total size (`size_total`),
+  `trusted` over every version the operation brought, named by the key the jobs, the trust dialog and `lib trust` use
+  (trust.key_of's rule: the tree's manifest name and version, read from the store whatever the lock format records,
+  else the local name and commit for each local name; the keys read when the review was made are kept with it, so a
+  store gc'd since names the same ones; one that cannot be told now, the store lacking the manifest, is the lock's
+  package and version, else `<name>@?`, never trusted, `trust_unknown`), the versions read from the effect's lock (entries paired by
+  who they are, so two local names for one tree are each their own) whatever the review holds; while the changeset is open, a key it takes out of project.json's `trusted` (an add
+  or update to other content under a trusted version) counts as not trusted, as the adopt will leave it
+  (`trust_taken_back`; trust is by version, so until then runs in the changeset still run that code, and its code
+  entries say so, `taken_back`); `untrusted_now` names the versions not trusted now, and the words name each kind for
+  its own versions; a version a later operation replaced is named as no longer in the changeset, and a row all of whose
+  versions were replaced says only that (`untrusted` names the first ten versions not trusted once adopted, `untrusted_count` counts them all;
+  `untrusted_now` the ones not trusted now, whose code a run refuses now, `untrusted_now_count` them all;
+  `trust_taken_back` those trusted now that the change takes back; `trust_replaced` those a later operation replaced,
+  no longer in the changeset; the three always given, empty or not, on an installed row that brings versions, and absent
+  on one that brings none, such as a removal), `trust_drop` (the keys the
+  operation took out of the working copy's `trusted`), and `checked`: false (*unchecked*) until a run of the changeset
+  read the package (the trees taken from the effect's lock, so a row whose review is missing or failed is never
+  shown safer), that is a done simulation, LVS or DRC of the working copy whose `about.packages` names a tree the
+  operation really brought (an entry whose tree did not change, one that only gained a local name, brought none):
+  the named dependency's own tree when it brought it, else any tree it brought, that the changeset still has (the last operation's lock) and (open) still fresh; an operation
+  whose trees a later one replaced all of is `replaced_by` that one (checked null: there is nothing left of it to
+  check); a closed changeset looks at the runs its evidence archived. A needs_fetch row has its plan's URLs, sizes and
+  licences and no code; its Fetch is `pending_deps`'. `get_changeset` gives agents the same rows in short
+  (`dependencies`: counts with what it leaves out, the first refused findings, a trust note in words) with the DATA
+  rule. The Files tab's `other` entries for `project.json` and `undine.lock` carry `deps`, their `depmerge.diff`
+  (history.diff, so History's diff of a commit has it too). Not built: the update report's spec results and
+  outdated results (the checks' freshness says those), and `dep_update`'s refresh of layout copies (the phase 5 row).
 - **Adopting** merges `project.json` (`libraries`, `indexes`, `pdk`) and `undine.lock` entry by entry, then resolves
   again; when the merged requirements do not resolve, or the merged lock does not satisfy them, the adopt is refused
   with the reason. Then it installs in the project from the store; nothing is fetched at adopt. This is new: today
@@ -1047,7 +1110,7 @@ A dependency change is a **changeset operation**, like any other edit, reviewed 
 | 1. Store and lock 2 | the store, per-file dedup, frozen and offline `sync`; lock format 2 for git dependencies, written only by explicit commands; tree hash from git's blobs; PDK full commit + tree hash with the exclusion list, `pdk verify`, `pdk fetch` through ciel with confirmation (root chosen as above), PDK rescan; the PCell worker with `PYTHONDONTWRITEBYTECODE=1`; OSDI built into the store: profile `osdi` entries become model names (`psp103`), found first in `store/build/<commit>/<variant>/osdi/`, then at today's path in the PDK tree (installs that have them), and `sim.py` and `doctor` take the paths from one function; tool version numbers and origins | two versions share unchanged objects; offline sync from the store; `sync` refuses a lock that no longer satisfies `project.json`; one commit hashes the same with `core.autocrlf=true` and an export-subst file; lock 1 → 2 only on an explicit command; prefix → full commit; a sky130 tree with `__pycache__` and an IHP tree with `osdi/` verify; a changed PDK file is reported; ciel replaced by a fake executable; `pdk fetch` refused when only `~/.volare` is scanned; an IHP simulation loads OSDI from the store; each tool's banner above gives its number | **Done**, see [Phase 1 status](#phase-1-status) |
 | 2. Manifest and resolution | `undine-package.toml`; transitive dependencies from manifests (still git URLs); project-wide local names, a package installed under each; cell-name disjointness; PDK compatibility; the trust rule for code blocks and RTL | diamond installs once; conflicting requirements name both chains; two packages with a `comparator` are refused naming both; a local alias resolves, also with the Xschem netlister backend; two libraries giving one local name different packages are refused; an incompatible PDK is refused; a dependency cell with `.control` or an absolute `.include` is refused until trusted | **Done**, see [Phase 2 status](#phase-2-status) |
 | 3. Index | index format, several indexes, the default index created (`kadomoto-lab/undine-index`), `pkg search / info / add / update / lock / outdated / tree / why`, version ranges, yank, remote-host policy and fetch size limit, library browser Packages section; `pkg licenses`, `pkg vendor` (also run by the tapeout export) and `pkg sync --from-vendor` | a `file://` index in a temporary directory; yanked skipped but kept when locked; private index named in `project.json`; a dependency without `index` comes from the declaring package's index; one name from two indexes refused; an unlisted host refused over HTTP without confirmation; a fetch over the size limit stopped; a vendored bundle, with the package repository deleted and the store emptied, installs the project again offline through `sync --from-vendor` with the locked trees; a vendored file changed by hand is refused; the tapeout bundle has `vendor/` and `report.json` lists it | **Done**, see [Phase 3 status](#phase-3-status) |
-| 4. Changesets and agents | dependency operations in changesets, review of a dependency change (code blocks and RTL listed), the confirmation token, the notice after a fetch, agent tools with the DATA rule, the merge rule for `project.json` and `undine.lock` in the git merge driver (`merge.md` updated), evidence with package and PDK information outside `key` and model files and profile fields inside it | add in a changeset, adopt, restore; an agent's add records *needs fetch*, never fetches, and continues after the person's fetch; no tool returns a token; two changesets adding different packages adopt in either order; conflicting requirements are refused at adopt; an update that changes one cell outdates only results that use that cell; a README change outdates nothing | **In progress**, see [Phase 4 status](#phase-4-status) |
+| 4. Changesets and agents | dependency operations in changesets, review of a dependency change (code blocks and RTL listed), the confirmation token, the notice after a fetch, agent tools with the DATA rule, the merge rule for `project.json` and `undine.lock` in the git merge driver (`merge.md` updated), evidence with package and PDK information outside `key` and model files and profile fields inside it | add in a changeset, adopt, restore; an agent's add records *needs fetch*, never fetches, and continues after the person's fetch; no tool returns a token; two changesets adding different packages adopt in either order; conflicting requirements are refused at adopt; an update that changes one cell outdates only results that use that cell; a README change outdates nothing | **Done**, see [Phase 4 status](#phase-4-status) |
 | 5. Publishing | `pkg init / check / pack / publish / yank`, `[checks]`, the check report and its link in the index line and PR, semver report, spec results in the report, `[renames]`, cell-level update report, refreshed layout copies, index CI workflow (no DRC / LVS) | publish refuses without a passing report for this tree, and the PR body links the report with its SHA-256; the index CI refuses a report whose SHA-256, commit or tree differs from the line; a renamed cell is reported as renamed and references rewritten; a removed pin or a moved layout pin needs a major version; a waived rule passes `check` and is shown; publish refuses a tree the repository does not serve; tag `<name>-v<version>` in a repository of two packages; after an update the copied cell is refreshed in the changeset and its LVS is outdated, and an edited copy is listed, not replaced | **In progress**, see [Phase 5 status](#phase-5-status) |
 | 6. PDK profiles | `profile.toml` per family with `schema` and `undine`, formula registry, profile packages in the index with expected PDK tree hashes, compatibility tags, `pcell.SUPPORTED` / `pixi.toml` / `setup.sh` read from them | data profile equals today's `Profile` for sky130, GF180, IHP; an unknown field is refused; a changed deck option outdates DRC results and a changed profile field no job reads (`label`, `limits`) does not | **In progress**, see [Phase 6 status](#phase-6-status) |
 
@@ -1388,8 +1451,23 @@ wait_for returns a notice that came before it, once per agent; the assistant's n
 mid-turn), the guards in
 `test_api_phase1.py` and `test_agent_phase2.py`, and the web test `ChangesPanel.test.tsx`.
 
-Still to build in phase 4: the review of a dependency change (the lock diff, licences, size, code blocks and RTL), and
-`dep_update`'s refresh of layout copies.
+Built: the review of a dependency change (store/depreview.py, the `review` recorded with each operation,
+`Changesets.get`'s `deps`, `other[].deps` of the Files tab, `get_changeset`'s `dependencies`, the Dependencies section
+of web/src/panels/DepReview.tsx; see [Changesets and evidence](#changesets-and-evidence) and the
+[HTTP API](../reference/api.md#the-review-of-a-dependency-change)). Tests: `test_pkg_review.py` (a dependency's code
+blocks and RTL listed with licence and size; an update's report: the lock entry, files, cells changed and renamed,
+the cells that use it, the trust taken back; unchecked until a run in the changeset read the package, and again once
+that run is outdated; the Files tab's semantic diff, also of an adopted commit, and an unreadable side; the review of a
+closed changeset from its evidence, checked by the archived run; a pending, a cancelled and a fetched operation; the
+review bounded and a package's control characters gone; `get_changeset` bounded with the DATA rule; an operation a
+later one replaced is not unchecked; the trust note over every package, the code list cut or not; the review made
+outside the server's locks, never waiting for an index refresh, and reading no layout when no layout cell changed;
+the jobs' trust rule, a PDK model include not refused), and the web tests `ChangesPanel.test.tsx` and
+`gitItems.test.ts`.
+
+Phase 4 is done. `dep_update`'s refresh of layout copies, in [Cells across versions](#cells-across-versions),
+is the phase 5 row's ("refreshed layout copies"): an update still leaves a copied cell's old geometry, which the review
+lists among the cells that use it.
 
 ### Phase 5 status
 

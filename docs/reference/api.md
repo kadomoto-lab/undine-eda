@@ -209,6 +209,91 @@ fetched `cancelled`).
 | `POST /api/confirmations` `{kind: "dependency", project, changeset, op_id, fetches}` | the person's Fetch in the review. The operation's own arguments are used (the record's, not the body's); the plan is made again, and when it differs from `fetches` (the index refreshed since, say) the answer is 409 `needs_fetch` with the new plan for the dialog to show; a plan with nothing left to fetch (the store has it now) is taken as it is. The token is bound as above, and to the operation's id and a hash of its record. 409 `not_pending` when the operation no longer waits (restored away, installed, the changeset closed) |
 | `POST /api/p/{project}/deps/fetch` `{token}` | as above; refused with 409 `not_pending` (the token used up) when the operation was cancelled since the confirmation. The job replays the operation in the changeset's working copy, records it installed (`replays: op_id`, `fetched_by`, the agent's actor and reason kept), appends a notice of kind `fetched` to the changeset, and returns `{changeset, op, result, state: "installed", op_id, notice, status}`. The agent's own write lease does not stop it; another writer's is retried for about three seconds, then the job fails with `code: "busy"` (what it fetched stays in the store: the next Fetch only installs). An operation that can no longer apply is dropped with a `fetch_failed` notice that closes it; a resolution refused fails the job with `resolution_refused` and leaves it pending, with a `fetch_failed` notice that does not close it. A fetch that shows more to fetch fails with `needs_fetch` and the next plan, as above |
 
+### The review of a dependency change
+
+`GET /api/p/{project}/changesets/{id}` has `deps`, one row per dependency operation of the changeset still in effect
+(the project log's records, oldest first), for an open changeset and a closed one alike: what a person reads before
+adopting a dependency change. A proposal a person's fetch installed is the row of the record that installed it (its
+`op_id`, `fetched_by`); a `dep_drop` record is no row (the proposal's row has `outcome: "dropped"`).
+
+```text
+{gseq, opid, op: dep_add | dep_update | dep_remove | pdk_set, action: add | update | remove | pdk_set, name, actor,
+ reason, t, state: installed | needs_fetch | cancelled, outcome?: superseded | dropped, op_id?, fetched_by?, pdk?,
+ project: {kind, changes}, lock: {kind, changes},          depmerge.diff of the effect's before and after
+ packages: [{package, names, do: add | mod | del, from, to, commit_from, commit_to, hash, license, license_files,
+             size, size_from: index | files, changed: {added, removed, modified, *_more} | null,
+             cells: [{cell, do: add | del | mod | renamed, views, from?, exported?}], cells_more?}], packages_more?,
+ used_by: [text], used_by_more?,                           the project's cells that use a changed or removed cell
+ license, size, size_from, own, size_total,                the dependency's own (a needs_fetch row: its package's fetch's);
+                                                           size_total every package's (fetch's) added up
+ code: [{name, package, key, trusted, trust, blocks_total, blocks_refused, blocks: [{cell, file, where, kind, line,
+         text, path?, commands?, refused, why}], rtl_total, rtl_refused, rtl: [{path, refused,
+         findings: [{kind, line, text, path?}], findings_more?}]}] | null, code_more?,
+ trusted, trust, untrusted?: [key], untrusted_count?, untrusted_now?: [key], untrusted_now_count?, trust_taken_back?: [key],
+ trust_replaced?: [key], trust_unknown?, trust_drop: [key],
+ checked: true | false | null, checked_by?: {job, kind, lib?, cell?}, replaced_by?: gseq,
+ needs?: [{url, rev, commit, subdir, size, license, package, version}], needs_more?,
+ recorded, review_state: stored | made | pending | failed, review_error?}
+```
+
+- `packages`, `used_by` and `code` are the operation's **review** (`store/depreview.py`), made right after the
+  operation and outside the server's locks, from the effect's before and after and the store (the trees read from the
+  store's objects), and kept beside the changeset's worktrees, one per operation, with the PDK its code listing was
+  made for; the evidence copies the reviews at closure (the manifest's `reviews`, by `<gseq>-<effect index>`), so a
+  closed changeset's review reads the same. `review_state`: `stored` (kept), `made` (this read made it: it was not
+  kept yet, or was made for another PDK than the working copy's now, whose code listing is made again), `pending`
+  (this read was made under a lock no review is made under: a restore's or a verify's answer) or `failed` (it could
+  not be made: `review_error`; not kept, tried again at a later read at most every ten seconds, by the closure once
+  more whatever the wait, and archived as failed, with why, only if the closure still cannot make it);
+  `recorded` is `review_state == "stored"`. `packages` compares the store's records of both trees, so its `changed` is `null` when the
+  store has no record of a side; `cells` applies the new version's `[renames]`; `license` is the manifest's
+  (`license_from: "manifest"`), else the local copy of the index's (`"index"`); `size` is the index line's
+  (`size_from: "index"`) else the bytes of the files in the store (`"files"`). An index copy being refreshed is not
+  read (the review never waits for a fetch): the store's size and the manifest's licence stand. `code` lists, per
+  package added or moved, every code block of its cells and every RTL file ([trust](../design/packages.md#security))
+  with `refused` exactly as a job's trust rule decides it (the PDK root and the netlister's variables given, so a
+  model include under the project's PDK is not refused), packages with refused code first.
+- Bounded: at most 10 packages, 10 code entries (a package with no code block and no RTL file is none; `code_more`
+  counts the packages with code not listed), 20 files per list, 30 cells per package, 20 cells in
+  `used_by`, 20 code blocks and 20 RTL files per operation (over its packages) with 3 findings each, 10 fetches of a
+  needs_fetch row; the totals and `*_more` count the rest. Every text
+  from a package (paths, cell names, code, findings, licences, versions, a needs_fetch URL) has its control characters
+  made spaces and is cut (200 characters): it is data written by others.
+- `trusted` (each package's in `code`, and the row's: every version the operation brought, from its lock, whatever the
+  review holds) is read from the real project's `trusted` now, for the key the jobs and the trust dialog use
+  (`trust.key_of`: the tree's manifest name and version, read from the store whatever the lock format records, else
+  `<local name>@<commit12>` for each local name; a code entry under several names has them in `keys`; the keys read
+  when the review was made are kept with it, so a store gc'd since names the same ones; one that cannot be told now is
+  the lock's package and version, else `<name>@?`, never trusted, with `trust_unknown`). So a version a person trusts
+  after the operation shows as trusted. `untrusted` names the first 10 versions not trusted once adopted and
+  `untrusted_count` counts them all; `untrusted_now` names those not trusted now, whose code a run refuses now. `trust`
+  says it in words, naming the versions refused now first, then those taken back (below), then those a later operation
+  replaced (`trust_replaced`: no longer in the changeset), each claim true of the versions it names; a row all of whose
+  versions were replaced says only that, and a code entry of a replaced version says so (`replaced`). An installed row
+  that brings versions always has `untrusted_now`, `trust_taken_back` and `trust_replaced`, empty or not; one that
+  brings none (a removal, a PDK change that leaves the lock's entries alone) has none of them.
+- While the changeset is open, a key it takes out of project.json's `trusted` (an add or update to other content
+  under a trusted version: `trust_drop` of its rows) counts as not trusted, as the adopt will leave it, whatever the
+  project trusts today, and is listed in `trust_taken_back`; trusting it again changes nothing, as it is trusted
+  already. Trust is by version, so until the adopt the runs in the changeset do run that code: a code entry under such
+  a key says so (`taken_back`, and its `trust` in words). `trust_drop` lists the keys the operation took out of the
+  working copy's `trusted` (an update drops the old version's).
+- `license` and `size` are the named dependency's own (`own` true; its report is listed first): null, `own` false,
+  when only packages it needs moved, or, waiting for a fetch, when none of the fetches is of its package (the package
+  its local name stands for, from the proposal, the working copy's lock or project.json) nor, for a git dependency, of
+  its repository (its URL and subdir): its own files need no download. A fetch of another package is never its own. Each package's and each fetch's are in `packages` and
+  `needs`.
+- `checked` is `false` (*unchecked*) until a run of the changeset read the package: a simulation, an LVS or a DRC of
+  the working copy, done, whose evidence names one of the trees the operation brought in its `about.packages`, and
+  (open) still fresh; `checked_by` names it. Only trees the operation really brought count (an entry whose tree did
+  not change, one that only gained a local name, brought none): the named dependency's own tree when it brought it,
+  else any of them; and only those the changeset still has (the last operation's lock):
+  an operation whose trees a later one replaced all of has `checked: null` and `replaced_by`, that operation's gseq,
+  whose row says whether the package was checked. For a closed changeset, the runs its evidence archived. `null`
+  otherwise: nothing to check (a removal, a PDK change, an operation that brought no tree).
+- A `needs_fetch` row has `needs` (the URL, the size, the licence) and no `code` (nothing fetched yet); its Fetch is
+  `pending_deps`' ([An agent's operation waiting for a fetch](#an-agents-operation-waiting-for-a-fetch)).
+
 ## PDK fetch
 
 A PDK missing on the server is installed with ciel, only after a person confirms it in the browser's **Fetch PDK**
@@ -241,7 +326,7 @@ A changeset is a git branch of the project, `undine/<project>/<id>`, and its wor
 |---|---|
 | `POST /api/p/{project}/changesets` | opens one (`{"title", "reason"}`, `X-Undine-Actor`): the record, with `"git_setup": true` when the project was in no git repository and `git-setup` made it one, `"first_commit"`: the project's first commit made then (its files as they were, a log's unsaved layout edits as a journal, as the base has them; Undine's own output and the changeset records left out; null when none was made: a commit of the person's came first), so that what is applied is committed, and `"first_commit_note"`: what to do after it (git's index not reset to it: run `git reset`), or why none was made; null. 400 `not_set_up` (below) when the project is in a repository not set up for Undine. 400 `unsupported_library` (below) when one of the project's own libraries is one a worktree cannot hold: at its folder, above it, inside it or where a link on the way leads, a symbolic link that leads out of the project or nowhere, whose text is an absolute path or climbs out of the project, or that the repository does not keep (nor what it leads to), or a git repository of its own (a clone, a submodule). That is checked before anything is set up: a refused open makes no repository ([the design](../design/changeset-branches.md#the-repository)) |
 | `GET /api/p/{project}/changesets` | the changesets: `id`, `title`, `reason`, `actor`, `created`, `status`, `preview`, and `git`; `closing` (below) while one is being adopted, discarded or reverted. Newest first (by `created`, then by id) |
-| `GET /api/p/{project}/changesets/{id}` | the record (below), with the changes by library (`changes`: the operations, net of undo and redo), the checks with their freshness (`verify`), and while open the writer (`writer`), the last change of each view (`activity`) and the agents' dependency operations waiting for a fetch (`pending_deps`, [An agent's operation waiting for a fetch](#an-agents-operation-waiting-for-a-fetch)); the record's `notices` are the changeset's notices; once closed, the changes and checks as archived, `retained`, and the evidence with its size now (`evidence.size`); `closing` while it is being closed |
+| `GET /api/p/{project}/changesets/{id}` | the record (below), with the changes by library (`changes`: the operations, net of undo and redo), the checks with their freshness (`verify`), and while open the writer (`writer`), the last change of each view (`activity`) and the agents' dependency operations waiting for a fetch (`pending_deps`, [An agent's operation waiting for a fetch](#an-agents-operation-waiting-for-a-fetch)); open or closed, the review of its dependency operations (`deps`, [The review of a dependency change](#the-review-of-a-dependency-change)); the record's `notices` are the changeset's notices; once closed, the changes and checks as archived, `retained`, and the evidence with its size now (`evidence.size`); `closing` while it is being closed |
 | `GET /api/p/{project}/changesets/evidence` | the evidence of the closed changesets as it is now: `{"bytes", "raw" (of them, the waveforms a prune removes), "changesets": {id: {"bytes", "raw", "files", "shared", "raw_shared", "pruned"}}}` (`size` below) |
 | `GET /api/p/{project}/changesets/{id}/evidence[?check=true]` | a closed changeset's evidence: `{"path", "captured", "commits"?, "size", "bytes" (as captured), "linked", "pruned" (the manifest's notes), "jobs" (each with `"pruned"`: its files a prune removed, and the job's `"about"`: the packages, PDK and profile it used, when it recorded them), "packages" and "pdk" (`{"base", "work"}`: what each side's undine.lock pins; see [Job provenance](data.md#job-provenance))}`; `check=true` reads every archived file against its hash: `"check": {"ok": count, "pruned", "missing", "changed": [path in the evidence]}` (a pruned file is `pruned`, not `missing`). 400 for an open one |
 | `POST /api/p/{project}/changesets/{id}/evidence/prune` | removes the waveforms (`*.raw`, `*.vcd`, `*.fst`) of a closed changeset's archived runs, keeping their status, logs, results and the manifest's hashes, and notes it in the manifest and the record (`X-Undine-Actor`): `{"pruned": {"t", "by", "files", "bytes", "freed"}, "size"}` (`"freed"`: of the bytes, those no other name held; a working copy the closure kept frees the rest when it is removed). A person's call: 403 for an agent's actor (`agent:...`); 400 for an open changeset; 409 `busy` while it is being closed or reverted |
@@ -377,7 +462,10 @@ status       {"repo", "preview", "setup": {"merge", "diff", "hook", "gitignore"}
 setup        status + {"hook_note": text | null, "gitignore_added": [line]}
 log          {"commits": [Commit + {"cells": [CellChange], "other": number of other files}], "more"}
 diff         {"base": sha | null, "rev": sha | null (the working tree),
-              "cells": [CellChange, each view also with "diff"], "other": [{"path", "status"}]}
+              "cells": [CellChange, each view also with "diff"], "other": [{"path", "status", "deps"?}]}
+              (deps: project.json's and undine.lock's semantic diff, entry by entry (vcs/depmerge.diff):
+              {"kind": "project" | "lock", "changes": [{"do", "id", "what", "before", "after"}], "more"?: entries
+              left out past the first 200, "error"?: a side that is not a JSON object})
 verify       {"ours": sha, "theirs": sha | null (no commit is known for it: git merge --squash, cherry-pick -n),
               "commit": sha | null (in progress), "parents": [sha] | null (more than two: an octopus merge),
               "operation": null (a commit) | "merge" | "cherry-pick" | "rebase",

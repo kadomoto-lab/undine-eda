@@ -573,6 +573,68 @@ export interface ChangesetInfo {
   activity?: { head: number };      // open: the last committed change of its working copy (gseq)
   pending_deps?: PendingDep[];      // open: agents' dependency operations waiting for a person's fetch
   notices?: ChangesetNotice[];      // what a person's fetch told the agent (wait_for returns them)
+  deps?: DepReviewRow[];            // the review of its dependency operations (open and closed); absent: an older server
+}
+/** project.json's or undine.lock's semantic diff, entry by entry (vcs/depmerge.diff): the Files tab's "deps" of those
+ * two files, and each dependency review row's. */
+export interface DepFileDiff { kind: "project" | "lock"; changes: SemanticChange[]; error?: string; more?: number }
+/** What a package's files did from one version to the other (store records compared), each list bounded (`*_more`). */
+export interface DepFileChanges {
+  added: string[]; removed: string[]; modified: string[]; added_more?: number; removed_more?: number; modified_more?: number;
+}
+/** One lock entry a dependency operation changed: the update report's row (docs/design/packages.md, Cells across
+ * versions). `changed` null: the store had no record of a side. */
+export interface DepReviewPackage {
+  package: string | null; names: string[]; do: "add" | "mod" | "del"; from: string | null; to: string | null;
+  commit_from: string | null; commit_to: string | null; hash: string | null;
+  license?: string | null; license_from?: "manifest" | "index" | null; license_files?: string[];
+  size?: number | null; size_from?: "index" | "files" | null;
+  changed: DepFileChanges | null;
+  cells?: { cell: string; do: "add" | "del" | "mod" | "renamed"; views: string[]; from?: string; exported?: boolean }[];
+  cells_more?: number;
+}
+/** A code block of a package's cells (trust.listing): `refused` whether the trust rule refuses it in a dependency. */
+export interface DepCodeBlock {
+  cell: string; file: string; where: string; kind: string; line: number; text: string; path?: string; commands?: string[];
+  refused: boolean; why: string;
+}
+export interface DepRtlFile {
+  path: string; refused: boolean; findings: { kind: string; line: number; text: string; path?: string }[]; findings_more?: number;
+}
+/** A package's code as the review lists it: the first blocks and RTL files (refused first), and how many in all. */
+export interface DepReviewCode {
+  name: string; package: string | null; key?: string; keys?: string[]; trusted?: boolean; error?: string;
+  taken_back?: boolean;             // trusted by its version now (runs here still run it); the adopt takes that back
+  replaced?: boolean;               // a later operation replaced this version: its code is no longer in the changeset
+  blocks?: DepCodeBlock[]; blocks_total?: number; blocks_refused?: number;
+  rtl?: DepRtlFile[]; rtl_total?: number; rtl_refused?: number;
+}
+/** One dependency operation of a changeset as a person reviews it (store/depreview.py rows). Package text in it is
+ * data from others (control characters taken out, cut). `checked` false: unchecked (no run of the changeset read the
+ * package); null: nothing to check (a removal, a PDK change). */
+export interface DepReviewRow {
+  gseq: number | null; opid: string | null; op: string; action: "add" | "update" | "remove" | "pdk_set" | null;
+  name: string | null; actor: string; reason: string; t?: string;
+  state: "installed" | "needs_fetch" | "cancelled"; outcome?: "superseded" | "dropped";
+  op_id?: string; fetched_by?: string; pdk?: [string | null, string | null];
+  project: DepFileDiff; lock: DepFileDiff;
+  packages: DepReviewPackage[]; packages_more?: number; used_by: string[]; used_by_more?: number;
+  license: string | null; size: number | null; size_from: "index" | "files" | null;
+  size_total?: number | null;       // every package's (or fetch's) size added up; null: one is not known
+  code: DepReviewCode[] | null; code_more?: number; trusted: boolean; trust_drop: string[];
+  untrusted?: string[]; untrusted_count?: number;     // the versions it brings not trusted once adopted
+  untrusted_now?: string[];         // of those, the ones not trusted now: a run of their code is refused now
+  untrusted_now_count?: number;
+  trust_replaced?: string[];        // those a later operation replaced: no longer in the changeset
+  trust_taken_back?: string[];      // trusted today, but this changeset takes that trust back: untrusted once adopted
+  trust_unknown?: boolean;          // a version's key cannot be told now (the store lacks its files)
+  own?: boolean;                    // license and size are the named dependency's own (false: only packages it needs moved)
+  checked: boolean | null; checked_by?: { job: string; kind: string; lib?: string; cell?: string };
+  replaced_by?: number | null;      // checked null: a later operation (its gseq) replaced every tree it brought
+  needs_more?: number;
+  needs?: Pick<FetchRow, "url" | "rev" | "commit" | "subdir" | "size" | "license" | "package" | "version">[];
+  recorded?: boolean; review_error?: string;
+  review_state?: "stored" | "made" | "pending" | "failed";   // pending: not made yet (a moment), its warnings shown
 }
 /** An agent's dependency operation recorded as needing a fetch (docs/design/packages.md, Changesets and evidence):
  * nothing fetched or installed until a person fetches it from the review; `plan` is what the Fetch dialog shows. */
@@ -671,7 +733,7 @@ export interface GitCommit {
   author: string; email: string; date: string; refs: string[];
 }
 export interface GitCellChange { lib: string; cell: string; views: { view: GitView; path: string; status: GitFileStatus; stamp?: string | null }[] }
-export interface GitFileChange { path: string; status: GitFileStatus }
+export interface GitFileChange { path: string; status: GitFileStatus; deps?: DepFileDiff }   // deps: project.json, undine.lock
 /** The repository as the project sees it: no repo (or a changeset's working copy, `preview`) leaves the rest empty.
  * A working copy names its changeset, branch and base commit instead (its own unsaved, stale and reads are filled). */
 export interface GitStatus {

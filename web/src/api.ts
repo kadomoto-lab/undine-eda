@@ -461,7 +461,7 @@ export interface SignoffCheck {
   summary?: DrcSummary | LvsSummary; passed?: boolean | null;
 }
 export interface DrcSummary { total: number; rules: number; categories: { id: number; name: string; description: string; count: number }[] }
-export interface LvsSummary { verdict?: string; devices?: number[] | null; nets?: number[] | null; match: boolean; pin_errors?: string[]; circuits: { layout: string | null; schematic: string | null; status: string; nets_ok: number; nets_bad: number }[] }
+export interface LvsSummary { verdict?: string; devices?: number[] | null; nets?: number[] | null; match: boolean; pin_errors?: string[]; param_errors?: string[]; circuits: { layout: string | null; schematic: string | null; status: string; nets_ok: number; nets_bad: number }[] }
 export interface DrcGeom { t: string; bbox: number[]; pts: number[] }
 export interface DrcItem { cat: string; bbox: number[]; geoms: DrcGeom[]; cell?: string }
 export interface Pair { layout: string | null; schematic: string | null; status: string; class?: string }

@@ -478,7 +478,9 @@ class Server:
     def prepare_magic_drc(self, project: str, lib: str, cell: str) -> "Run":
         prj = self._pdk_of(project)
         db = self.db(project, lib)
-        inp = provenance.inputs([provenance.layout_entry(db, lib, cell)], prj.pdk, ["magic"])
+        # the profile's mask hints, where it has some: the jobs of a PDK without them keep their key
+        inp = provenance.inputs([provenance.layout_entry(db, lib, cell)], prj.pdk, ["magic"],
+                                profile=provenance.magic_drc_profile(prj.pdk))
         return self._run(project, "drc", "magic", lib, cell, None, inp, lambda db, meta: magicflow.start_drc(
             self.jobs, prj.path, prj.pdk, db.layout, cell, lib, meta))
 
@@ -500,7 +502,7 @@ class Server:
         db = self.db(project, lib)
         inp = provenance.inputs([provenance.layout_entry(db, lib, cell), ref], prj.pdk, ["klayout"],
                                 provenance.deck_entry(prj.pdk, "lvs", deck), options or {},
-                                profile=provenance.profile_fields(prj.pdk, provenance.LVS_PROFILE, deck))
+                                profile=provenance.lvs_profile(prj.pdk, deck))
         return self._run(project, "lvs", "klayout", lib, cell, deck, inp, lambda db, meta: verify.start_lvs(
             self.jobs, prj.path, prj.pdk, db.layout, cell, lib, sch, deck, options or {}, label, meta, instances),
             gate=self._paths_gate(prj, result), result=result)
@@ -977,14 +979,17 @@ class Server:
                                  # a target's density / antenna runs of the same deck are other checks
                                  and ((j.get("inputs") or {}).get("options") or {}).get("decks") == run.inputs["options"].get("decks")),
                                 None)
-            if prev and not same and prev.get("inputs") and prev.get("key") == provenance.key(
+            # what the job ran without that it would read now (a Magic DRC job from before the mask hints)
+            missed = provenance.unrecorded(run.kind, run.tool, prev["inputs"], self.project(project).pdk) \
+                if prev and prev.get("inputs") else []
+            if prev and not same and prev.get("inputs") and not missed and prev.get("key") == provenance.key(
                     {k: v for k, v in run.inputs.items() if k in prev["inputs"] or k not in provenance.LATER}):
                 same = prev                              # recorded before models / profile were: the same run
             if prev:
                 if same:
                     changed = []
                 elif prev.get("inputs"):
-                    changed = provenance.diff(prev["inputs"], run.inputs) or ["ran with other settings"]
+                    changed = provenance.diff(prev["inputs"], run.inputs) + missed or ["ran with other settings"]
                 else:
                     changed = ["ran before inputs were recorded"]
                 item.update(job=prev["id"], state=prev["state"], fresh=bool(same), changed=changed,

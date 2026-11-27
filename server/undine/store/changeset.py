@@ -3268,7 +3268,8 @@ class Changesets:
             elif st["state"] == "done":
                 row["ok"] = s.get("match") if j["kind"] == "lvs" else (s["total"] == 0 if "total" in s else None)
                 row["detail"] = f"{s.get('total')} violations" if j["kind"] == "drc" else \
-                    ("match" if s.get("match") else "mismatch")
+                    ("match" if s.get("match") else "mismatch" + (f": {'; '.join(s['param_errors'])}"
+                                                                  if s.get("param_errors") else ""))
             out.append(row)
         return out
 

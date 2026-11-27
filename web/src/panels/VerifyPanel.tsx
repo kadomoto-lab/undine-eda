@@ -175,6 +175,7 @@ export function VerifyPanel({ project, lib, cell, hasSchematic, dbu, onMarkers, 
                 <span className="dim small"> · {lvsJob?.seconds?.toFixed(1)}s</span></div>
               {lvsJob?.tool === "netgen" && lvsSum.verdict && <div className="dim small">{lvsSum.verdict}</div>}
               {lvsSum.pin_errors?.map((e) => <div key={e} className="small badc mono">{e}</div>)}
+              {lvsSum.param_errors?.map((e) => <div key={e} className="small badc mono">{e}</div>)}
               <Outdated f={lvsFresh} onRerun={() => run("lvs")} />
               {lvsJob?.tool === "netgen" && (
                 <>

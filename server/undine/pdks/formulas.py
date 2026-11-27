@@ -3,7 +3,8 @@
 A profile is data (profile.toml, read by profiledata.py). Where a value is computed, the profile names a function of
 this registry and Undine runs it; a name not listed here is refused, so no code comes from a profile. Two kinds:
 
-- `FORMULAS`: `LvsElement.params` (`params = "mim_area_perimeter"`), {name: function of the call's numeric parameters}.
+- `FORMULAS`: `LvsElement.params` (`params = "mim_area_perimeter"`), {name: function of the call's numeric parameters
+  (and, where it takes a second argument `model`, the call's model)}.
 - `STACKS`: a metal stack made from a few arguments instead of written out (`[profile.stack] generator =
   "gf180_stack@1"`, its arguments beside it). A generator's name carries its version: a changed rule is a new
   generator (`@2`), so a profile that names `@1` keeps drawing as it did. The arguments are typed by the function's
@@ -11,11 +12,33 @@ this registry and Undine runs it; a name not listed here is refused, so no code 
 """
 from __future__ import annotations
 
+import re
+
 
 def mim_area_perimeter(p: dict) -> dict:
     """A MIM capacitor as KLayout's sky130 deck extracts it (MIMCap: A and P compared, C not): area and perimeter of
     one unit from its W and L in um."""
     return {"A": p["w"] * p["l"], "P": 2 * (p["w"] + p["l"])}
+
+
+def res_length(p: dict, model: str = "") -> dict:
+    """A fixed-width poly resistor as KLayout's sky130 deck extracts it (sky130_fd_pr__res_high_po_0p35 ...: the
+    class of its width, L compared within 0.5 %, R and W not): its L in um, and its W, the width its model names
+    (0p35: 0.35 um) times the multiplier, with m 1. Series resistors add their L in both netlists (the deck's
+    simplification); parallel ones keep L and add W, which the deck does not compare: Undine does after it (the
+    element's `check`), so two copies in parallel do not match one."""
+    out = {"L": p["l"]}
+    if (w := re.search(r"_(\d+)p(\d+)$", model)):
+        out.update(W=float(f"{w.group(1)}.{w.group(2)}") * p.get("m", p.get("mult", 1.0)), m=1.0)
+    return out
+
+
+def bjt_emitters(p: dict) -> dict:
+    """A bipolar transistor as KLayout's sky130 deck compares it: by its number of emitters NE (AE ignored), which its
+    simplification adds up over parallel devices (the 24 units of a pnp_05v5 m=24 are one device of NE=24). The SPICE
+    reader leaves NE at 1 whatever the multiplier, so the multiplier goes into NE and m is 1."""
+    m = p.get("m", p.get("mf", p.get("mult", 1.0)))
+    return {"NE": p.get("ne", 1.0) * m, "m": 1.0}
 
 
 def gf180_stack(thin: int, top: str | None = None, plate: tuple[str, str] | None = None):
@@ -74,5 +97,5 @@ def ihp_stack(thin: int, tops: tuple[str, ...]):
                  plates=(Plate("mim", "metal5", "topvia1", also=("vmim",)),) if thin == 5 else ())
 
 
-FORMULAS = {"mim_area_perimeter": mim_area_perimeter}
+FORMULAS = {"mim_area_perimeter": mim_area_perimeter, "res_length": res_length, "bjt_emitters": bjt_emitters}
 STACKS = {"gf180_stack@1": gf180_stack, "ihp_stack@1": ihp_stack}

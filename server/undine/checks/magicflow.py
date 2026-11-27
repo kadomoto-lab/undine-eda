@@ -76,8 +76,9 @@ def _run_seq(jobs: Jobs, job: Job, steps: list[tuple[list[str], dict]], summariz
 # --------------------------------------------------------------------------------------- DRC
 
 # drc check over the cell grown by a halo: Magic checks the top cell's own paint only where it is told to, and keeps no
-# error outside the area checked (a wire too narrow at the cell's right edge has its error area beyond the edge)
-_DRC_TCL = """gds read input.gds
+# error outside the area checked (a wire too narrow at the cell's right edge has its error area beyond the edge). The
+# profile's magic_maskhints layers are read as drawn (gds maskhints), not made again from Magic's devices
+_DRC_TCL = """{maskhints}gds read input.gds
 load {cell}
 drc style drc(full)
 select top cell
@@ -106,7 +107,9 @@ def start_drc(jobs: Jobs, project_path: Path, pdk: Pdk, layout: kdb.Layout, cell
                                                                               "deck": "magic drc(full)", **(meta or {})})
     with verify._launch_setup(jobs, job):
         verify._export(layout, cell, job.path / "input.gds")
-        (job.path / "run.tcl").write_text(_DRC_TCL.format(cell=cell))
+        hints = pdk.profile.magic_maskhints
+        (job.path / "run.tcl").write_text(_DRC_TCL.format(
+            cell=cell, maskhints=f"gds maskhints {','.join(hints)}\n" if hints else ""))
         argv = [exe, "-dnull", "-noconsole", "-rcfile", str(rc), "run.tcl"]
         threading.Thread(target=_run_seq, args=(jobs, job, [(argv, _env(pdk))], lambda j: {"summary": drc_summary(j.path / "result.tsv")},
                                                 "result.tsv"), daemon=True).start()

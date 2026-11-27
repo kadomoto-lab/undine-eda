@@ -53,8 +53,9 @@ capacitor (the top plate's strap or contact pad: its area and the fringe of its 
 nets, which the device has already. A cell with MIM capacitors is extracted a second time, in shielded/, with a tech
 file in which each capacitor's plane is between its plates' (shielded_tech): the top plate takes that coupling (none
 for its own metal, a coupling to its net for another net's), and its coupling between nets is the extraction's (the
-capacitance to the substrate stays the first's); the summary's mim_shielding says per pair of nets what Magic gave and
-what is kept (mim_shielding). Without it (the second run failed), only the overlap is taken out (mim_overlap).
+capacitance to the substrate stays the first's, but where a MIM's plate is the substrate node, VSS, the coupling
+between its plates is the capacitance to the substrate: the second's for those nets); the summary's mim_shielding says
+per pair of nets what Magic gave and what is kept (mim_shielding). Without it (the second run failed), only the overlap is taken out (mim_overlap).
 
 Ports are the top cell's labels, in the schematic's order (a label the schematic does not have names an inner net).
 Two labels on one net are one port in Magic's netlist: a schematic port whose label sits on the net of a label the
@@ -579,11 +580,17 @@ def mim_shielding(d: Path, cell: str, c: dict, mims: list[dict]) -> dict:
     above that went to the substrate, which the top plate over its bottom plate does not change), "removed_ff" (the
     coupling taken out: all pairs' changes summed, since what moves keeps its total; overlap_ff of it by area as
     mim_overlap counts it, fringe_ff the rest), "moved_to_plates_ff" (coupling of other nets' pairs that went to a
-    pair of plate nets), "pairs": [{nets, magic_ff, kept_ff, removed_ff, overlap_ff, capacitors}] for each pair of
-    nets that are a MIM's two plates (removed_ff: the pair's change, net of what moved onto it), "moved": [{nets,
-    magic_ff, kept_ff}] for every other pair of nets that changed (metal of another net over a capacitor, coupled to
-    the top plate in place of the bottom plate), "why"}. {} when there was no second extraction (no MIM capacitor in
-    the cell); {"not_applied": why} when it failed or does not match the first (mim_overlap is taken out then)."""
+    pair of plate nets), "substrate_from_shielded": the nets whose capacitance to the substrate is the second's (a
+    MIM's plate on the substrate node, see below), "pairs": [{nets, magic_ff, kept_ff, removed_ff, overlap_ff,
+    capacitors}] for each pair of nets that are a MIM's two plates (removed_ff: the pair's change, net of what moved
+    onto it), "moved": [{nets, magic_ff, kept_ff}] for every other pair of nets that changed (metal of another net
+    over a capacitor, coupled to the top plate in place of the bottom plate), "why"}. {} when there was no second extraction (no MIM capacitor in
+    the cell); {"not_applied": why} when it failed or does not match the first (mim_overlap is taken out then).
+
+    A MIM with a plate on the substrate node (sky130's ground: a bottom plate on VSS, the net the substrate taps go to)
+    has its plates' coupling in Magic's capacitance to the substrate: the second's is taken for the other plate's net
+    and for each net whose coupling to it changed (another net's metal over the capacitor, which moved from the
+    substrate node to the top plate, or the other way round), the first's for every other net."""
     if not (d / "shielded" / "pex.tcl").is_file():
         return {}
     if not (d / "shielded" / "c.spice").is_file():
@@ -596,11 +603,24 @@ def mim_shielding(d: Path, cell: str, c: dict, mims: list[dict]) -> dict:
                                "overlap of the metal above inside each capacitor is taken out (mim_overlap_removed)"}
     sub = read_ext(d / f"{cell}.ext")[0] or "VSUBS"
     sub2 = read_ext(d / "shielded" / f"{cell}.ext")[0] or sub
-    caps = [x for x in s["caps"] if sub2 not in x[:2]] + [x for x in c["caps"] if sub in x[:2]]
     plates: dict[tuple[str, str], int] = defaultdict(int)
     for _, _, _, a, b in mim_devices(d / f"{cell}.ext", {m["model"] for m in mims}):
         if a != b:
             plates[(a, b) if a <= b else (b, a)] += 1
+    between = [x for x in s["caps"] if sub2 not in x[:2]]
+    # a MIM with a plate on the substrate node (its bottom plate on the net the substrate taps go to, VSS): Magic's
+    # coupling between its plates is that net's capacitance to the substrate, so the second's is taken for the other
+    # plate's net, and for each net whose metal over such a capacitor moved between its plates (its coupling to the
+    # other plate changed, not as a pair of plates: that is another capacitor's own), so that what moved is not
+    # counted on both
+    on_sub = {n for k in plates if sub in k for n in k if n != sub}
+    if on_sub:
+        b1, b2 = _pair_sums([x for x in c["caps"] if sub not in x[:2]]), _pair_sums(between)
+        on_sub |= {n for k in set(b1) | set(b2) if k not in plates and set(k) & on_sub
+                   and abs(b1.get(k, 0.0) - b2.get(k, 0.0)) >= 1e-20 for n in k}
+    caps = between + [x for x in c["caps"] if sub in x[:2] and (x[1] if x[0] == sub else x[0]) not in on_sub] + \
+        [(sub if a == sub2 else a, sub if b == sub2 else b, v) for a, b, v in s["caps"]
+         if sub2 in (a, b) and (b if a == sub2 else a) in on_sub]
     over = {k: v[0] for k, v in mim_overlap(d, cell, mims).items()}
     before, after = _pair_sums(c["caps"]), _pair_sums(caps)
     pairs, moved = [], []
@@ -621,15 +641,17 @@ def mim_shielding(d: Path, cell: str, c: dict, mims: list[dict]) -> dict:
     overlap = min(overlap, max(removed, 0.0))
     return {"caps": caps, "removed_ff": _r(removed * 1e15), "overlap_ff": _r(overlap * 1e15),
             "fringe_ff": _r((removed - overlap) * 1e15), "moved_to_plates_ff": _r(to_plates * 1e15),
-            "pairs": pairs, "moved": moved,
+            "pairs": pairs, "moved": moved, **({"substrate_from_shielded": sorted(on_sub)} if on_sub else {}),
             "why": "Magic's tech file orders the MIM capacitor's plane above every metal, so its top plate shields "
                    "nothing: the metal above a capacitor reaches the bottom plate through it, by area and by the fringe "
                    "of its edges inside the capacitor, and Magic counts that as coupling between the plates' nets (the "
                    "device's model has the plates' own capacitance, its edge fringe in the perimeter term). Extracted a "
                    "second time with the capacitor's plane between its plates' and the rules from the metal above to "
                    "the bottom plate also to the capacitor (shielded/): its coupling between nets is the extraction's, "
-                   "the capacitance to the substrate the first extraction's. removed_ff: the coupling taken out in "
-                   "all (overlap_ff by area of the metal tied to the top plate by a via inside the capacitor, fringe_ff "
+                   "the capacitance to the substrate the first extraction's, except where a MIM's plate is the "
+                   "substrate node (a bottom plate on VSS): there Magic's coupling between the plates is a capacitance "
+                   "to the substrate, the second's for the nets in substrate_from_shielded. removed_ff: the "
+                   "coupling taken out in all (overlap_ff by area of the metal tied to the top plate by a via inside the capacitor, fringe_ff "
                    "the rest: the fringe, and metal of the top plate's net over it without a via there). pairs: between "
                    "a MIM's own plates, coupling outside the capacitors kept; a pair's removed_ff is its change, net of "
                    "what moved onto it (moved_to_plates_ff in all: another bottom plate's metal over a capacitor of the "

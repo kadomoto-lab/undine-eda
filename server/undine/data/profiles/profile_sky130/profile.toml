@@ -14,9 +14,15 @@ max_metal = "met5"
 drc_klayout = ["sky130?_mr.drc"]
 drc_extra = ["met_min_ca_density.lydrc", "pin_label_purposes_overlapping_drawing.rb.drc", "zeroarea.rb.drc"]
 lvs_klayout = ["sky130.lvs"]
-# the SPICE reader reads W=2 as 2 m (= 2e6 um); the deck's scale switch brings the layout side to the same units
-lvs_options = { lvs_sub = "VSS", scale = true }
+# the SPICE reader reads W=2 as 2 m (= 2e6 um); the deck's scale switch brings the layout side to the same units. The
+# deck simplifies the layout's netlist (parallel MOSFETs, resistors in series, the units of a BJT array are one
+# device each), so the reference is simplified as well (schematic_simplify): MP3 || MP5 is one device on both sides
+lvs_options = { lvs_sub = "VSS", scale = true, schematic_simplify = true }
 magic_rc = "{name}.magicrc"
+# Magic makes RPM / URPM again from the poly resistor it reads (the resistor grown by 0.2 um: 0.75 um on a 0.35 um
+# one, rpm.1 wants 1.27), as its own generator draws them (its res_xhigh_po_0p35 fails rpm.1 alone); the PDK's KLayout
+# PCell draws them 1.27 um wide. Magic's DRC checks them as drawn in the GDS
+magic_maskhints = ["RPM", "URPM"]
 netgen_setup = "{name}_setup.tcl"
 pcells = true
 erc_tap = [["tap"]]
@@ -182,6 +188,25 @@ model = "(sky130_fd_pr__)?cap_mim_m3_2"
 letter = "C"
 to = "sky130_fd_pr__model__cap_mim_m4"
 params = "mim_area_perimeter"
+
+# the fixed-width poly resistors' symbols write a call (XR1 a b VSUB sky130_fd_pr__res_xhigh_po_0p35 L=20 mult=1 m=1,
+# um) that the deck's reader leaves a call; the deck extracts them as resistors with a bulk terminal, one class per
+# width, compared by L (0.5 %; formula res_length). Parallel copies keep L and add up W, which the deck does not
+# compare: the reference has W = the class's width x m, and Undine compares W after the deck (check, 0.5 %), so two
+# in parallel do not match one. The width-generic res_high_po / res_xhigh_po (W=..) are not mapped: the deck has no
+# class for them
+[[profile.lvs_elements]]
+model = "sky130_fd_pr__res_x?high_po_(0p35|0p69|1p41|2p85|5p73)"
+letter = "R"
+params = "res_length"
+check = { W = 0.005 }
+
+# the BJT symbols' lvs_format writes an element (Q1 c b e sky130_fd_pr__pnp_05v5_W3p40L3p40 m=24) whose multiplier
+# the reader drops; the deck compares the number of emitters NE (formula bjt_emitters: NE = m)
+[[profile.lvs_elements]]
+model = "sky130_fd_pr__(pnp|npn)_05v5_\\w+"
+letter = "Q"
+params = "bjt_emitters"
 
 # their SPICE calls sky130_fd_pr__nfet_01v8 / special_nfet_01v8 / pfet_01v8_hvt with w=650000u (scale 1e-6); conb_1's
 # poly resistors (res_generic_po) have no resistor marker, the deck joins their ends; a flop has two VNB labels on the

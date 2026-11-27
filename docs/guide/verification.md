@@ -27,6 +27,29 @@ and perimeter and their nets: two 2 x 3 um units match `W=2 L=3 MF=2`; one unit,
 and compute parameters by a named formula (`profile.toml` under `server/undine/data/profiles/`, the formula
 `mim_area_perimeter` in `server/undine/pdks/formulas.py`).
 
+**Poly resistors, BJTs and parallel devices (sky130).** The fixed-width poly resistor symbols
+(`res_high_po_0p35` ... `res_xhigh_po_5p73`) write a call too (`XR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=40
+mult=1 m=1`); the deck extracts the poly as a resistor of its width's class, compared by `L` within 0.5 % (not by `R`
+or `W`). The reference has it as that resistor, with `W` the class's width times its multiplier (`RR1 a b VSS
+sky130_fd_pr__res_xhigh_po_0p35 L=40 W=0.35 m=1`, formula `res_length`). A resistor drawn as several pieces in series
+matches the sum of their lengths, as the deck adds them up; a wrong length, a shorted or a missing piece does not
+match. Copies of one length in parallel keep `L` and add up `W`, so the deck alone pairs two in parallel with one, or
+with five; Undine compares `W` after the deck (the element's `check` in the profile, 0.5 %): two in parallel match
+`m=2` or two in the schematic, not one, and the mismatch says so (`param_errors`: *R1: W 0.7 in the layout, 0.35 in
+the schematic ... the layout has 2 in parallel where the schematic has 1*). The width-generic `res_high_po` / `res_xhigh_po` (with `W`) have no class in the
+deck and are not mapped. The PDK's PCell draws a resistor's body 0.12 um longer than its `len`, so schematic-driven
+layout gives it `len = L - 0.12` (a piece placed by hand needs the same). A BJT array (`pnp_05v5` with `m=24`) is one
+device of 24 emitters in the layout; the SPICE reader drops the multiplier of a `Q` element, so the reference writes
+`NE=24` (formula `bjt_emitters`). The deck simplifies the layout's netlist (parallel transistors, resistors in series,
+the units of an array become one device), so the reference is simplified too (the profile's `lvs_options`:
+`schematic_simplify`): two transistors in parallel, `MP3 || MP5`, match the one device the layout has. That
+simplification also drops a port the schematic connects to nothing inside; it is still checked by its label in the
+layout (below). A subcircuit that does not match makes KLayout skip the cells above it, which then pair no
+pins; their ports are not reported as pin errors for that. Where the deck itself rejects a device for a parameter (a
+resistor drawn with `L` 20 where the schematic has 19.5), the LVS diagnosis names the device and both values. The
+tolerances of `check` are part of a KLayout LVS run's inputs (the profile field `lvs_checks`, recorded only on a PDK
+that has some, so GF180MCU and IHP runs keep their key); a sky130 run from before them is outdated.
+
 **Standard cells in LVS (sky130).** A layout built from the PDK's standard cells (a LibreLane macro imported, or cells
 placed by hand) is checked against a schematic of them. The schematic's netlist calls the cells without defining
 them, so Undine adds each cell it calls from the library's SPICE file (`sky130_fd_sc_hd.spice`): its transistors as
@@ -58,6 +81,19 @@ browser (rule list, markers in the layout; Netgen's output on demand). On the de
 a deliberately bad layout KLayout reports 172 and Magic 171 violations, in different rules -- which is the point of running both.
 Magic lists a violation as the error tiles of its area; Undine merges touching tiles into one marker, so a count is a
 count of violations (a 24 um butted tap is one `diff/tap.16`, not 138 boxes).
+
+Magic reads the GDS into its own devices and makes some layers again from them when it checks. On sky130 it makes a
+poly resistor's RPM / URPM 0.2 um around the resistor: 0.75 um on a 0.35 um resistor, where `rpm.1` wants 1.27 um
+(the PDK's own Magic generator draws it so, and its `res_xhigh_po_0p35` fails `rpm.1` standing alone). The PDK's
+KLayout PCell draws them 1.27 um wide, which the KLayout deck checks (`rpm.1a`, `urpm.1a`). So Magic's DRC reads the
+layers of the profile's `magic_maskhints` (sky130: RPM, URPM) as drawn (`gds maskhints`): a resistor whose drawn RPM
+is too narrow still fails. One case remains: a 0.35 um resistor with the PCell's guard ring (`gr`, on by default) has
+its p+ tap 0.02 um from the RPM, and Magic does not count RPM within 0.185 um of p+ diffusion, so `rpm.1` stays (the
+0.69 um and wider ones pass). Schematic-driven layout therefore draws 0.35 um high / xhigh poly resistors without the
+PCell's ring (`gr: 0`) and puts Undine's guard ring around them instead (the profile's ring, as far out as the
+spacing rules want, its p+ implant clear of the resistor's), their bulk tap: route it to the bulk net, as the answer's
+`taps` says. A resistor placed by hand (`place_pcell`) is drawn as you give it: use `gr: 0` and a tap apart. A Magic
+DRC run from before Magic read the mask hints (its inputs have no `profile`) is outdated on a PDK that has some.
 
 ## The checks of a changeset
 
@@ -185,8 +221,13 @@ coupling for its own metal, a coupling to the top plate's net for another net's 
 coupling between nets is the result. Its capacitance to the substrate is not: Magic shares the fringe of an edge out
 among what lies beside it, and the capacitor's new fringe rules take a little of the metal above's fringe to the
 substrate (2.8 aF of a 1.17 um unit's 1521 aF bottom plate), which the top plate over its bottom plate does not change
-in silicon. So the capacitance to the substrate is the first extraction's. The summary's `mim_shielding` says what
-changed:
+in silicon. So the capacitance to the substrate is the first extraction's, with one exception: a capacitor whose
+bottom (or top) plate is the substrate node (on sky130 the net the substrate taps go to, usually VSS). Magic's
+coupling between its plates is then the other plate's capacitance to the substrate, so for that net, and for each net
+whose metal over such a capacitor moved to its other plate, the capacitance to the substrate is the second
+extraction's (`substrate_from_shielded` lists them). A 31.6 um MIM strapped in met4 with its bottom plate on VSS had
+92.4 fF to the substrate on its top net, 81.9 fF of it the strap's 974 um² over the bottom plate: 8.9 fF are kept.
+The summary's `mim_shielding` says what changed:
 
 - `removed_ff`: the coupling taken out in all (every pair's change summed: what moves keeps its total), of which
   `overlap_ff` by area (the metal tied to the top plate by a via inside the capacitor) and `fringe_ff` the rest (the

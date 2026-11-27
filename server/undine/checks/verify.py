@@ -8,6 +8,7 @@ browser never sees the decks.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -177,6 +178,8 @@ def start_lvs(jobs: Jobs, project_path: Path, pdk: Pdk, layout: kdb.Layout, cell
         if instances:
             (job.path / "instances.json").write_text(json.dumps(instances))
         (job.path / "pin_labels.json").write_text(json.dumps(pin_label_pairs(pdk.profile)))
+        if (checks := param_checks(pdk.profile)):
+            (job.path / "param_checks.json").write_text(json.dumps(checks))
         argv = [exe, "-b", "-r", str(pdk.decks_dir / "lvs" / deck),
                 "-rd", f"input={gds}", "-rd", f"top_cell={cell}", "-rd", f"topcell={cell}",
                 "-rd", f"report={job.path / 'result.lvsdb'}",
@@ -404,13 +407,120 @@ def lvs_summary(path: Path) -> dict:
         if st != "Match":
             ok = False
     unused: list[dict] = []
-    pin_errors = _top_pin_errors(lvs, xref, path.with_name("input.gds"), unused)
-    out = {"match": ok and not pin_errors, "circuits": circuits}
+    pin_errors = _top_pin_errors(lvs, xref, path.with_name("input.gds"), unused, path.with_name("schematic.spice"))
+    param_errors = _param_errors(xref, path.parent)
+    out = {"match": ok and not pin_errors and not param_errors, "circuits": circuits}
     if pin_errors:
         out["pin_errors"] = pin_errors
+    if param_errors:
+        out["param_errors"] = param_errors
     if unused:
         out["unused_pins"] = unused
     return out
+
+
+def param_checks(profile) -> list[dict]:
+    """The parameters Undine compares after the deck (LvsElement.check), as an LVS run keeps them (param_checks.json):
+    [{"model": a regex of the device class (the element's `to`, else its model), "params": {name: relative
+    tolerance}}]."""
+    return [{"model": re.escape(el.to) if el.to else el.model, "params": dict(el.check)}
+            for el in profile.lvs_elements if el.check]
+
+
+def _written_params(sch: Path) -> dict[str, dict[str, str]]:
+    """The parameters of each element of a reference netlist as written, by the name KLayout gives the device (the
+    element's name without its letter, upper case): {name: {PARAMETER: text}}."""
+    out: dict[str, dict[str, str]] = {}
+    for line in _cards(sch.read_text(errors="replace") if sch.is_file() else ""):
+        t = line.split()
+        if t and t[0][:1].isalpha() and len(t[0]) > 1 and t[0][:1] not in "xX.":
+            out.setdefault(t[0][1:].upper(), {k.upper(): v for k, _, v in (x.partition("=") for x in t[1:] if "=" in x)})
+    return out
+
+
+def _param_errors(xref, run: Path) -> list[str]:
+    """The device pairs LVS matched whose parameters of the run's param_checks.json (param_checks: those the deck
+    does not compare) differ beyond their tolerance, a line each that says why. A sky130 poly resistor is compared
+    by L alone: copies of one length in parallel (or m) keep L and add up W, so the deck pairs two in parallel with
+    one, or with five; Undine compares W. A reference without the parameter (0) is not checked."""
+    try:
+        checks = json.loads((run / "param_checks.json").read_text())
+    except (OSError, ValueError):
+        return []
+    if not checks or xref is None:
+        return []
+    sch = run / "schematic.spice"
+    written = _written_params(sch)
+    insts = names_of(sch)[1] if sch.is_file() else {}
+    pairs = [(a, b) for cp in xref.each_circuit_pair() for dp in xref.each_device_pair(cp)
+             if (a := _g(dp, "first")) is not None and (b := _g(dp, "second")) is not None
+             and _st(dp) in ("Match", "MatchWithWarning")]
+    unit = _length_unit(pairs, written)
+    out = []
+    for a, b in pairs:
+        cls = b.device_class().name
+        for c in checks:
+            if not re.fullmatch(c["model"], cls, re.I):
+                continue
+            for name, tol in c["params"].items():
+                if not (a.device_class().has_parameter(name) and b.device_class().has_parameter(name)):
+                    continue
+                va, vb = a.parameter(name), b.parameter(name)
+                if vb <= 0 or abs(va - vb) <= float(tol) * abs(vb):
+                    continue
+                dev = _g(b, "name") or b.expanded_name()
+                ratio = va / vb
+                counts = _copies(cls, va, vb, unit) if name.upper() == "W" else None
+                why = (f"the deck compares L, not {name}: copies of one length in parallel (or m) keep L and add up "
+                       f"{name}" + (f"; the layout has {counts[0]} in parallel where the schematic has {counts[1]}"
+                                    if counts else "")
+                       if name.upper() == "W" else "the deck does not compare it")
+                out.append(f"{insts.get(dev.upper(), dev)} ({cls.lower()}): {name} "
+                           + (f"{va * unit:.4g} in the layout, {vb * unit:.4g} in the schematic"
+                              if unit else f"{ratio:.3g} x the schematic's in the layout")
+                           + f" (beyond {float(tol):.1%}): {why}")
+            break
+    return out
+
+
+def _copies(cls: str, va: float, vb: float, unit: float | None) -> tuple[int, int] | None:
+    """How many copies of a device class whose name ends in its width (sky130_fd_pr__res_xhigh_po_0p35: 0.35 um) the
+    widths `va` (layout) and `vb` (schematic) are, in the database's units (`unit`: um per unit, _length_unit); None
+    when the class names no width, the unit is not known or a width is not a whole number of copies."""
+    w = re.search(r"_(\d+)p(\d+)$", cls, re.I)
+    if w is None or not unit:
+        return None
+    w0 = float(f"{w.group(1)}.{w.group(2)}")
+    na, nb = va * unit / w0, vb * unit / w0
+    if w0 <= 0 or min(na, nb) < 0.5 or any(abs(n - round(n)) > 0.01 * n for n in (na, nb)):
+        return None
+    return round(na), round(nb)
+
+
+def _cards(text: str) -> list[str]:
+    """The lines of a SPICE netlist with their continuation lines (+ ...) joined on."""
+    cards: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("+") and cards:
+            cards[-1] += " " + line[1:]
+        else:
+            cards.append(line)
+    return cards
+
+
+def _length_unit(pairs: list, written: dict[str, dict[str, str]]) -> float | None:
+    """The reference's length unit per unit of the LVS database (a SPICE reader reads L=2 as 2 m, in um: 1e-6), from a
+    device whose L the database has as written (to a power of ten: not one the simplification made of several);
+    None without one."""
+    for _a, b in pairs:
+        text = written.get((_g(b, "name") or "").upper(), {}).get("L")
+        try:
+            r = float(text) / b.parameter("L") if b.device_class().has_parameter("L") else 0.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        if r > 0 and abs(math.log10(r) - round(math.log10(r))) < 1e-6:
+            return 10.0 ** round(math.log10(r))
+    return None
 
 
 def pin_label_pairs(profile) -> list[list[list[int]]]:
@@ -469,7 +579,20 @@ def _on_net(net) -> str:
     return ", ".join(items[:6]) + (f" and {len(items) - 6} more" if len(items) > 6 else "") if items else "none"
 
 
-def _top_pin_errors(lvs, xref, gds: Path | None = None, unused: list | None = None) -> list[str]:
+def _written_pins(sch: Path | None, cell: str) -> list[str] | None:
+    """The pins of subcircuit `cell` as the reference netlist `sch` (a run's schematic.spice) writes them; None without
+    the file or the subcircuit."""
+    if sch is None or not sch.is_file():
+        return None
+    for c in _cards(sch.read_text(errors="replace")):
+        t = c.split()
+        if len(t) > 1 and t[0].lower() == ".subckt" and t[1].upper() == cell.upper():
+            return [x for x in t[2:] if "=" not in x]
+    return None
+
+
+def _top_pin_errors(lvs, xref, gds: Path | None = None, unused: list | None = None,
+                    sch: Path | None = None) -> list[str]:
     """Pins of the top cell that the layout does not carry. KLayout reports a schematic pin without a layout pin as
     matching and pairs its net with whatever unnamed net has the same devices, so a supply that lost its connection
     to the labeled stripe (demo, 10/25: VDPWR, a via stack missing its top via) still "matched". Every pin of the
@@ -481,7 +604,10 @@ def _top_pin_errors(lvs, xref, gds: Path | None = None, unused: list | None = No
     the run's input; on a pin label layer, on its metal: _top_labels) and reported in `unused` ({pin, label}); without
     the label it is an error that says so. Only a net with that one pin and no device or subcircuit counts, and only
     while no net of the extracted layout carries the name: a label on live metal (a device's net) is a misconnection
-    the exemption would hide, and is an error naming the net."""
+    the exemption would hide, and is an error naming the net. Where the reference is simplified too
+    (schematic_simplify), its own such net is purged with its pin: a pin of the top subcircuit as `sch` writes it that
+    the compared reference no longer has is that port. That simplification also makes a pin of every other net of the
+    top circuit (make_top_level_pins): only the pins `sch` writes are the cell's ports."""
     top = next(iter(lvs.netlist().each_circuit_top_down()), None) if lvs.netlist() else None
     if top is None:
         return []
@@ -496,36 +622,61 @@ def _top_pin_errors(lvs, xref, gds: Path | None = None, unused: list | None = No
             matched[_g(b, "name").upper()] = _g(a, "name")
     errors = []
     labels: set[str] | None = None
+
+    def unused_port(want: str) -> None:
+        nonlocal labels
+        live = _live_named(top, want)
+        if live is not None:
+            # the label is on metal the layout uses: not an unused port, a misconnection
+            errors.append(f"pin {want}: connected to nothing in the schematic but its label is on the layout "
+                          f"net {live.name} (devices {_on_net(live)})")
+            return
+        if labels is None:
+            labels = _top_labels(gds, top.name) if gds is not None else set()
+        if want.upper() in labels:
+            if unused is not None:
+                unused.append({"pin": want, "label": True,
+                               "note": "connected to nothing inside the schematic; its label is on the layout "
+                                       "(the deck purges a net with no device, so the layout has no pin for it)"})
+            return
+        errors.append(f"pin {want}: connected to nothing inside the schematic and no {want} label in the "
+                      f"layout's top cell: label the port where it leaves the cell")
+    written = _written_pins(sch, top.name)
+    ports = None if written is None else {p.upper() for p in written}
+    compared = set()
+    # a top circuit that does not match (a device's parameters, a net) pairs no nets and few pins: a pin that the
+    # layout has (its label) is not a pin error then, only one it lacks
+    unpaired = _st(cp) not in ("Match", "MatchWithWarning")
+    layout_pins = {(p.name() or "").upper() for p in top.each_pin()}
     for pp in xref.each_pin_pair(cp):
         a, b = _g(pp, "first"), _g(pp, "second")
         if b is None:
             continue                                   # a layout pin the schematic does not have: not an open
         want = _g(b, "name")
+        if ports is not None and want.upper() not in ports:
+            continue                                   # a pin the simplification made of an inner net
+        compared.add(want.upper())
         if a is None:
             net = ref_circuit.net_for_pin(b) if ref_circuit is not None else None
             if net is None or (net.terminal_count() + net.subcircuit_pin_count() == 0 and net.pin_count() == 1):
-                live = _live_named(top, want)
-                if live is not None:
-                    # the label is on metal the layout uses: not an unused port, a misconnection
-                    errors.append(f"pin {want}: connected to nothing in the schematic but its label is on the layout "
-                                  f"net {live.name} (devices {_on_net(live)})")
-                    continue
-                if labels is None:
-                    labels = _top_labels(gds, top.name) if gds is not None else set()
-                if want.upper() in labels:
-                    if unused is not None:
-                        unused.append({"pin": want, "label": True,
-                                       "note": "connected to nothing inside the schematic; its label is on the layout "
-                                               "(the deck purges a net with no device, so the layout has no pin for it)"})
-                    continue
-                errors.append(f"pin {want}: connected to nothing inside the schematic and no {want} label in the "
-                              f"layout's top cell: label the port where it leaves the cell")
+                unused_port(want)
+                continue
+            if unpaired and want.upper() in layout_pins:
                 continue
             net = matched.get(want.upper())
             errors.append(f"pin {want}: no {want} label on the layout net it matched"
                           + (f" ({net}): not connected to the {want} pin in the layout?" if net else ""))
-        elif _g(a, "name").upper() != want.upper():
+        elif _g(a, "name").upper() != want.upper() and not (unpaired and want.upper() in layout_pins):
             errors.append(f"pin {want}: matched the layout pin {_g(a, 'name')}")
+    if ref_circuit is not None:
+        # a port of the cell that the compared reference no longer has: the simplification purged it with its net, a
+        # net with nothing on it inside the cell. Only such a port: a top circuit LVS skipped (a subcircuit that does
+        # not match) or did not match pairs few pins or none, and its other ports are no pin errors for that
+        kept = {(p.name() or "").upper() for p in ref_circuit.each_pin()}
+        for want in written or ():
+            if want.upper() not in compared and want.upper() not in kept:
+                compared.add(want.upper())
+                unused_port(want.upper())
     return errors
 
 
@@ -654,13 +805,71 @@ def _flat_devices(c, memo: dict) -> dict[str, int]:
     return memo[c.name]
 
 
+def _device_param_why(xref, run: Path) -> list[str]:
+    """Devices LVS did not match for their parameters, a line each with the values the database has: a pair of the
+    deck's whose parameters it flagged (MatchWithWarning; a Mismatch pair is one of nets that do not match), and a
+    class with one device left unpaired on each side (the deck found no layout device with the schematic one's
+    parameters: L 8.12 against 8). A parameter the reference does not give (0: R, A, P of a resistor, AS / AD of a
+    MOSFET) is not compared, nor one that differs on a pair of the class LVS matched (the deck does not compare it: a
+    MIM's C); lengths (L, W) are in the reference's unit where the database shows it (_length_unit)."""
+    if xref is None:
+        return []
+    sch = run / "schematic.spice"
+    insts = names_of(sch)[1] if sch.is_file() else {}
+    written = _written_params(sch)
+    found: list[tuple] = []                            # (layout device, schematic device, paired)
+    ignored: dict[str, set] = defaultdict(set)         # class: parameters that differ on a matched pair
+
+    def differs(a, b, name: str) -> bool:
+        va, vb = a.parameter(name), b.parameter(name)
+        return vb != 0 and abs(va - vb) > 1e-6 * max(abs(va), abs(vb))
+    for cp in xref.each_circuit_pair():
+        alone: dict[str, tuple[list, list]] = defaultdict(lambda: ([], []))
+        for dp in xref.each_device_pair(cp):
+            a, b = _g(dp, "first"), _g(dp, "second")
+            if a is not None and b is not None:
+                if _st(dp) == "MatchWithWarning":
+                    found.append((a, b, True))
+                elif _st(dp) == "Match":
+                    cls = _g(b.device_class(), "name").upper()
+                    ignored[cls] |= {pd.name for pd in b.device_class().parameter_definitions()
+                                     if a.device_class().has_parameter(pd.name) and differs(a, b, pd.name)}
+            elif a is not None or b is not None:
+                d = a if a is not None else b
+                alone[_g(d.device_class(), "name").upper()][0 if a is not None else 1].append(d)
+        for lay, ref in alone.values():
+            if len(lay) == 1 and len(ref) == 1:
+                found.append((lay[0], ref[0], False))
+    unit = _length_unit([(a, b) for a, b, _ in found], written)
+    out = []
+    for a, b, paired in found:
+        ca, cb = a.device_class(), b.device_class()
+        diff = []
+        skip = ignored.get(_g(cb, "name").upper(), set())
+        for pd in cb.parameter_definitions():
+            if not ca.has_parameter(pd.name) or pd.name in skip or not differs(a, b, pd.name):
+                continue
+            va, vb = a.parameter(pd.name), b.parameter(pd.name)
+            k = unit if unit and pd.name.upper() in ("L", "W") else 1.0
+            diff.append(f"{pd.name} {va * k:.4g} in the layout, {vb * k:.4g} in the schematic")
+        if not diff:
+            continue
+        dev = _g(b, "name") or b.expanded_name()
+        out.append(f"{insts.get(dev.upper(), dev)} ({_g(cb, 'name').lower()}): "
+                   + ("LVS paired it with the layout's " if paired else "no layout device has its parameters; "
+                      "the one of its class left unpaired is ") + f"{a.expanded_name()}, which differs: "
+                   + "; ".join(diff))
+    return out
+
+
 def lvs_diagnosis(run: Path, cell: str, detail: dict | None = None) -> dict:
     """Why a KLayout LVS run of `cell` does not match, in counts and names a reader acts on: {"layout": {circuit,
     devices by class, nets, pins}, "schematic": the same, "why": [...]}. An empty layout netlist (no circuit, or one
     without devices and nets: the deck's netlist simplification purges every net with fewer than two connections and
     no pin, then the devices and circuits left without nets) is said as such, with the top cell's labels; then device
-    counts by class, the schematic's devices and pins without a layout counterpart (`detail`: lvs_detail), and the
-    layout's nets with one connection."""
+    counts by class, the schematic's devices and pins without a layout counterpart (`detail`: lvs_detail), devices
+    LVS did not match for their parameters (_device_param_why) or matched with parameters Undine compares after it
+    (_param_errors), and the layout's nets with one connection."""
     lvs = kdb.LayoutVsSchematic()
     lvs.read(str(run / "result.lvsdb"))
     lay, ref = lvs.netlist(), lvs.reference
@@ -703,6 +912,8 @@ def lvs_diagnosis(run: Path, cell: str, detail: dict | None = None) -> dict:
     if (extra := [r["layout"] for r in rows if r["schematic"] is None and r["layout"]]):
         why.append(f"layout devices without a schematic device: {', '.join(extra[:LVS_NAMES])}"
                    + (f" and {len(extra) - LVS_NAMES} more" if len(extra) > LVS_NAMES else ""))
+    why += _device_param_why(lvs.xref(), run)
+    why += _param_errors(lvs.xref(), run)
     lp = {p.lower() for p in li["pins"]}
     if (pins := [p for p in ri["pins"] if p.lower() not in lp]):
         why.append(f"schematic pins the layout does not have (a label on the net in the layout's top cell): "

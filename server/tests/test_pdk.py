@@ -37,7 +37,8 @@ def test_gf180_profile_finds_its_decks_and_layers():
 def test_decks_get_the_switches_and_metal_stack_the_way_they_read_them():
     sky, gf, ihp = pdkprofile.SKY130, pdkprofile.GF180, pdkprofile.IHP
     assert sky.drc_rd("sky130A_mr.drc", {"beol": False}, "sky130A") == {"feol": "true", "beol": "false", "offgrid": "true"}
-    assert sky.lvs_rd({"lvs_sub": "VGND"}, "sky130A") == {"run_mode": "deep", "lvs_sub": "VGND", "scale": "true"}
+    assert sky.lvs_rd({"lvs_sub": "VGND"}, "sky130A") == {"run_mode": "deep", "lvs_sub": "VGND", "scale": "true",
+                                                            "schematic_simplify": "true"}
     rd = gf.drc_rd("gf180mcu.drc", {"feol": True, "beol": False, "offgrid": True}, "gf180mcuD")
     assert rd == {"metal_level": "5LM", "metal_top": "11K", "mim_option": "B", "decks": "all,-density,-antenna,-cup,-beol"}
     assert gf.drc_rd("gf180mcu.drc", {"decks": "density"}, "gf180mcuD")["decks"] == "density"   # a shuttle's density run

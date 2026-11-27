@@ -359,6 +359,7 @@ def get_lvs_report(c: ToolCtx, a: dict):
             **({k: diag[k] for k in ("why", "layout", "schematic")} if diag else {}),
             "not_matching": bad, "pin_errors": (j.get("summary") or {}).get("pin_errors", []),
             **({"unused_pins": u} if (u := (j.get("summary") or {}).get("unused_pins")) else {}),
+            **({"param_errors": e} if (e := (j.get("summary") or {}).get("param_errors")) else {}),
             "outdated": fresh["changed"] if fresh["fresh"] is False else [],
             "counts": {k: len(v) for k, v in det.items() if isinstance(v, list)},
             "extracted_from_layout": ext[:2500], "reference_from_schematic": sch[:1500],
@@ -5239,7 +5240,8 @@ TOOLS: list[dict] = [
                     "capm.11 / capm.2b); a MOSFET's mult: more fingers of one strapped device. Taps: a MOSFET gets a butted "
                     "bulk tie only where a source / drain is on its bulk net (strapped to the tap: taps in the answer says "
                     "which terminal to route there), else a guard ring; thick-oxide ties are two contacts wide (0.99 um "
-                    "nfet, 0.86 um pfet; diff/tap.16 0.7 um). A device put in place keeps its position and orientation. "
+                    "nfet, 0.86 um pfet; diff/tap.16 0.7 um). A sky130 0.35 um poly resistor is drawn without its PCell's ring (it fails "
+                    "Magic's rpm.1) in a guard ring of Undine's, its bulk tap (in taps). A device put in place keeps its position and orientation. "
                     "layout: per device, layout parameters kept with its layout instance, so a later sync keeps them "
                     "(null takes one back): MOSFETs nf (fingers drawn: W x mult / nf each, the schematic keeps its nf), bulk "
                     "(auto | tie | ring | none), tap_side (right | left), gate (bottom | top | alternating), sd_contacts; "
@@ -5345,7 +5347,9 @@ TOOLS: list[dict] = [
                     "several, which LVS combines once routed in parallel; sync_layout then leaves the device as your own "
                     "layout, one piece too). pcell and params as the PDK's catalog names them (sky130: nfet / pfet {type, w (one "
                     "finger), l, nf, bulk: None | bulk tie | guard ring, gate_con_pos, sd_con_col}, mim_cap {type, w, l}, "
-                    "res_poly ...): an unknown one is refused with the PCells, or the parameters with their defaults and "
+                    "res_poly {type, len: a high / xhigh poly resistor's body is drawn len + 0.12 um long, so a piece of "
+                    "L um takes len L - 0.12; gr: its guard ring, which on a 0.35 um one fails Magic's rpm.1: give gr 0 "
+                    "and a tap apart} ...): an unknown one is refused with the PCells, or the parameters with their defaults and "
                     "choices. A variant the library has is not generated again. The answer gives its id and box.",
      "input_schema": _obj({**LIBCELL, "pcell": S, "params": {"type": "object"}, "x": {"type": "number"}, "y": {"type": "number"},
                            "rot": {"type": "integer", "enum": list(ROTATIONS)}, "mirror": {"type": "boolean"},

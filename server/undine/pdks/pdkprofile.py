@@ -11,6 +11,7 @@ which have); `limits` names what is still missing, and Undine says so instead of
 from __future__ import annotations
 
 import functools
+import inspect
 import re
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
@@ -45,12 +46,19 @@ class LvsElement:
     element: a call whose model matches `model` (a regex, case ignored) becomes a `letter` line with the parameters
     renamed (`rename`: {parameter: new name}, case ignored); `to` replaces the model, and `params` the parameters:
     computed from the call's numeric ones (lower-case names) and its multiplier (m, else mf, else mult; 1), returning
-    {name: value} (the multiplier goes on as m)."""
+    {name: value} (the multiplier goes on as m, unless the formula gives m itself: one that folds the multiplier into
+    another parameter; a formula with a second argument `model` gets the call's model too). A line that already is a
+    `letter` element of such a model (the symbol's lvs_format writes `Q1 c b e model m=24`) has its parameters
+    rewritten the same way and keeps its name. `check`: {parameter: relative tolerance} that Undine compares itself
+    after the deck, on each device pair of the model's class LVS matched (the deck leaves them out: a sky130 poly
+    resistor's W, so that parallel copies of one length are counted; verify.lvs_summary's param_errors). A reference
+    that does not give the parameter (0) is not checked."""
     model: str
     letter: str
     rename: dict = field(default_factory=dict)
     to: str | None = None
     params: Callable[[dict], dict] | None = None
+    check: dict[str, float] = field(default_factory=dict)
 
 
 # the standard cells a place-and-route run adds for the layout alone, by name (sky130_fd_sc_hd__decap_3, _fill_1,
@@ -83,8 +91,8 @@ class StdcellLvs:
 _SI = {"f": 1e-15, "p": 1e-12, "n": 1e-9, "u": 1e-6, "m": 1e-3, "k": 1e3, "meg": 1e6, "g": 1e9}
 
 
-def _computed(el: LvsElement, name: str, given: dict) -> dict:
-    """The parameters of element `el` for the call `name` with parameters `given` ({name: text}), and m."""
+def _computed(el: LvsElement, name: str, given: dict, model: str = "") -> dict:
+    """The parameters of element `el` for the call `name` of `model` with parameters `given` ({name: text}), and m."""
     nums = {}
     for k, v in given.items():
         if (m := re.fullmatch(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)(meg|[fpnumkg])?", v.strip("'{}"), re.I)):
@@ -93,7 +101,8 @@ def _computed(el: LvsElement, name: str, given: dict) -> dict:
     try:
         if has and has[0] not in nums:
             raise KeyError(has[0])
-        return {**el.params(nums), "m": nums[has[0]] if has else 1.0}
+        out = el.params(nums, model) if "model" in inspect.signature(el.params).parameters else el.params(nums)
+        return {**out, "m": out.get("m", nums[has[0]] if has else 1.0)}
     except KeyError:
         raise ValueError(f"{name}: LVS compares it as {el.to or 'an element'} by parameters computed from its own, "
                          f"which are not all numbers: {', '.join(f'{k}={v}' for k, v in given.items()) or 'none'}") from None
@@ -279,6 +288,9 @@ class Profile:
     magic_drc: bool = False                            # run_checks runs Magic's drc(full) next to the KLayout deck
                                                        # (the deck lacks rules of Magic's that shuttle prechecks run);
                                                        # set once drc(full) has been run on the PDK's cells (tested.py)
+    # the layers (Magic's CIF names) whose shapes Magic's DRC takes as drawn in the GDS (`gds maskhints`), where the
+    # tech file would otherwise make them again from the devices it reads (sky130: RPM / URPM as the resistor + 0.2 um)
+    magic_maskhints: tuple[str, ...] = ()
     # body taps as drawn, for run_checks' ERC of taps butted against a source / drain of another net: a union of
     # terms, each the layers (profile names) a tap is drawn on and, after "-", those it is not on
     erc_tap: tuple[tuple[str, ...], ...] = ()
@@ -344,16 +356,17 @@ class Profile:
         out = []
         for line in text.split("\n"):
             t = line.split()
-            if t and t[0][:1] in "xX":
+            if t and t[0][:1].isalpha():
+                call = t[0][:1] in "xX"
                 args = [x for x in t[1:] if "=" not in x]
                 for el in self.lvs_elements:
-                    if args and re.fullmatch(el.model, args[-1], re.I):
+                    if (call or t[0][:1].upper() == el.letter.upper()) and args and re.fullmatch(el.model, args[-1], re.I):
                         kv = [x.partition("=")[::2] for x in t[1 + len(args):]]
                         if el.params is None:
                             params = [f"{el.rename.get(k.lower(), k)}={v}" for k, v in kv]
                         else:
-                            params = [f"{k}={v:.12g}" for k, v in _computed(el, t[0], dict(kv)).items()]
-                        line = " ".join([el.letter + t[0][1:], *args[:-1], el.to or args[-1], *params])
+                            params = [f"{k}={v:.12g}" for k, v in _computed(el, t[0], dict(kv), args[-1]).items()]
+                        line = " ".join([el.letter + t[0][1:] if call else t[0], *args[:-1], el.to or args[-1], *params])
                         break
             out.append(line)
         return "\n".join(out)

@@ -162,19 +162,55 @@ def _plain(v):
 
 DRC_PROFILE = ("drc_options", "deck_vars")
 LVS_PROFILE = ("lvs_options", "deck_vars")
+MAGIC_DRC_PROFILE = ("magic_maskhints",)
 SIM_PROFILE = ("model_lib", "model_includes", "osdi", "corners")
 LATER = ("models", "profile")               # inputs recorded since phase 4: a job from before has neither
 
 
 def profile_fields(pdk, fields, deck: str | None = None) -> dict:
     """The fields of the PDK's profile a run uses, as they are now: drc_options (the defaults of DRC deck `deck`),
-    lvs_options, deck_vars (this PDK's), model_lib, model_includes, osdi, corners. None for each without a PDK."""
+    lvs_options, deck_vars (this PDK's), model_lib, model_includes, osdi, corners, magic_maskhints, lvs_checks (the
+    parameters Undine compares after the LVS deck: {lvs_elements model: {parameter: tolerance}}). None for each
+    without a PDK."""
     p = pdk.profile if pdk else None
     get = {"drc_options": lambda: p.deck_defaults(deck or ""), "lvs_options": lambda: dict(p.lvs_options),
            "deck_vars": lambda: dict(p.deck_vars.get(pdk.name, {})), "model_lib": lambda: p.model_lib,
            "model_includes": lambda: list(p.model_includes), "osdi": lambda: list(p.osdi),
-           "corners": lambda: list(p.corners)}
+           "corners": lambda: list(p.corners), "magic_maskhints": lambda: list(p.magic_maskhints),
+           "lvs_checks": lambda: {el.model: dict(el.check) for el in p.lvs_elements if el.check}}
     return _plain({f: (get[f]() if p is not None and f in get else None) for f in fields})
+
+
+def magic_drc_profile(pdk) -> dict | None:
+    """The profile fields a Magic DRC job records (MAGIC_DRC_PROFILE), only where they change what it runs: a PDK
+    without magic_maskhints (GF180MCU, IHP) records none, so its jobs keep the key they had."""
+    got = profile_fields(pdk, MAGIC_DRC_PROFILE)
+    return got if got.get("magic_maskhints") else None
+
+
+def lvs_profile(pdk, deck: str | None = None) -> dict:
+    """The profile fields a KLayout LVS job records: LVS_PROFILE, and lvs_checks only where the profile has some
+    (sky130's poly resistor W), so that a PDK without (GF180MCU, IHP) keeps the key its jobs had."""
+    got = profile_fields(pdk, LVS_PROFILE + ("lvs_checks",), deck)
+    if not got.get("lvs_checks"):
+        got.pop("lvs_checks", None)
+    return got
+
+
+def unrecorded(kind: str | None, tool: str | None, inp: dict, pdk) -> list[str]:
+    """What a job from before an input of its kind was recorded ran without, in words, where that input now changes
+    the run (empty: nothing). A Magic DRC job without `profile` read no mask hints: on a PDK that has some
+    (magic_maskhints) it made RPM / URPM from the resistors again, so its rpm.1 results are not today's. A KLayout LVS
+    job without lvs_checks compared no parameter after the deck, on a PDK that has some."""
+    if kind == "drc" and (tool or "klayout") == "magic" and "profile" not in inp:
+        if (now := magic_drc_profile(pdk)) is not None:
+            return [f"profile field magic_maskhints: not read → {now['magic_maskhints']}"]
+    # a KLayout LVS job from before lvs_checks compared no parameter after the deck (two poly resistors in parallel
+    # matched one)
+    if kind == "lvs" and (tool or "klayout") == "klayout" and "lvs_checks" not in (inp.get("profile") or {}):
+        if (now := lvs_profile(pdk).get("lvs_checks") if pdk is not None else None):
+            return [f"profile field lvs_checks: not read → {now}"]
+    return []
 
 
 def inputs(design: list[dict], pdk, tool_names: list[str], deck: dict | None = None, options: dict | None = None,
@@ -379,5 +415,6 @@ def freshness(srv, project: str, status: dict) -> dict:
     inp = status.get("inputs")
     if not inp:
         return {"fresh": None, "changed": []}
-    changed = diff(inp, recompute(srv, project, inp))
+    changed = diff(inp, recompute(srv, project, inp)) + unrecorded(status.get("kind"), status.get("tool"), inp,
+                                                                  srv.project(project).pdk)
     return {"fresh": not changed, "changed": changed}

@@ -182,8 +182,9 @@ def test_profile_fields_in_key(tmp_path, monkeypatch):
     layoutstore.write(lib.path, ly, {})
     run = srv.prepare_drc("p", "l", "top")
     assert run.inputs["profile"] == {"drc_options": {"feol": True, "beol": True, "offgrid": True}, "deck_vars": {}}
-    assert provenance.profile_fields(pdk, provenance.LVS_PROFILE) == {"lvs_options": {"lvs_sub": "VSS", "scale": True},
-                                                                      "deck_vars": {}}
+    assert provenance.profile_fields(pdk, provenance.LVS_PROFILE) == {
+        "lvs_options": {"lvs_sub": "VSS", "scale": True, "schematic_simplify": True}, "deck_vars": {}}
+    assert provenance.profile_fields(pdk, provenance.MAGIC_DRC_PROFILE) == {"magic_maskhints": ["RPM", "URPM"]}
     assert provenance.profile_fields(pdk, provenance.SIM_PROFILE) == {
         "model_lib": "libs.tech/ngspice/sky130.lib.spice", "model_includes": [], "osdi": [],
         "corners": ["tt", "ss", "ff", "sf", "fs"]}
@@ -292,6 +293,103 @@ def test_signoff_takes_a_drc_run_from_before_profiles_as_the_same_run(tmp_path):
     _fake_job(srv.project("p").path, "20260102-000000-drc", old2)
     row = next(c for c in srv.signoff("p", "l", "top") if c.get("kind") == "drc" and c.get("job"))
     assert row["job"] == "20260102-000000-drc" and row["fresh"] is False
+
+
+def test_a_magic_drc_run_from_before_its_mask_hints_is_outdated(tmp_path, monkeypatch):
+    """Magic's DRC reads the profile's magic_maskhints (sky130: RPM, URPM) as drawn. A run from before (no `profile`
+    in its inputs) made them again from the resistors, so its rpm.1 is not today's: signoff and freshness say it is
+    outdated, not that it is the same run (provenance.LATER). A PDK without mask hints (GF180MCU, IHP) records no
+    profile, so its runs keep their key, and one from before stays fresh."""
+    import dataclasses
+    from undine.checks import verify
+    pdk = _fake_pdk(tmp_path)
+    (pdk.root / "libs.tech" / "magic").mkdir(parents=True)
+    (pdk.root / "libs.tech" / "magic" / "sky130A.magicrc").write_text("# rc\n")
+    if not verify.decks(pdk)["magic"]:
+        pytest.skip("Magic is not installed")
+    root = tmp_path / "projects"
+    srv = Server(root, {pdk.id: pdk}, [root])
+    lib = srv.store.create("p", pdk.id).create_library("l")
+    ly = kdb.Layout()
+    ly.create_cell("top")
+    layoutstore.write(lib.path, ly, {})
+    prj = srv.project("p").path
+
+    def row():
+        return next(c for c in srv.signoff("p", "l", "top") if c.get("tool") == "magic")
+    run = srv.prepare_magic_drc("p", "l", "top")
+    assert run.inputs["profile"] == {"magic_maskhints": ["RPM", "URPM"]}
+    old = copy.copy(run)
+    old.inputs = {k: v for k, v in run.inputs.items() if k != "profile"}
+    _fake_job(prj, "20260101-000000-drc", old)
+    why = ["profile field magic_maskhints: not read → ['RPM', 'URPM']"]
+    r = row()
+    assert (r["job"], r["fresh"], r["changed"]) == ("20260101-000000-drc", False, why)
+    assert provenance.freshness(srv, "p", srv.jobs.get(prj, "20260101-000000-drc").status()) == {"fresh": False,
+                                                                                                "changed": why}
+    _fake_job(prj, "20260102-000000-drc", run)                                  # a run of today's
+    r = row()
+    assert (r["job"], r["fresh"], r["changed"]) == ("20260102-000000-drc", True, [])
+    # without mask hints: no profile in the inputs (the key the run had before), and the old run is the same run
+    real = pdkprofile.for_pdk
+    monkeypatch.setattr(pdkprofile, "for_pdk", lambda n, f: dataclasses.replace(real(n, f), magic_maskhints=()))
+    plain = srv.prepare_magic_drc("p", "l", "top")
+    assert "profile" not in plain.inputs and provenance.key(plain.inputs) == provenance.key(old.inputs)
+    r = row()
+    assert (r["job"], r["fresh"], r["changed"]) == ("20260101-000000-drc", True, [])
+    assert provenance.freshness(srv, "p", srv.jobs.get(prj, "20260101-000000-drc").status())["fresh"] is True
+
+
+def test_lvs_checks_are_in_the_lvs_key_only_where_the_profile_has_them(tmp_path, monkeypatch):
+    """The parameters Undine compares after the LVS deck (lvs_elements' check: sky130's poly resistor W) are a profile
+    field of a KLayout LVS run, lvs_checks, recorded only where the profile has some: a PDK without (GF180MCU, IHP)
+    keeps its LVS key. A tolerance changed outdates the run; a sky130 run from before lvs_checks compared no W, so it
+    is outdated (provenance.unrecorded), not the same run."""
+    import dataclasses
+    from types import SimpleNamespace
+    pdk = _fake_pdk(tmp_path)
+    root = tmp_path / "projects"
+    srv = Server(root, {pdk.id: pdk}, [root])
+    lib = srv.store.create("p", pdk.id).create_library("l")
+    ly = kdb.Layout()
+    ly.create_cell("top")
+    layoutstore.write(lib.path, ly, {})
+    prj = srv.project("p").path
+    checks = {"sky130_fd_pr__res_x?high_po_(0p35|0p69|1p41|2p85|5p73)": {"W": 0.005}}
+    now = provenance.lvs_profile(pdk)
+    assert now == {"lvs_options": {"lvs_sub": "VSS", "scale": True, "schematic_simplify": True}, "deck_vars": {},
+                   "lvs_checks": checks}
+    base = srv.prepare_drc("p", "l", "top").inputs
+
+    def job(jid: str, profile: dict) -> dict:
+        _fake_job(prj, jid, SimpleNamespace(kind="lvs", tool="klayout", lib="l", cell="top", deck="sky130.lvs",
+                                            inputs={**base, "profile": profile}))
+        return provenance.freshness(srv, "p", srv.jobs.get(prj, jid).status())
+    assert job("20260101-000000-lvs", now) == {"fresh": True, "changed": []}
+    old = {k: v for k, v in now.items() if k != "lvs_checks"}
+    assert job("20260102-000000-lvs", old) == {"fresh": False,
+                                               "changed": [f"profile field lvs_checks: not read → {checks}"]}
+    assert provenance.unrecorded("lvs", "netgen", {"profile": old}, pdk) == []        # Netgen's LVS has no checks
+    real = pdkprofile.for_pdk
+
+    def with_check(check: dict):
+        return lambda n, f: dataclasses.replace(real(n, f), lvs_elements=tuple(
+            dataclasses.replace(el, check=check if el.check else {}) for el in real(n, f).lvs_elements))
+    monkeypatch.setattr(pdkprofile, "for_pdk", with_check({"W": 0.01}))
+    st = srv.jobs.get(prj, "20260101-000000-lvs").status()
+    assert provenance.freshness(srv, "p", st)["changed"] == [
+        f"profile field lvs_checks: {checks} → {{'sky130_fd_pr__res_x?high_po_(0p35|0p69|1p41|2p85|5p73)': "
+        "{'W': 0.01}}"]
+    # a profile without checks: the key LVS runs had, and a run from before stays fresh
+    monkeypatch.setattr(pdkprofile, "for_pdk", with_check({}))
+    assert provenance.lvs_profile(pdk) == provenance.profile_fields(pdk, provenance.LVS_PROFILE) == old
+    assert provenance.freshness(srv, "p", srv.jobs.get(prj, "20260102-000000-lvs").status()) == {"fresh": True,
+                                                                                                "changed": []}
+    monkeypatch.setattr(pdkprofile, "for_pdk", real)
+    for name, prof in pdkprofile.profiles().items():
+        if prof.family != "sky130":
+            other = SimpleNamespace(profile=prof, name=name)
+            assert "lvs_checks" not in provenance.lvs_profile(other), name
 
 
 def test_files_read_never_raises_and_resolves_from_the_run_directory(tmp_path):

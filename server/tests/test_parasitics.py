@@ -260,6 +260,46 @@ def test_the_shielded_extraction_keeps_the_substrate_of_rc_mode(tmp_path):
     assert ms["removed_ff"] == 0.4 and ms["moved"] == [] and [p["nets"] for p in ms["pairs"]] == [["b0", "t"]]
 
 
+
+def test_a_mim_on_the_substrate_node_loses_its_plates_coupling_to_the_substrate(tmp_path):
+    """A MIM whose bottom plate is the substrate node (VSS, where the substrate taps go): Magic's coupling between its
+    plates is t's capacitance to the substrate, which the first extraction's would keep in full. The second's is taken
+    for t, and for w, whose metal over that capacitor moved from VSS to t (its total stays); b2 (the plate of a MIM
+    off the substrate) and x keep the first's (what the capacitor's fringe rules took of it). The plate pair says
+    what went, by area what mim_overlap counts there."""
+    _cdac(tmp_path, 3, 1)                              # units b0 (no via), b1, b2: b1's bottom plate on VSS
+    ext = (tmp_path / "cdac.ext").read_text().replace('"b1"', '"VSS"')
+    for d in (tmp_path, tmp_path / "shielded"):
+        d.mkdir(exist_ok=True)
+        (d / "cdac.ext").write_text('substrate "VSS" 0 0 -28 -28 pw 0 0\n' + ext)
+    (tmp_path / "shielded" / "pex.tcl").write_text("")
+    (tmp_path / "c.spice").write_text(".subckt cdac t VSS b2\nC0 t VSS 2.5f\nC1 b2 t 1.5f\nC2 w VSS 1f\nC3 w t 0.1f\n"
+                                      "C4 b2 VSS 0.5f\nC5 x VSS 2f\nC6 x w 0.2f\n.ends\n")
+    (tmp_path / "shielded" / "c.spice").write_text(".subckt cdac t VSS b2\nC0 t VSS 1f\nC1 b2 t 1f\nC2 w VSS 0.7f\n"
+                                                   "C3 w t 0.4f\nC4 b2 VSS 0.49f\nC5 x VSS 1.99f\nC6 x w 0.2f\n.ends\n")
+    mims = [{"model": "sky130_fd_pr__cap_mim_m3_1", "cap": (89, 44), "bottom": (70, 20), "via": (70, 44),
+             "top": (71, 20), "af": 84.03}]
+    full = parasitics.assemble(tmp_path, "cdac", "c", ["t", "VSS", "b2"], 0.0, mims)[1]
+    ms = full["mim_shielding"]
+    assert ms["substrate_from_shielded"] == ["t", "w"]
+    pairs = {tuple(r["nets"]): r for r in ms["pairs"]}
+    assert set(pairs) == {("VSS", "t"), ("b2", "t")}
+    assert pairs[("VSS", "t")] == {"nets": ["VSS", "t"], "magic_ff": 2.5, "kept_ff": 1.0, "removed_ff": 1.5,
+                                   "overlap_ff": pytest.approx(3.42 * 84.03e-3, rel=1e-3), "capacitors": 1}
+    assert {tuple(m["nets"]): (m["magic_ff"], m["kept_ff"]) for m in ms["moved"]} == {("VSS", "w"): (1.0, 0.7),
+                                                                                     ("t", "w"): (0.1, 0.4)}
+    assert ms["removed_ff"] == 2.0 and ms["moved_to_plates_ff"] == 0.0
+    ground = {r["net"]: r["ground_ff"] for r in full["c_per_net"]}
+    assert ground == {"t": 1.0, "w": 0.7, "b2": 0.5, "x": 2.0}
+    total = {r["net"]: r["total_ff"] for r in full["c_per_net"]}
+    assert total["w"] == pytest.approx(1.3) and total["x"] == pytest.approx(2.2)
+    assert "mim_overlap_removed" not in full
+    (tmp_path / "shielded" / "c.spice").unlink()         # the second extraction failed: the overlap goes all the same
+    full = parasitics.assemble(tmp_path, "cdac", "c", ["t", "VSS", "b2"], 0.0, mims)[1]
+    assert [r["nets"] for r in full["mim_overlap_removed"]["pairs"]] == [["VSS", "t"], ["b2", "t"]]
+    assert {r["net"]: r["ground_ff"] for r in full["c_per_net"]}["t"] == pytest.approx(2.5 - 3.42 * 84.03e-3, abs=1e-3)
+
+
 def test_a_failed_shielded_extraction_takes_out_the_overlap_as_before(tmp_path):
     full = _shielded_cdac(tmp_path, None)
     assert "failed" in full["mim_shielding"]["not_applied"]
@@ -777,6 +817,50 @@ def test_a_mim_strapped_on_met4_is_not_coupled_twice():
     shutil.rmtree(root)
 
 
+
+def test_a_mim_on_the_substrate_node_is_not_coupled_twice():
+    """The strapped 10 x 10 um MIM with its bottom plate tied down to a substrate tap, labelled VSS: VSS is the
+    substrate node, so Magic's coupling between the plates (the strap's 100 um2 at 84.03 aF/um2 over the bottom plate)
+    is c0's capacitance to the substrate. The second extraction takes it out there too, in both modes."""
+    pdk = _need()
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    path, name, _ = pcell.generate(pdk, "mim_cap", {"type": "sky130_fd_pr__model__cap_mim", "w": 10.0, "l": 10.0})
+    src = kdb.Layout()
+    src.read(str(path))
+    unit = ly.create_cell(name)
+    unit.copy_tree(src.cell(name))
+    top = ly.create_cell("mim")
+    top.insert(kdb.DCellInstArray(unit.cell_index(), kdb.DTrans()))
+    top.shapes(ly.layer(71, 20)).insert(kdb.DBox(0, 0, 10, 10))                    # the strap over the whole top plate
+    top.shapes(ly.layer(71, 5)).insert(kdb.DText("c0", 1, 1))
+    # a p+ tap 4 um below the capacitor, its contacts stacked up to a met3 wire into the bottom plate
+    x0, y0 = 4.0, -6.0
+    for (l, d), e in (((65, 44), 0.5), ((94, 20), 0.625), ((67, 20), 0.5), ((68, 20), 0.5), ((69, 20), 0.5)):
+        top.shapes(ly.layer(l, d)).insert(kdb.DBox(x0 - e, y0 - e, x0 + e, y0 + e))
+    for (l, d), h in (((66, 44), 0.085), ((67, 44), 0.085), ((68, 44), 0.075), ((69, 44), 0.1)):
+        top.shapes(ly.layer(l, d)).insert(kdb.DBox(x0 - h, y0 - h, x0 + h, y0 + h))
+    top.shapes(ly.layer(70, 20)).insert(kdb.DBox(x0 - 0.5, y0 - 0.5, x0 + 0.5, 0.0))
+    top.shapes(ly.layer(68, 5)).insert(kdb.DText("VSS", x0, y0))
+    root, srv, ctx = _project(pdk, ly)
+    want = 100 * 84.03e-3
+    for mode in parasitics.MODES:
+        r = _call(ctx, "extract_parasitics", {"lib": "l", "cell": "mim", "mode": mode})
+        d = _job(srv, r["job"]).path
+        raw = _caps((d / "c.spice").read_text())
+        assert r["substrate"].startswith("VSS") and frozenset(("c0", "VSS")) in raw, (r["substrate"], raw)
+        ms = r["mim_shielding"]
+        assert [p["nets"] for p in ms["pairs"]] == [["VSS", "c0"]] and ms["substrate_from_shielded"] == ["c0"]
+        p = ms["pairs"][0]
+        assert p["magic_ff"] == pytest.approx(raw[frozenset(("c0", "VSS"))], abs=6e-3) and p["magic_ff"] > want
+        assert p["overlap_ff"] == pytest.approx(want, rel=1e-3) and p["removed_ff"] == pytest.approx(want, abs=6e-3)
+        ground = {x["net"]: x["ground_ff"] for x in r["c_per_net"]}
+        assert ground["c0"] == pytest.approx(p["kept_ff"], abs=6e-3) and ground["c0"] < p["magic_ff"] - want + 2e-3
+        assert _caps((d / "extracted.spice").read_text())[frozenset(("c0", "VSS"))] == \
+            pytest.approx(p["kept_ff"], abs=6e-3)
+    shutil.rmtree(root)
+
+
 def test_metal_over_a_bottom_plate_outside_the_capacitor_keeps_its_coupling():
     """A 1.17 um unit (its 0.78 um met4 contact pad, no strap) as Magic extracts it: 191 aF between its plates, of
     which 51 aF is the pad's area and about 40 aF the fringe of its edges inside the capacitor; the coupling outside
@@ -867,8 +951,9 @@ def test_an_lvs_that_kept_nothing_of_the_layout_says_why():
 
 
 def test_an_lvs_with_too_few_devices_counts_them_by_one_class():
-    """Two MIM units wired and labelled against a schematic of three: KLayout's layout netlist keeps the deck's class
-    name in lower case, its SPICE reader upper-cases the schematic's; the counts are of one class, in both."""
+    """Two MIM units wired and labelled against a schematic of three (none in parallel with another: the reference is
+    simplified as the layout is, so two in parallel would be one): KLayout's layout netlist keeps the deck's class name
+    in lower case, its SPICE reader upper-cases the schematic's; the counts are of one class, in both."""
     pdk = _need()
     if not verify.decks(pdk)["lvs"]:
         pytest.skip("no KLayout LVS deck")
@@ -890,7 +975,7 @@ def test_an_lvs_with_too_few_devices_counts_them_by_one_class():
     root, srv, ctx = _project(pdk, ly)
     (root / "ref.spice").write_text(".SUBCKT pair c0 c1 t\nCC1 t c0 sky130_fd_pr__model__cap_mim A=1.3689 P=4.68 m=1\n"
                                     "CC2 t c1 sky130_fd_pr__model__cap_mim A=1.3689 P=4.68 m=1\n"
-                                    "CC3 t c1 sky130_fd_pr__model__cap_mim A=1.3689 P=4.68 m=1\n.ENDS\n")
+                                    "CC3 c0 c1 sky130_fd_pr__model__cap_mim A=1.3689 P=4.68 m=1\n.ENDS\n")
     lvs = srv.start_lvs("p", "l", "pair", schematic_file=str(root / "ref.spice"))
     while lvs.status()["state"] in ("queued", "running"):
         time.sleep(0.3)

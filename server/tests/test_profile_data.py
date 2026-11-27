@@ -59,8 +59,11 @@ def test_golden_data_of_pdkprofile_is_unchanged():
 def test_mim_formula_is_todays_function():
     f = formulas.FORMULAS["mim_area_perimeter"]
     assert f is pdkprofile._mim
-    assert {e.params for e in fresh()["profile_sky130"].profiles["sky130"].lvs_elements} == {f}
+    assert {e.params for e in fresh()["profile_sky130"].profiles["sky130"].lvs_elements} == {
+        f, formulas.res_length, formulas.bjt_emitters}
     assert f({"w": 1.17, "l": 2.5}) == GOLD["formulas"]["mim_area_perimeter"]
+    assert formulas.res_length({"l": 3.88, "m": 2.0}, "sky130_fd_pr__res_xhigh_po_0p35") == GOLD["formulas"]["res_length"]
+    assert formulas.bjt_emitters({"m": 24.0}) == GOLD["formulas"]["bjt_emitters"]
 
 
 def test_builtin_packages_are_profile_packages_with_a_manifest():
@@ -178,6 +181,19 @@ def test_undines_own_flags_are_not_profile_keys(key):
     (mini(prof="stdcells = [['(unclosed', 'x']]"), ("stdcells[0][0]", "not a regular expression")),
     (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "C"\nparams = "os.system"'),
      ("lvs_elements[0].params", "not a formula Undine has", "mim_area_perimeter")),
+    (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "R"\ncheck = { W = "0.5%" }'),
+     ("lvs_elements[0].check.W", "not a number")),
+    (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "R"\ncheck = { W = 0 }'),
+     ("lvs_elements[0].check.W", "not a tolerance", "above 0")),
+    (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "R"\ncheck = { W = -0.1 }'),
+     ("lvs_elements[0].check.W", "not a tolerance")),
+    (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "R"\ncheck = { W = nan }'),
+     ("lvs_elements[0].check.W", "not a tolerance")),
+    (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "R"\ncheck = { "W L" = 0.1 }'),
+     ('lvs_elements[0].check."W L"', "not a parameter name")),
+    (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "R"\ncheck = { W = { tol = 0.1 } }'),
+     ("lvs_elements[0].check.W", "not a number")),
+    (mini(tail='[[profile.lvs_elements]]\nmodel = "x"\nletter = "R"\ncheck = { W = 1 }'), ()),     # still valid
     (mini(tail='[profile.pcell_lib]\npaths = ["python"]\nmodule = "cells"\nlibrary = "x"\nenv = "default"'),
      ("pcell_lib.env", "not a PCell environment")),
     (mini(tail='[profile.pcell_lib]\npaths = ["../x"]\nmodule = "cells"\nlibrary = "x"'), ("pcell_lib.paths[0]",)),

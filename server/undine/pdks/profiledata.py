@@ -43,6 +43,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import inspect
+import math
 import re
 import string
 import types
@@ -408,6 +409,13 @@ class _Reader:
                 self.template(x, allowed, path + [k] + j)
         for j, el in enumerate(p.lvs_elements):
             self.regex(el.model, path + ["lvs_elements", j, "model"])
+            for name, tol in el.check.items():
+                if not _IDENT.match(name):
+                    raise self.err(path + ["lvs_elements", j, "check", name], f"{name!r} is not a parameter name",
+                                   "letters, digits and _")
+                if not (math.isfinite(tol) and tol > 0):
+                    raise self.err(path + ["lvs_elements", j, "check", name],
+                                   f"{tol!r} is not a tolerance", "write a relative tolerance above 0 (0.005: 0.5 %)")
         for j, (pat, lib) in enumerate(p.stdcells):
             groups = self.regex(pat, path + ["stdcells", j, 0])
             self.library(lib, groups, path + ["stdcells", j, 1])

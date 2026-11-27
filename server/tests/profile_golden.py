@@ -57,11 +57,14 @@ def golden(pp, formulas: dict | None = None) -> dict:
                        "drc_rd": {d: [p.drc_rd(d, {}, v), p.drc_rd(d, {"feol": False, "offgrid": True}, v)]
                                   for d in decks},
                        "lvs_rd": p.lvs_rd({}, v), "magic_file": p.magic_file(v), "netgen_file": p.netgen_file(v)}
+    from undine.pdks import formulas as fm
     mim = next(e.params for e in pp.SKY130.lvs_elements if e.params)
     return {"profiles": {k: canon(p, formulas) for k, p in [*pp.PROFILES.items(), ("generic", pp.GENERIC)]},
             "variants": variants,
             "for_family": {str(f): pp.for_family(f).family for f in FAMILIES},
-            "formulas": {"mim_area_perimeter": mim({"w": 1.17, "l": 2.5})}}
+            "formulas": {"mim_area_perimeter": mim({"w": 1.17, "l": 2.5}),
+                         "res_length": fm.res_length({"l": 3.88, "m": 2.0}, "sky130_fd_pr__res_xhigh_po_0p35"),
+                         "bjt_emitters": fm.bjt_emitters({"m": 24.0})}}
 
 
 def write(data: dict, path: Path = GOLDEN) -> None:

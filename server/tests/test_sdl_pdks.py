@@ -142,7 +142,23 @@ def test_passives_map_to_the_pdk_pcells(family, sym, props, want):
     assert sdl.device_pcell(_dev(sym, {**props, "m": "2"}), {**props, "m": "2"}, cat, family) is None   # parallel copies: not yet
 
 
+def test_a_0p35_poly_resistor_is_drawn_without_its_pcell_ring():
+    """The res_poly PCell's guard ring (gr) on a 0.35 um high / xhigh poly resistor fails Magic's rpm.1: sky130's
+    mapping draws those with gr 0 (Undine's ring goes around them: test_layout_checks), the wider ones as the PCell
+    has them; the length less the 0.12 um the PCell adds."""
+    types = [f"sky130_fd_pr__res_{k}_po_{w}" for k in ("high", "xhigh") for w in ("0p35", "0p69", "1p41")]
+    cat = {"res_poly": {"params": [{"name": "type", "choices": types}, {"name": "len"}, {"name": "gr"}]}}
+    for t in types:
+        props = {"model": t.removeprefix("sky130_fd_pr__"), "L": "4"}
+        name, params = sdl.device_pcell(_dev(f"sky130_fd_pr/{props['model']}.sym", props), props, cat, "sky130")
+        want = {"type": t, "len": 3.88, **({"gr": 0} if t.endswith("0p35") else {})}
+        assert (name, params) == ("res_poly", want), t
+
+
 PASSIVES = {
+    # L 4 um: the PCell draws len + 0.12 um, 3 % more than the deck's 0.5 % (sync_layout gives it len 3.88)
+    "sky130A": [("sky130_fd_pr/res_xhigh_po_0p35.sym", {"L": "4", "model": "res_xhigh_po_0p35"}, ["P", "M", "B"]),
+                ("sky130_fd_pr/res_high_po_1p41.sym", {"L": "10", "model": "res_high_po_1p41"}, ["P", "M", "B"])],
     "gf180mcuD": [("symbols/ppolyf_u.sym", {"W": "1e-6", "L": "4e-6"}, ["M", "P", "B"]), ("symbols/rm1.sym", {"W": "0.5e-6", "L": "10e-6"}, ["M", "P"]),
                   ("symbols/cap_mim_2f0fF.sym", {"W": "5e-6", "L": "5e-6"}, ["G", "B"])],
     "ihp-sg13g2": [("sg13g2_pr/rppd.sym", {"w": "0.5e-6", "l": "2e-6"}, ["P", "M"]), ("sg13g2_pr/cap_cmim.sym", {"w": "5e-6", "l": "5e-6"}, ["c0", "c1"])],

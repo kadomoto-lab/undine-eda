@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from undine import tools  # noqa: E402
 from undine.agents import agent_tools as T  # noqa: E402
 from undine.checks import verify  # noqa: E402
+from undine.layouts import sdl  # noqa: E402
 from undine.pdks import pcell  # noqa: E402
 from undine.pdks.pdk import default_pdk_roots, discover  # noqa: E402
 from undine.schematics import xschem  # noqa: E402
@@ -185,6 +186,292 @@ def test_a_port_the_schematic_does_not_use_inside_matches_by_its_label():
     s = lvs(".subckt mim2 c0 c1 vdd\nXC1 c0 c1 sky130_fd_pr__cap_mim_m3_1 W=2 L=3 m=2\n"
             "XC2 vdd c1 sky130_fd_pr__cap_mim_m3_1 W=2 L=3 m=1\n.ends\n")
     assert s["match"] is False, s
+    shutil.rmtree(root)
+
+
+# ------------------------------------------------------------------ poly resistors and BJTs in LVS, RPM in Magic
+
+
+def _resistors(pdk, n: int, length: float, kind: str = "sky130_fd_pr__res_xhigh_po_0p35") -> kdb.Layout:
+    """`n` PCell resistors (len `length`, no guard ring) 3 um apart, in series: each one's top head joined to the
+    next one's in li1 (alternately at the top and the bottom), the free heads labelled a and b."""
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    unit = _pcell(pdk, ly, "res_poly", {"type": kind, "len": length, "gr": 0})
+    li = kdb.Region(unit.begin_shapes_rec(ly.layer(67, 20)))
+    heads = sorted((b.center().y * ly.dbu for b in (p.bbox() for p in li.each())))
+    top = ly.create_cell("r")
+    for i in range(n):
+        top.insert(kdb.DCellInstArray(unit.cell_index(), kdb.DTrans(kdb.DVector(3.0 * i, 0))))
+        if i:
+            y = heads[1] if i % 2 else heads[0]
+            top.shapes(ly.layer(67, 20)).insert(kdb.DBox(3.0 * (i - 1), y - 0.2, 3.0 * i, y + 0.2))
+    top.shapes(ly.layer(67, 5)).insert(kdb.DText("a", 0.0, heads[0]))
+    top.shapes(ly.layer(67, 5)).insert(kdb.DText("b", 3.0 * (n - 1), heads[1] if n % 2 else heads[0]))
+    return ly
+
+
+def test_lvs_compares_a_sky130_poly_resistor_by_its_length():
+    """The symbol writes a call (XR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=40 mult=1 m=1) that the deck's reader
+    leaves a call, while the deck extracts the poly as a resistor of its width's class, compared by L within 0.5 %: the
+    reference has it as that resistor. Two PCells of len 19.88 (drawn 20 um: the PCell adds 0.12 um) in series match
+    L=40 (the deck adds series resistors up, in both netlists); another length, the resistor across other nets, or a
+    resistor the layout does not have do not."""
+    pdk = _need()
+    root, srv = _server(pdk, {})
+    _resistors(pdk, 2, 19.88).write(str(root / "r.gds"))
+    db = srv.db("p", "l")
+    db.import_oas(root / "r.gds")
+
+    def lvs(body: str) -> bool:
+        text = pdk.profile.lvs_netlist(f".subckt r a b\n{body}\n.ends\n")
+        got = _wait(verify.start_lvs(srv.jobs, srv.project("p").path, pdk, db.layout, "r", "l", text))["summary"]
+        assert "pin_errors" not in got, got                     # a and b are labelled: a mismatch is not a pin's
+        return got["match"]
+    good = "XR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=40 mult=1 m=1"
+    assert "RR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=40 W=0.35 m=1" in pdk.profile.lvs_netlist(good)
+    assert lvs(good) is True
+    assert lvs("XR1 a n VSS sky130_fd_pr__res_xhigh_po_0p35 L=20 mult=1 m=1\n"
+               "XR2 n b VSS sky130_fd_pr__res_xhigh_po_0p35 L=20 mult=1 m=1") is True       # drawn as two
+    for wrong in ("XR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=39.5 mult=1 m=1",           # 1.25 % short
+                  "XR1 a b VSS sky130_fd_pr__res_high_po_0p35 L=40 mult=1 m=1",              # another implant
+                  "XR1 a b VSS sky130_fd_pr__res_xhigh_po_0p69 L=40 mult=1 m=1",             # another width
+                  "XR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=40 mult=2 m=2"):            # two in parallel
+        assert lvs(wrong) is False, wrong
+    for wrong in ("XR1 a VSS VSS sky130_fd_pr__res_xhigh_po_0p35 L=40 mult=1 m=1",           # other nets
+                  good + "\nXR2 b VSS VSS sky130_fd_pr__res_xhigh_po_0p35 L=10 mult=1 m=1"): # one more
+        text = pdk.profile.lvs_netlist(f".subckt r a b\n{wrong}\n.ends\n")
+        assert _wait(verify.start_lvs(srv.jobs, srv.project("p").path, pdk, db.layout, "r", "l", text))["summary"]["match"] is False
+    with pytest.raises(ValueError, match="XR1: LVS compares it as an element"):
+        pdk.profile.lvs_netlist("XR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=lr mult=1 m=1")
+    shutil.rmtree(root)
+
+
+def _parallel(pdk, n: int, length: float, kind: str = "sky130_fd_pr__res_xhigh_po_0p35") -> kdb.Layout:
+    """`n` PCell resistors (len `length`, no guard ring) 3 um apart, in parallel: their bottom heads joined in li1 and
+    labelled a, their top heads b."""
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    unit = _pcell(pdk, ly, "res_poly", {"type": kind, "len": length, "gr": 0})
+    li = kdb.Region(unit.begin_shapes_rec(ly.layer(67, 20)))
+    heads = sorted((b.center().y * ly.dbu for b in (p.bbox() for p in li.each())))
+    top = ly.create_cell(f"rp{n}")
+    for i in range(n):
+        top.insert(kdb.DCellInstArray(unit.cell_index(), kdb.DTrans(kdb.DVector(3.0 * i, 0))))
+    for y in heads:
+        top.shapes(ly.layer(67, 20)).insert(kdb.DBox(0, y - 0.2, 3.0 * (n - 1) + 0.01, y + 0.2))
+    top.shapes(ly.layer(67, 5)).insert(kdb.DText("a", 0.0, heads[0]))
+    top.shapes(ly.layer(67, 5)).insert(kdb.DText("b", 0.0, heads[1]))
+    return ly
+
+
+def test_lvs_counts_parallel_poly_resistors_by_their_width():
+    """The deck compares a poly resistor by L alone, and copies of one length in parallel keep L (adding up W), so it
+    pairs two in parallel with one, with three, or with m=2 alike. The reference has W = the class's width x m, and
+    Undine compares W after the deck (the element's check): two in the layout match m=2 or two in parallel in the
+    schematic, not one or three, and the mismatch says why."""
+    pdk = _need()
+    root, srv = _server(pdk, {})
+    _parallel(pdk, 2, 19.88).write(str(root / "rp.gds"))
+    db = srv.db("p", "l")
+    db.import_oas(root / "rp.gds")
+    unit = "XR{} a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=20 mult={m} m={m}"
+    assert "RR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=20 W=0.7 m=1" in pdk.profile.lvs_netlist(unit.format(1, m=2))
+
+    def lvs(*body: str) -> tuple[dict, Path]:
+        text = pdk.profile.lvs_netlist(".subckt rp2 a b\n" + "\n".join(body) + "\n.ends\n")
+        st = _wait(verify.start_lvs(srv.jobs, srv.project("p").path, pdk, db.layout, "rp2", "l", text,
+                                    instances={f"XR{i}": f"R{i}" for i in range(1, 4)}))
+        return st["summary"], srv.project("p").path / "runs" / st["id"]
+    for good in ([unit.format(1, m=2)], [unit.format(1, m=1), unit.format(2, m=1)]):
+        s, _ = lvs(*good)
+        assert s["match"] is True and "param_errors" not in s, (good, s)
+    s, run = lvs(unit.format(1, m=1))
+    assert s["circuits"][0]["status"] == "Match"                                # what the deck says
+    assert s["match"] is False and "pin_errors" not in s
+    assert s["param_errors"] == ["R1 (sky130_fd_pr__res_xhigh_po_0p35): W 0.7 in the layout, 0.35 in the schematic "
+                                 "(beyond 0.5%): the deck compares L, not W: copies of one length in parallel (or m) "
+                                 "keep L and add up W; the layout has 2 in parallel where the schematic has 1"]
+    assert s["param_errors"][0] in verify.lvs_diagnosis(run, "rp2")["why"]
+    s, _ = lvs(*(unit.format(i, m=1) for i in (1, 2, 3)))
+    assert s["match"] is False and s["param_errors"][0].endswith("the layout has 2 in parallel where the schematic has 3")
+    # the real counts, not their ratio (2 of 4 is not 1 of 2)
+    s, _ = lvs(unit.format(1, m=4))
+    assert s["match"] is False and s["param_errors"][0].endswith("the layout has 2 in parallel where the schematic has 4")
+    shutil.rmtree(root)
+
+
+def test_a_subcircuit_that_does_not_match_makes_no_pin_errors_of_the_top():
+    """The top h(A, B) calls rp2 (two resistors in parallel), whose reference has the wrong length: rp2 does not
+    match, and KLayout skips h, pairing none of its pins. Its ports are not pin errors for that (A and B are labelled
+    on the layout's nets). A port h does not use inside (C), which the reference's simplification purges with its
+    net, is still checked for its label."""
+    pdk = _need()
+    root, srv = _server(pdk, {})
+    ly = _parallel(pdk, 2, 19.88)
+    rp = ly.cell("rp2")
+    h = ly.create_cell("h")
+    h.insert(kdb.DCellInstArray(rp.cell_index(), kdb.DTrans()))
+    for sh in rp.shapes(ly.layer(67, 5)).each():
+        h.shapes(ly.layer(67, 5)).insert(kdb.DText(sh.dtext.string.upper(), sh.dtext.x, sh.dtext.y))
+    h.shapes(ly.layer(67, 20)).insert(kdb.DBox(10.0, 0.0, 10.5, 0.5))              # an li1 stub for C's label
+    ly.write(str(root / "h.gds"))
+    db = srv.db("p", "l")
+    db.import_oas(root / "h.gds")
+
+    def lvs(length: float, ports: str = "A B") -> dict:
+        text = pdk.profile.lvs_netlist(f".subckt rp2 a b\nXR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L={length} "
+                                       f"mult=2 m=2\n.ends\n.subckt h {ports}\nX1 A B rp2\n.ends\n")
+        return _wait(verify.start_lvs(srv.jobs, srv.project("p").path, pdk, db.layout, "h", "l", text))["summary"]
+    s = lvs(10)
+    assert [c["status"] for c in s["circuits"]] == ["Skipped", "NoMatch"], s
+    assert s["match"] is False and "pin_errors" not in s and "unused_pins" not in s, s
+    s = lvs(10, "A B C")
+    assert s["match"] is False and s["pin_errors"] == [
+        "pin C: connected to nothing inside the schematic and no C label in the layout's top cell: label the port "
+        "where it leaves the cell"], s
+    with db.lock:
+        db.layout.cell("h").shapes(db.layout.layer(67, 5)).insert(kdb.DText("C", 10.25, 0.25))
+    s = lvs(10, "A B C")
+    assert s["match"] is False and "pin_errors" not in s and [p["pin"] for p in s["unused_pins"]] == ["C"], s
+    shutil.rmtree(root)
+
+
+def test_lvs_diagnosis_names_a_device_lvs_did_not_match_for_its_parameters():
+    """The deck says NoMatch only because a device's parameter differs (L 20 drawn, 19.5 in the schematic, beyond
+    its 0.5 %): with the nets fixed by the other devices it pairs the device and warns (MatchWithWarning); alone, it
+    leaves one device of the class unpaired on each side. Either way the diagnosis names the device and the values."""
+    pdk = _need()
+    root, srv = _server(pdk, {})
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    cells = [_pcell(pdk, ly, "res_poly", {"type": f"sky130_fd_pr__res_xhigh_po_{w}", "len": 19.88, "gr": 0})
+             for w in ("0p35", "0p69")]
+    heads = sorted(b.center().y * ly.dbu for b in (p.bbox() for p in
+                   kdb.Region(cells[0].begin_shapes_rec(ly.layer(67, 20))).each()))
+    m = ly.create_cell("m")                                                     # np -0p35- mid -0p69- nm
+    for i, c in enumerate(cells):
+        m.insert(kdb.DCellInstArray(c.cell_index(), kdb.DTrans(kdb.DVector(4.0 * i, 0))))
+    m.shapes(ly.layer(67, 20)).insert(kdb.DBox(0, heads[1] - 0.2, 4.0, heads[1] + 0.2))
+    for t, x, y in (("np", 0.0, heads[0]), ("mid", 2.0, heads[1]), ("nm", 4.0, heads[0])):
+        m.shapes(ly.layer(67, 5)).insert(kdb.DText(t, x, y))
+    ly.write(str(root / "m.gds"))
+    db = srv.db("p", "l")
+    db.import_oas(root / "m.gds")
+    _parallel(pdk, 2, 19.88).write(str(root / "rp.gds"))
+    db.import_oas(root / "rp.gds")
+
+    def lvs(cell: str, body: str) -> tuple[dict, Path]:
+        text = pdk.profile.lvs_netlist(body)
+        st = _wait(verify.start_lvs(srv.jobs, srv.project("p").path, pdk, db.layout, cell, "l", text))
+        return st["summary"], srv.project("p").path / "runs" / st["id"]
+    r2 = "XR2 mid nm VSS sky130_fd_pr__res_xhigh_po_0p69 L=20 mult=1 m=1"
+    s, run = lvs("m", f".subckt m np mid nm\nXR1 np mid VSS sky130_fd_pr__res_xhigh_po_0p35 L=20 mult=1 m=1\n{r2}\n.ends\n")
+    assert s["match"] is True and verify.lvs_diagnosis(run, "m")["why"] == [], s
+    s, run = lvs("m", f".subckt m np mid nm\nXR1 np mid VSS sky130_fd_pr__res_xhigh_po_0p35 L=19.5 mult=1 m=1\n{r2}\n.ends\n")
+    assert s["match"] is False and "pin_errors" not in s, s
+    assert verify.lvs_diagnosis(run, "m")["why"] == [
+        "R1 (sky130_fd_pr__res_xhigh_po_0p35): LVS paired it with the layout's $2, which differs: L 20 in the layout, "
+        "19.5 in the schematic"]
+    s, run = lvs("rp2", ".subckt rp2 a b\nXR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35 L=19.5 mult=2 m=2\n.ends\n")
+    assert s["match"] is False, s
+    assert verify.lvs_diagnosis(run, "rp2")["why"] == [
+        "R1 (sky130_fd_pr__res_xhigh_po_0p35): no layout device has its parameters; the one of its class left "
+        "unpaired is $1, which differs: L 20 in the layout, 19.5 in the schematic"]
+    shutil.rmtree(root)
+
+
+def test_written_params_reads_continuation_lines(tmp_path):
+    """A reference element's parameters on + lines are its own (the name KLayout gives the device: R1 of RR1)."""
+    sch = tmp_path / "schematic.spice"
+    sch.write_text(".subckt r a b\nRR1 a b VSS sky130_fd_pr__res_xhigh_po_0p35\n+ L=40 W=0.35\n+ m=1\n"
+                   "MM1 d g s b nfet L=0.15 W=1\n.ends\n")
+    assert verify._written_params(sch) == {"R1": {"L": "40", "W": "0.35", "M": "1"},
+                                           "M1": {"L": "0.15", "W": "1"}}
+
+
+def test_lvs_reference_folds_a_bjt_multiplier_into_its_emitters():
+    """A pnp_05v5 with m=24 is 24 units the deck's simplification makes one device of NE=24; the SPICE reader drops the
+    multiplier of a Q element, so the reference gives NE instead."""
+    p = __import__("undine.pdks.pdkprofile", fromlist=["SKY130"]).SKY130
+    out = p.lvs_netlist("Q2 VSS VSS eb sky130_fd_pr__pnp_05v5_W3p40L3p40 m=24\n"
+                        "Q1 c b e sky130_fd_pr__npn_05v5_W1p00L1p00 NE=1 m=3\nMP1 d g s b sky130_fd_pr__pfet_01v8 L=1 W=2 m=4")
+    assert out.split("\n") == ["Q2 VSS VSS eb sky130_fd_pr__pnp_05v5_W3p40L3p40 NE=24 m=1",
+                                "Q1 c b e sky130_fd_pr__npn_05v5_W1p00L1p00 NE=3 m=1",
+                                "MP1 d g s b sky130_fd_pr__pfet_01v8 L=1 W=2 m=4"]
+
+
+def test_magic_drc_checks_rpm_as_drawn():
+    """Magic makes a poly resistor's RPM / URPM again from the resistor (0.2 um around it: 0.75 um on a 0.35 um one,
+    rpm.1 wants 1.27), unless it reads the drawn layer as a mask hint (the profile's magic_maskhints). The PCell draws
+    it 1.27 um wide: clean. The same resistor with its URPM cut to 0.75 um is not."""
+    pdk = _need()
+    root, srv = _server(pdk, {})
+    ly = _resistors(pdk, 1, 8.0)
+    ly.write(str(root / "r.gds"))
+    srv.db("p", "l").import_oas(root / "r.gds")
+    assert _wait(srv.prepare_magic_drc("p", "l", "r").launch())["summary"]["total"] == 0
+    cell = ly.cell(next(c.name for c in ly.each_cell() if c.name.startswith("sky130_fd_pr__res_xhigh_po_0p35")))
+    urpm = ly.layer(79, 20)
+    narrow = cell.dup()
+    narrow.name = "r_narrow"
+    box = narrow.dbbox_per_layer(urpm)                                          # 1.27 um wide
+    narrow.shapes(urpm).clear()
+    narrow.shapes(urpm).insert(kdb.DBox(-0.375, box.bottom, 0.375, box.top))
+    opt = kdb.SaveLayoutOptions()
+    opt.select_cell(narrow.cell_index())
+    ly.write(str(root / "n.gds"), opt)
+    srv.db("p", "l").import_oas(root / "n.gds")
+    st = _wait(srv.prepare_magic_drc("p", "l", "r_narrow").launch())
+    assert [c["name"] for c in st["summary"]["categories"]] == ["rpm.1"], st
+    shutil.rmtree(root)
+
+
+def test_sync_draws_a_0p35_poly_resistor_in_undines_guard_ring():
+    """A 0.35 um high / xhigh poly resistor with its PCell's guard ring (gr, on by default) fails Magic's rpm.1 with
+    the drawn RPM read as a mask hint too: the ring's p+ tap is 0.02 um from the RPM, and Magic counts no RPM within
+    0.185 um of p+ diffusion. sync_layout draws it without that ring (gr 0) and puts Undine's ring around it (the
+    profile's ring, its implant clear of the resistor's by implant_space), the device's bulk tap as its answer says;
+    clean in both checkers, and LVS still matches. A 0.69 um one keeps its PCell's ring, which Magic passes."""
+    pdk = _need()
+    root, srv = _server(pdk, {})
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    pc = _pcell(pdk, ly, "res_poly", {"type": "sky130_fd_pr__res_xhigh_po_0p35", "len": 3.88})       # gr: 1
+    ly.write(str(root / "g.gds"))
+    srv.db("p", "l").import_oas(root / "g.gds")
+    st = _wait(srv.prepare_magic_drc("p", "l", pc.name).launch())
+    assert [c["name"] for c in st["summary"]["categories"]] == ["rpm.1"], st
+    ctx = T.ToolCtx(srv, "p", actor="agent:t")
+    _call(ctx, "open_changeset", {"title": "sdl", "reason": "r"})
+    for cell, model, ringed in (("r35", "res_high_po_0p35", True), ("x35", "res_xhigh_po_0p35", True),
+                                ("x69", "res_xhigh_po_0p69", False)):
+        call = lambda n, a: _call(ctx, n, {"lib": "l", "cell": cell, "reason": "x", **a})
+        call("create_cell", {"views": ["schematic", "layout"]})
+        call("add_instance", {"symbol": f"sky130_fd_pr/{model}.sym", "x": 0, "y": 0,
+                              "params": {"name": "R1", "L": "4", "model": model}})
+        call("connect_nets", {"nets": {"np": ["R1:P"], "nm": ["R1:M"], "VSS": ["R1:B"]}})
+        out = call("sync_layout", {})
+        out = out if isinstance(out, dict) else json.loads(out)
+        assert out["added"] == ["R1"], out
+        placed = next(i for i in srv.db(ctx.work, "l").named_instances(cell) if i["name"] == "R1")
+        assert placed["cell"].endswith(sdl.RING) is ringed, placed
+        if ringed:
+            assert out["taps"] == {"guard ring: route it (li1) to the bulk net": ["R1"]}
+        assert _wait(srv.prepare_magic_drc(ctx.work, "l", cell).launch())["summary"]["total"] == 0, cell
+        assert _wait(srv.prepare_drc(ctx.work, "l", cell).launch())["summary"]["total"] == 0, cell
+        lvs = _wait(srv.prepare_lvs(ctx.work, "l", cell).launch())
+        assert lvs["summary"]["circuits"][0]["status"] == "Match", lvs
+    # in a unit array (place_array) such a resistor has no ring of its own: the answer says to tap the array
+    call = lambda n, a: _call(ctx, n, {"lib": "l", "cell": "arr", "reason": "x", **a})
+    call("create_cell", {"views": ["schematic", "layout"]})
+    call("add_instance", {"symbol": "sky130_fd_pr/res_xhigh_po_0p35.sym", "x": 0, "y": 0,
+                          "params": {"name": "R1", "L": "4", "model": "res_xhigh_po_0p35", "mult": "2"}})
+    call("connect_nets", {"nets": {"np": ["R1:P"], "nm": ["R1:M"], "VSS": ["R1:B"]}})
+    out = call("place_array", {"devices": ["R1"], "pattern": "rows", "rows": [["R1", "R1"]], "origin": [0, 0]})
+    out = out if isinstance(out, dict) else json.loads(out)
+    assert any(w.startswith("R1: 0.35 um poly resistors are drawn without their PCell's guard ring") and "VSS" in w
+               for w in out.get("warnings", [])), out
     shutil.rmtree(root)
 
 

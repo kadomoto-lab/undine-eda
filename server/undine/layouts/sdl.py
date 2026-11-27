@@ -65,6 +65,13 @@ def device_pcell(dev: schematic.Device, props: dict, catalog: dict[str, dict], f
     return _sky130_pcell(dev, props, catalog)
 
 
+_SKY130_RES_EXTRA = 0.12                       # um the res_poly PCell adds to a high / xhigh poly resistor's len
+# the high / xhigh poly resistors whose PCell guard ring (gr) Magic's drc(full) fails: on a 0.35 um one the ring's p+
+# tap is 0.02 um from the RPM / URPM, and Magic counts no RPM within 0.185 um of p+ diffusion (rpm.1 then, the drawn
+# layer read as a mask hint or not). They are drawn without it (gr 0) and get Undine's ring instead (_ring_around)
+_SKY130_RES_NO_GR = re.compile(r"res_x?high_po_0p35")
+
+
 def _sky130_pcell(dev: schematic.Device, props: dict, catalog: dict[str, dict]) -> tuple[str, dict] | None:
     model = props.get("model", "") or dev.symname
     full = model if model.startswith("sky130_fd_pr__") else f"sky130_fd_pr__{model}"
@@ -105,11 +112,17 @@ def _sky130_pcell(dev: schematic.Device, props: dict, catalog: dict[str, dict]) 
         if nf != 1 or mult != 1:
             params["nf"] = nf * mult
     elif name.startswith("res_"):
-        # resistors: length from the schematic if given
+        # resistors: length from the schematic if given. The PCell draws a high / xhigh poly resistor's body (poly.res,
+        # the L that LVS extracts, as Magic's generator draws it) 0.12 um longer than its len (EXTRA_LEN of
+        # res_poly_child.py): 4.12 um for len 4, 3 % off where the deck allows 0.5 %
         if props.get("W", "") != "":
             params["w"] = _num(props["W"])
         if props.get("L", "") != "":
             params["len"] = _num(props["L"])
+            if re.fullmatch(r"res_x?high_po(_\w+)?", short) and isinstance(params["len"], float):
+                params["len"] = round(params["len"] - _SKY130_RES_EXTRA, 4)
+        if _SKY130_RES_NO_GR.fullmatch(short) and "gr" in decl:
+            params["gr"] = 0
     elif name == "mim_cap":
         if props.get("W", "") != "":
             params["w"] = _num(props["W"])
@@ -257,7 +270,9 @@ def _mos_kind(pcell_name: str | None) -> str | None:
 STRAP = "_par"   # suffix of the cell that holds a multi-finger PCell and the straps that make it one device
 TIE = "_tie"     # ... and the strap that joins the source / drain beside a butted tap to the tap (it is on the bulk net)
 LEFT = "_left"   # ... with the PCell mirrored, its tap on the left
-DEVICE_CELL = re.compile(r".+_[0-9a-f]{6}(" + re.escape(STRAP) + ")?(" + re.escape(TIE) + ")?(" + re.escape(LEFT) + ")?")
+RING = "_ring"   # ... a passive drawn without its PCell's guard ring, in Undine's ring (_ring_around)
+DEVICE_CELL = re.compile(r".+_[0-9a-f]{6}(" + re.escape(STRAP) + ")?(" + re.escape(TIE) + ")?(" + re.escape(LEFT) + ")?("
+                         + re.escape(RING) + ")?")
 # a cell sync places for a PCell: pcell.cell_name's hash, then the wrapper's suffixes
 PCELL_META = "undine.pdks.pcell"   # the meta information a generated PCell variant carries (pcell_worker.py)
 
@@ -481,6 +496,34 @@ def _ring(prof, inner: kdb.Box, mos: str, dbu: float) -> list[tuple[tuple[int, i
     return [(prof.layers[layer], b) for layer, b in shapes]
 
 
+def _ring_around(prof, layout: kdb.Layout, cell: kdb.Cell) -> list[tuple[tuple[int, int], object]]:
+    """Undine's p-tap guard ring (_ring) around a device cell without a tap of its own (a 0.35 um poly resistor drawn
+    without its PCell's ring: _SKY130_RES_NO_GR), at least pdkprofile.Ring's space from the cell's box and as far as
+    the profile's spacing rules want between the cell's layers and the ring's (its implant clear of the resistor's
+    p+ implant by the tap rules' implant_space: psdm.1), on the grid. Shapes in the cell's frame."""
+    dbu, taps = layout.dbu, prof.stack.taps
+    r = drawing.Rules(prof, dbu)
+    box = cell.bbox()
+    ext = placement.extents(layout, cell, prof.layers or {})
+    names = {tuple(v): k for k, v in (prof.layers or {}).items()}
+    ring: dict[str, kdb.Region] = {}
+    for ld, b in _ring(prof, box, "n", dbu):                   # at no space: where each of its layers starts inside
+        ring.setdefault(names.get(tuple(ld), ""), kdb.Region()).insert(b)
+    imp = taps.implant.get("ptap")
+    rules = [(x.a, x.b, x.um) for x in prof.space] + ([(imp, imp, taps.implant_space)] if imp else [])
+    need = r.d(prof.ring.space)
+    for a, b, um in rules:
+        for la, lb in ((a, b), (b, a)):
+            if la not in ext or lb not in ring:
+                continue
+            hole = (kdb.Region(ring[lb].bbox()) - ring[lb]).bbox()
+            p = ext[la]
+            inside = min(p.left - hole.left, hole.right - p.right, p.bottom - hole.bottom, hole.top - p.top)
+            need = max(need, r.d(um) - inside)
+    need = r.up(need)
+    return _ring(prof, box.enlarged(need, need), "n", dbu)
+
+
 def pcell_variant(pdk: Pdk, db: LayoutDB, name: str, params: dict, check: bool = True) -> str:
     """The cell of PDK PCell `name` with `params` in the library (generated and brought in once, LayoutDB.import_oas
     recording where it comes from; a variant the library has is not generated again). `check` (parameters someone
@@ -574,6 +617,8 @@ class Sdl:
                             self._mos_layout(item, props, cat)
                     else:
                         item["units"] = _count(props, "MF") * _count(props, "m", "mult")
+                        if self._ringed(item):           # its PCell's own ring is off: Undine's goes around it
+                            item["tap"] = {"kind": "ring", "net": {k.upper(): v for k, v in d.nets.items()}.get("B")}
                 elif (n := _count(props, "MF") * _count(props, "m", "mult")) > 1:
                     item["note"] = f"MF / m = {n}: parallel copies of this device are not generated for {family or 'this PDK'}"
                 else:
@@ -738,11 +783,19 @@ class Sdl:
 
     def _suffix(self, d: dict) -> str:
         """The wrapper a device's PCell goes into: straps joining its fingers, a strap joining a butted tie to its
-        source / drain (profiles with li1 and tap layers), the PCell mirrored (its tie on the left)."""
+        source / drain (profiles with li1 and tap layers), the PCell mirrored (its tie on the left), Undine's guard
+        ring around a passive drawn without its PCell's (_ringed)."""
         tap = d.get("tap") or {}
         tie = tap.get("kind") == "tie"
         return ((STRAP if self._strapped(d) else "") + (TIE if tie and self._tie_layers() else "") +
-                (LEFT if tie and tap.get("side") == "left" else ""))
+                (LEFT if tie and tap.get("side") == "left" else "") + (RING if self._ringed(d) else ""))
+
+    def _ringed(self, d: dict) -> bool:
+        """Whether a passive's PCell is drawn without its own guard ring (a 0.35 um poly resistor: gr 0, set by
+        _sky130_pcell) and gets Undine's (_ring_around), its bulk tap: with the profile's ring and tap rules."""
+        prof = self.pdk.profile if self.pdk else None
+        return bool(d.get("pcell") == "res_poly" and (d.get("params") or {}).get("gr") == 0 and prof is not None
+                    and prof.ring is not None and prof.stack is not None and prof.stack.taps is not None)
 
     def _tie_layers(self) -> dict[str, int] | None:
         prof = self.pdk.profile if self.pdk else None
@@ -782,6 +835,8 @@ class Sdl:
             if not got:
                 warn = f"{d['name']}: its PCell has no butted tap to join to the source / drain; route that yourself"
             shapes += got
+        if RING in suffix:
+            shapes += [(db.layout.layer(*ld), b) for ld, b in _ring_around(self.pdk.profile, db.layout, db.cell(cname))]
         tr = kdb.Trans(2, True, 0, 0) if LEFT in suffix else kdb.Trans()      # mirrored about the y axis
         db.new_cell(wrapper)
         db._commit(wrapper, [("iins", kdb.CellInstArray(db.cell(cname).cell_index(), tr), 0)] +
@@ -1117,6 +1172,11 @@ class Sdl:
                "devices": {n: {"units": counts[n], "cell": cells[n], "centroid_offset_um": off}
                            for n, off in placement.centroid_error([[t if t != "dummy" else None for t in r] for r in grid],
                                                                   (k(step[0]), k(step[1]))).items()}}
+        if (bare := sorted(n for n in want if self._ringed(known[n]))):
+            nets = sorted({str({k.upper(): v for k, v in known[n]["nets"].items()}.get("B")) for n in bare})
+            warnings.append(f"{', '.join(bare)}: 0.35 um poly resistors are drawn without their PCell's guard ring "
+                            f"(it fails Magic's rpm.1) and get no tap in an array: put a tap or a guard ring on "
+                            f"{', '.join(nets)} around the array")
         if ndum:
             out["dummies"] = ndum
             if not dummy:

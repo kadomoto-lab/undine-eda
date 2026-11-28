@@ -360,19 +360,34 @@ def _before(recs: list[dict], i: int) -> list[dict]:
     return [r for r in recs[:i] if not ((r.get("gseq") or 0) > to and r.get("changeset") in (None, cs))]
 
 
+def _levels(recs: list[dict], is_reset) -> list[tuple[list[dict], int]]:
+    """The levels a replay of `recs` goes through, innermost first: (records, where the replay starts in them). A
+    reset replaces everything replayed before it, so only the last reset of a level counts; a restore (what was in
+    effect at its checkpoint, _before) opens the next level down, anything else is a fresh start. Following that one
+    chain, instead of recursing at every restore of every level, keeps a log with many restores (each applied
+    changeset leaves one) linear in them, not exponential."""
+    levels: list[tuple[list[dict], int]] = []
+    cur = recs
+    while True:
+        k = next((i for i in range(len(cur) - 1, -1, -1) if is_reset(cur[i])), None)
+        levels.append((cur, 0 if k is None else k + 1))
+        if k is None or cur[k]["op"] != "restore":
+            return levels[::-1]
+        cur = _before(cur, k)
+
+
 def _net(recs: list[dict]) -> list[dict]:
     net: list[dict] = []
-    byseq = {r["seq"]: r for r in recs}
-    for i, r in enumerate(recs):
-        if r["op"] == "restore":
-            net = _net(_before(recs, i))             # back to what was in effect at the checkpoint
-        elif r["op"] == "undo":
-            net = [x for x in net if x["seq"] != r["of"]]
-        elif r["op"] == "redo":
-            if (x := byseq.get(r["of"])):
-                net.append(x)
-        elif r.get("effects"):
-            net.append(r)
+    for level, start in _levels(recs, lambda r: r["op"] == "restore"):
+        byseq = {r["seq"]: r for r in level}
+        for r in level[start:]:          # what the level's last restore went back to, then the records after it
+            if r["op"] == "undo":
+                net = [x for x in net if x["seq"] != r["of"]]
+            elif r["op"] == "redo":
+                if (x := byseq.get(r["of"])):
+                    net.append(x)
+            elif r.get("effects"):
+                net.append(r)
     return net
 
 
@@ -479,27 +494,25 @@ class OpLog:
     def _stacks(self, recs: list[dict], cell: str, view: str) -> tuple[list[dict], list[dict]]:
         done: list[dict] = []
         redo: list[dict] = []
-        for i, r in enumerate(recs):
-            if r["op"] == "restore" and (r.get("view") is None or r.get("view") == view):
-                done, redo = self._stacks(_before(recs, i), cell, view)   # as it was at the checkpoint; no redo past it
-                redo = []
-                continue
-            if r["op"] == "merge":     # a git merge: nothing before it is undone on top of the other branch's edits
-                done, redo = [], []
-                continue
-            if (cell is not None and r.get("cell") != cell) or r.get("view") != view:
-                continue
-            if r["op"] == "undo":
-                x = next((d for d in done if d["seq"] == r["of"]), None)
-                if x:
-                    done.remove(x)
-                    redo.append(x)
-            elif r["op"] == "redo":
-                x = next((d for d in redo if d["seq"] == r["of"]), None)
-                if x:
-                    redo.remove(x)
-                    done.append(x)
-            elif r.get("effects"):
-                done.append(r)
-                redo.clear()
+        # a restore of the view (or of everything) goes back to the stacks at its checkpoint, with no redo past it; a git
+        # merge empties them: nothing before it is undone on top of the other branch's edits
+        for level, start in _levels(recs, lambda r: r["op"] == "merge" or (
+                r["op"] == "restore" and (r.get("view") is None or r.get("view") == view))):
+            redo = []
+            for r in level[start:]:
+                if (cell is not None and r.get("cell") != cell) or r.get("view") != view:
+                    continue
+                if r["op"] == "undo":
+                    x = next((d for d in done if d["seq"] == r["of"]), None)
+                    if x:
+                        done.remove(x)
+                        redo.append(x)
+                elif r["op"] == "redo":
+                    x = next((d for d in redo if d["seq"] == r["of"]), None)
+                    if x:
+                        redo.remove(x)
+                        done.append(x)
+                elif r.get("effects"):
+                    done.append(r)
+                    redo.clear()
         return done, redo
